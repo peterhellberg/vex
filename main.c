@@ -97,6 +97,38 @@ m3ApiRawFunction(host_line) {
     m3ApiSuccess();
 }
 
+m3ApiRawFunction(host_tri) {
+    m3ApiGetArg(int32_t, x1)
+    m3ApiGetArg(int32_t, y1)
+    m3ApiGetArg(int32_t, x2)
+    m3ApiGetArg(int32_t, y2)
+    m3ApiGetArg(int32_t, x3)
+    m3ApiGetArg(int32_t, y3)
+    m3ApiGetArg(int32_t, color)
+    // raylib keeps backface culling on, so a back-facing winding would be
+    // dropped. Normalize to the front-facing order so any vertex order draws.
+    int32_t cross = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+    if (cross > 0) {
+        int32_t tx = x2, ty = y2;
+        x2 = x3; y2 = y3;
+        x3 = tx; y3 = ty;
+    }
+    DrawTriangle((Vector2){x1, y1}, (Vector2){x2, y2}, (Vector2){x3, y3}, PAL(color));
+    m3ApiSuccess();
+}
+
+m3ApiRawFunction(host_trib) {
+    m3ApiGetArg(int32_t, x1)
+    m3ApiGetArg(int32_t, y1)
+    m3ApiGetArg(int32_t, x2)
+    m3ApiGetArg(int32_t, y2)
+    m3ApiGetArg(int32_t, x3)
+    m3ApiGetArg(int32_t, y3)
+    m3ApiGetArg(int32_t, color)
+    DrawTriangleLines((Vector2){x1, y1}, (Vector2){x2, y2}, (Vector2){x3, y3}, PAL(color));
+    m3ApiSuccess();
+}
+
 m3ApiRawFunction(host_text) {
     m3ApiGetArgMem(const char*, s)
     m3ApiGetArg(int32_t, x)
@@ -153,6 +185,8 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "rectb", "v(iiiii)", &host_rectb);
     m3_LinkRawFunction(mod, m, "circ",  "v(iiii)",  &host_circ);
     m3_LinkRawFunction(mod, m, "line",  "v(iiiii)", &host_line);
+    m3_LinkRawFunction(mod, m, "tri",   "v(iiiiiii)", &host_tri);
+    m3_LinkRawFunction(mod, m, "trib",  "v(iiiiiii)", &host_trib);
     m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
     m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);
     m3_LinkRawFunction(mod, m, "pal",      "v(ii)",    &host_pal);

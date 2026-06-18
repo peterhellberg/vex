@@ -26,6 +26,11 @@ VEX_EXPORT("update") void update(void) {
   text("ARROWS + Z", 4, 14, 13);  // muted blue-grey
 
   circ(VEX_WIDTH / 2, 40, 12, 4); // yellow sun
+
+  // Mountains: one outlined (left), one filled (right), side by side.
+  trib(4, VEX_HEIGHT - 1, 30, VEX_HEIGHT - 26, 56, VEX_HEIGHT - 1, 12);
+  tri(64, VEX_HEIGHT - 1, 94, VEX_HEIGHT - 40, 124, VEX_HEIGHT - 1, 14);
+
   line(0, VEX_HEIGHT - 1, VEX_WIDTH - 1, VEX_HEIGHT - 1, 6); // green ground
 
   // Player: a filled square (red while A held, otherwise green) with a white

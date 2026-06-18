@@ -15,6 +15,8 @@ extern "env" fn rect(x: i32, y: i32, w: i32, h: i32, color: i32) void;
 extern "env" fn rectb(x: i32, y: i32, w: i32, h: i32, color: i32) void;
 extern "env" fn circ(x: i32, y: i32, r: i32, color: i32) void;
 extern "env" fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) void;
+extern "env" fn tri(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
+extern "env" fn trib(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
 extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
 extern "env" fn btn(button: i32) i32;
 extern "env" fn pal(index: i32, rgb: i32) void; // override palette entry (0xRRGGBB)
@@ -68,6 +70,10 @@ export fn update() void {
     text("ARROWS + Z", 4, 14, 13); // muted blue-grey
 
     circ(bx, by, R, 10); // ball (palette index 10, pulsed above)
+
+    // Mountains: one outlined (left), one filled (right), side by side.
+    trib(4, H - 1, 30, H - 26, 56, H - 1, 12);
+    tri(64, H - 1, 94, H - 40, 124, H - 1, 14);
 
     // Player: filled square (red while A held, otherwise green) with a border.
     const fill: i32 = if (down(A)) 2 else 5;
