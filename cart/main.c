@@ -22,6 +22,10 @@ VEX_EXPORT("update") void update(void) {
     py++;
 
   cls(0); // dark background
+
+  // Subtle guide line, behind everything: player center -> bottom center.
+  line(px + PLAYER / 2, py + PLAYER / 2, VEX_WIDTH / 2, VEX_HEIGHT - 1, 15);
+
   text("VEX", 4, 4, 12);          // white
   text("ARROWS + Z", 4, 14, 13);  // muted blue-grey
 
@@ -32,8 +36,6 @@ VEX_EXPORT("update") void update(void) {
   // Mountains: one outlined (left), one filled (right), side by side.
   trib(4, VEX_HEIGHT - 1, 30, VEX_HEIGHT - 26, 56, VEX_HEIGHT - 1, 12);
   tri(64, VEX_HEIGHT - 1, 94, VEX_HEIGHT - 40, 124, VEX_HEIGHT - 1, 14);
-
-  line(0, VEX_HEIGHT - 1, VEX_WIDTH - 1, VEX_HEIGHT - 1, 6); // green ground
 
   // Player: a filled square (red while A held, otherwise green) with a white
   // border drawn around the same square.
