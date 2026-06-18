@@ -109,6 +109,8 @@ zig build-exe mycart.zig -target wasm32-freestanding -O ReleaseSmall \
 | `text(s, x, y, color)` | draw a string |
 | `title(s)` | set the window title |
 | `btn(button) -> int` | `1` if a button is held, else `0` |
+| `mousex() -> int` / `mousey() -> int` | mouse position in screen pixels |
+| `mousebtn(button) -> int` | `1` if a mouse button is held (0 left, 1 right, 2 middle) |
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
 | `palreset()` | restore the default palette |
 

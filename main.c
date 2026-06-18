@@ -32,6 +32,10 @@ static const Color DEFAULT_PALETTE[16] = {
 static Color palette[16];
 #define PAL(c) (palette[(unsigned)(c) & 15])
 
+// Current framebuffer->window mapping (logical points), used to map raylib's
+// window-space mouse position back into the cart's logical coordinates.
+static float g_view_scale = 1.0f, g_view_ox = 0.0f, g_view_oy = 0.0f;
+
 static void reset_palette(void) {
     for (int i = 0; i < 16; i++) palette[i] = DEFAULT_PALETTE[i];
 }
@@ -190,6 +194,25 @@ m3ApiRawFunction(host_btn) {
     m3ApiReturn(held);
 }
 
+// Mouse position, mapped from window space into logical screen coordinates.
+m3ApiRawFunction(host_mousex) {
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)((GetMouseX() - g_view_ox) / g_view_scale));
+}
+
+m3ApiRawFunction(host_mousey) {
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)((GetMouseY() - g_view_oy) / g_view_scale));
+}
+
+// mousebtn(button) -> held? 0 left, 1 right, 2 middle (raylib button indices).
+m3ApiRawFunction(host_mousebtn) {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, button)
+    int held = (button >= 0 && button <= 6) ? IsMouseButtonDown(button) : 0;
+    m3ApiReturn(held);
+}
+
 // pal(index, rgb): override one palette entry (index 0..15) with a packed
 // 0xRRGGBB color.
 m3ApiRawFunction(host_pal) {
@@ -225,6 +248,9 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
     m3_LinkRawFunction(mod, m, "title",    "v(*)",     &host_title);
     m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);
+    m3_LinkRawFunction(mod, m, "mousex",   "i()",      &host_mousex);
+    m3_LinkRawFunction(mod, m, "mousey",   "i()",      &host_mousey);
+    m3_LinkRawFunction(mod, m, "mousebtn", "i(i)",     &host_mousebtn);
     m3_LinkRawFunction(mod, m, "pal",      "v(ii)",    &host_pal);
     m3_LinkRawFunction(mod, m, "palreset", "v()",      &host_palreset);
     return m3Err_none;
@@ -331,21 +357,12 @@ int main(int argc, char** argv) {
         }
         if (super && IsKeyPressed(KEY_I)) integer_scale = !integer_scale;
 
-        // Run the cart, drawing into the 128x128 framebuffer.
-        BeginTextureMode(screen);
-            err = m3_CallV(f_update);
-        EndTextureMode();
-        if (err) die(rt, "update", err);
-
-        // Scale the framebuffer to fit the window, preserving aspect ratio and
-        // centering (letterboxed). For a square 128x128 screen in a wider
-        // window this fills the height and centers horizontally (y-flipped:
-        // render textures are stored bottom-up).
-        //
-        // The drawing coordinate space is the render (drawable) size divided by
-        // the DPI scale. GetScreenWidth/Height can't be used: they go stale
-        // when toggling fullscreen on macOS, while render size + DPI stay
-        // correct in every mode.
+        // Compute this frame's framebuffer->window mapping: fit the VEX_W x
+        // VEX_H screen into the window preserving aspect ratio and centering
+        // (letterboxed). The drawing coordinate space is the render (drawable)
+        // size divided by the DPI scale -- GetScreenWidth/Height can't be used,
+        // they go stale when toggling fullscreen on macOS. The mapping is also
+        // stored in g_view_* so the mouse can be mapped back to logical coords.
         Vector2 dpi = GetWindowScaleDPI();
         float sw = GetRenderWidth()  / dpi.x;
         float sh = GetRenderHeight() / dpi.y;
@@ -357,10 +374,21 @@ int main(int argc, char** argv) {
             scale = (float)(s < 1 ? 1 : s);
         }
         float dw = VEX_W * scale, dh = VEX_H * scale;
+        float ox = (sw - dw) / 2.0f, oy = (sh - dh) / 2.0f;
+        g_view_scale = scale; g_view_ox = ox; g_view_oy = oy;
+
+        // Run the cart, drawing into the framebuffer.
+        BeginTextureMode(screen);
+            err = m3_CallV(f_update);
+        EndTextureMode();
+        if (err) die(rt, "update", err);
+
+        // Blit the framebuffer to the window (y-flipped: render textures are
+        // stored bottom-up).
         BeginDrawing();
             ClearBackground(BLACK);
             Rectangle src = { 0, 0, (float)VEX_W, -(float)VEX_H };
-            Rectangle dst = { (sw - dw) / 2, (sh - dh) / 2, dw, dh };
+            Rectangle dst = { ox, oy, dw, dh };
             DrawTexturePro(screen.texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
         EndDrawing();
     }

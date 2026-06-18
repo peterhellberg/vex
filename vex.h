@@ -23,6 +23,11 @@
 #define VEX_A     4
 #define VEX_B     5
 
+// Mouse buttons, as passed to mousebtn().
+#define VEX_MOUSE_LEFT   0
+#define VEX_MOUSE_RIGHT  1
+#define VEX_MOUSE_MIDDLE 2
+
 VEX_IMPORT("cls")   void cls(int color);                              // clear screen
 VEX_IMPORT("pset")  void pset(int x, int y, int color);              // set one pixel
 VEX_IMPORT("rect")  void rect(int x, int y, int w, int h, int color);  // filled rect
@@ -36,6 +41,10 @@ VEX_IMPORT("trib")  void trib(int x1, int y1, int x2, int y2, int x3, int y3, in
 VEX_IMPORT("text")  void text(const char* s, int x, int y, int color);
 VEX_IMPORT("title") void title(const char* s);                       // set window title
 VEX_IMPORT("btn")   int  btn(int button);                            // 1 if held, else 0
+
+VEX_IMPORT("mousex")   int mousex(void);            // mouse x in screen pixels
+VEX_IMPORT("mousey")   int mousey(void);            // mouse y in screen pixels
+VEX_IMPORT("mousebtn") int mousebtn(int button);    // 1 if mouse button held
 
 VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
 VEX_IMPORT("palreset") void palreset(void);          // restore default palette
