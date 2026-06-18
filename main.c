@@ -2,7 +2,7 @@
 //
 // The console is the host: it opens a raylib window, loads a .wasm "cart",
 // links a tiny drawing/input API the cart imports, and calls the cart's
-// exported update() once per frame. Carts draw into a 128x128 framebuffer
+// exported update() once per frame. Carts draw into a 320x180 framebuffer
 // that is scaled up to the window with nearest-neighbour filtering.
 //
 //   usage: ./vex <cart.wasm>
