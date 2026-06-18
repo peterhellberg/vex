@@ -20,6 +20,7 @@ extern "env" fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) void;
 extern "env" fn tri(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
 extern "env" fn trib(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
 extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
+extern "env" fn title(s: [*:0]const u8) void; // set window title
 extern "env" fn btn(button: i32) i32;
 extern "env" fn pal(index: i32, rgb: i32) void; // override palette entry (0xRRGGBB)
 
@@ -43,6 +44,7 @@ fn down(button: i32) bool {
 }
 
 export fn boot() void {
+    title("vex - Zig cart");
     px = (W - PLAYER) / 2;
     py = (H - PLAYER) / 2;
 }

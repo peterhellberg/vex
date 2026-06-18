@@ -36,6 +36,14 @@ static void reset_palette(void) {
     for (int i = 0; i < 16; i++) palette[i] = DEFAULT_PALETTE[i];
 }
 
+// Copy a bounded, NUL-terminated string out of a cart's linear memory.
+static void cart_cstr(IM3Runtime rt, const void* mem, const char* s, char* buf, int size) {
+    uintptr_t end = (uintptr_t)mem + m3_GetMemorySize(rt);
+    int n = 0;
+    while (n < size - 1 && (uintptr_t)(s + n) < end && s[n]) { buf[n] = s[n]; n++; }
+    buf[n] = '\0';
+}
+
 // ---- host API: functions the cart imports from module "env" --------------
 // These run inside BeginTextureMode(), so raylib draws into the framebuffer.
 
@@ -157,16 +165,19 @@ m3ApiRawFunction(host_text) {
     m3ApiGetArg(int32_t, y)
     m3ApiGetArg(int32_t, color)
     m3ApiCheckMem(s, 1);
-    // Copy a bounded, NUL-terminated string out of the cart's linear memory.
     char buf[128];
-    uintptr_t end = (uintptr_t)_mem + m3_GetMemorySize(runtime);
-    int n = 0;
-    while (n < (int)sizeof(buf) - 1 && (uintptr_t)(s + n) < end && s[n]) {
-        buf[n] = s[n];
-        n++;
-    }
-    buf[n] = '\0';
+    cart_cstr(runtime, _mem, s, buf, sizeof(buf));
     DrawText(buf, x, y, VEX_FONT, PAL(color));
+    m3ApiSuccess();
+}
+
+// title(s): set the window title from a cart string.
+m3ApiRawFunction(host_title) {
+    m3ApiGetArgMem(const char*, s)
+    m3ApiCheckMem(s, 1);
+    char buf[128];
+    cart_cstr(runtime, _mem, s, buf, sizeof(buf));
+    SetWindowTitle(buf);
     m3ApiSuccess();
 }
 
@@ -212,6 +223,7 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "tri",   "v(iiiiiii)", &host_tri);
     m3_LinkRawFunction(mod, m, "trib",  "v(iiiiiii)", &host_trib);
     m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
+    m3_LinkRawFunction(mod, m, "title",    "v(*)",     &host_title);
     m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);
     m3_LinkRawFunction(mod, m, "pal",      "v(ii)",    &host_pal);
     m3_LinkRawFunction(mod, m, "palreset", "v()",      &host_palreset);

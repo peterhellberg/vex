@@ -7,6 +7,7 @@
 static int px, py;
 
 VEX_EXPORT("boot") void boot(void) {
+  title("vex - C cart");
   px = (VEX_WIDTH - PLAYER) / 2;
   py = (VEX_HEIGHT - PLAYER) / 2;
 }

@@ -107,6 +107,7 @@ zig build-exe mycart.zig -target wasm32-freestanding -O ReleaseSmall \
 | `tri(x1, y1, x2, y2, x3, y3, color)` | filled triangle |
 | `trib(x1, y1, x2, y2, x3, y3, color)` | triangle outline |
 | `text(s, x, y, color)` | draw a string |
+| `title(s)` | set the window title |
 | `btn(button) -> int` | `1` if a button is held, else `0` |
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
 | `palreset()` | restore the default palette |

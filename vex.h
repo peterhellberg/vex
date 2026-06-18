@@ -34,6 +34,7 @@ VEX_IMPORT("line")  void line(int x0, int y0, int x1, int y1, int color);
 VEX_IMPORT("tri")   void tri(int x1, int y1, int x2, int y2, int x3, int y3, int color);  // filled triangle
 VEX_IMPORT("trib")  void trib(int x1, int y1, int x2, int y2, int x3, int y3, int color); // triangle outline
 VEX_IMPORT("text")  void text(const char* s, int x, int y, int color);
+VEX_IMPORT("title") void title(const char* s);                       // set window title
 VEX_IMPORT("btn")   int  btn(int button);                            // 1 if held, else 0
 
 VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
