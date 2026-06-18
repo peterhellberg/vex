@@ -1,0 +1,6 @@
+/vex
+*.wasm
+/vendor/
+*.log
+/.zig-cache/
+/zig-cache/
