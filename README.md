@@ -44,6 +44,7 @@ same console API.
 |-----|--------|
 | `Super`+`Enter` | toggle fullscreen |
 | `Super`+`I` | toggle integer scaling (crisp pixels vs. fill the screen; on by default in fullscreen) |
+| `Super`+`R` | reload the cart from disk (hot reload) |
 | `Esc` | quit |
 
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. Arrow

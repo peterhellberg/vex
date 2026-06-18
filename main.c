@@ -267,17 +267,57 @@ static void die(IM3Runtime rt, const char* what, M3Result err) {
     exit(1);
 }
 
+// Read a whole file into a freshly malloc'd buffer. Returns NULL on failure
+// (so a failed hot-reload can be reported without killing the program).
 static uint8_t* read_file(const char* path, size_t* out_len) {
     FILE* f = fopen(path, "rb");
-    if (!f) { fprintf(stderr, "vex: cannot open %s\n", path); exit(1); }
+    if (!f) return NULL;
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
     uint8_t* buf = malloc(n);
-    if (fread(buf, 1, n, f) != (size_t)n) { fprintf(stderr, "vex: read error\n"); exit(1); }
+    if (!buf || fread(buf, 1, n, f) != (size_t)n) { free(buf); fclose(f); return NULL; }
     fclose(f);
     *out_len = (size_t)n;
     return buf;
+}
+
+// A loaded cart: its runtime, the entry points, and the wasm bytes wasm3
+// references for the runtime's lifetime (so they must outlive it).
+typedef struct {
+    IM3Runtime  rt;
+    IM3Function f_boot;   // optional, may be NULL
+    IM3Function f_update;
+    uint8_t*    wasm;
+} Cart;
+
+// Load a cart from disk into a fresh runtime: parse, link the host API, and
+// resolve the entry points. Returns true on success (filling *out); on failure
+// prints why, frees anything it allocated, and leaves *out untouched -- so the
+// caller can keep running the previous cart.
+static bool load_cart(IM3Environment env, const char* path, Cart* out) {
+    size_t wasm_len;
+    uint8_t* wasm = read_file(path, &wasm_len);
+    if (!wasm) { fprintf(stderr, "vex: cannot read %s\n", path); return false; }
+
+    IM3Runtime rt = m3_NewRuntime(env, 64 * 1024 /* stack */, NULL);
+    IM3Module mod;
+    M3Result err = m3_ParseModule(env, &mod, wasm, wasm_len);
+    if (err) { fprintf(stderr, "vex: parse: %s\n", err); m3_FreeRuntime(rt); free(wasm); return false; }
+    err = m3_LoadModule(rt, mod);
+    if (err) { fprintf(stderr, "vex: load: %s\n", err); m3_FreeModule(mod); m3_FreeRuntime(rt); free(wasm); return false; }
+    link_host(mod);
+
+    IM3Function f_boot = NULL, f_update = NULL;
+    m3_FindFunction(&f_boot, rt, "boot");                 // optional
+    err = m3_FindFunction(&f_update, rt, "update");
+    if (err || !f_update) {
+        fprintf(stderr, "vex: cart has no update() export\n");
+        m3_FreeRuntime(rt); free(wasm); return false;
+    }
+
+    *out = (Cart){ .rt = rt, .f_boot = f_boot, .f_update = f_update, .wasm = wasm };
+    return true;
 }
 
 int main(int argc, char** argv) {
@@ -298,24 +338,10 @@ int main(int argc, char** argv) {
     if (scale < 1) scale = 1;
 
     // ---- load the cart into a wasm3 interpreter --------------------------
-    size_t wasm_len;
-    uint8_t* wasm = read_file(cart_path, &wasm_len); // kept alive for program lifetime
-
     IM3Environment env = m3_NewEnvironment();
-    IM3Runtime rt = m3_NewRuntime(env, 64 * 1024 /* stack */, NULL);
-
-    IM3Module mod;
-    M3Result err = m3_ParseModule(env, &mod, wasm, wasm_len);
-    if (err) die(rt, "parse", err);
-    err = m3_LoadModule(rt, mod);
-    if (err) die(rt, "load", err);
-
-    link_host(mod);
-
-    IM3Function f_boot = NULL, f_update = NULL;
-    m3_FindFunction(&f_boot, rt, "boot");       // optional
-    err = m3_FindFunction(&f_update, rt, "update");
-    if (err || !f_update) die(rt, "cart has no update() export", err ? err : "missing");
+    Cart cart;
+    if (!load_cart(env, cart_path, &cart)) return 1;
+    M3Result err;
 
     // ---- raylib window + framebuffer -------------------------------------
     SetTraceLogLevel(LOG_WARNING);
@@ -327,9 +353,9 @@ int main(int argc, char** argv) {
 
     reset_palette();
 
-    if (f_boot) {
-        err = m3_CallV(f_boot);
-        if (err) die(rt, "boot", err);
+    if (cart.f_boot) {
+        err = m3_CallV(cart.f_boot);
+        if (err) die(cart.rt, "boot", err);
     }
 
     bool integer_scale = false; // crisp integer scale vs. fractional fill;
@@ -339,8 +365,24 @@ int main(int argc, char** argv) {
         // Console controls (Super = Cmd on macOS, Super/Windows key on Linux):
         //   Super+Enter  toggle fullscreen
         //   Super+I      toggle integer scaling (crisp pixels vs. fill)
+        //   Super+R      reload the cart from disk (hot reload)
         // Escape (raylib's default) closes the window.
         bool super = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
+        if (super && IsKeyPressed(KEY_R)) {
+            // Reload from disk into a fresh runtime. Keep the running cart if
+            // the new file fails to parse/load, so a bad save isn't fatal.
+            Cart fresh;
+            if (load_cart(env, cart_path, &fresh)) {
+                m3_FreeRuntime(cart.rt);
+                free(cart.wasm);
+                cart = fresh;
+                reset_palette();    // start the reloaded cart from a clean palette
+                if (cart.f_boot) {
+                    err = m3_CallV(cart.f_boot);
+                    if (err) die(cart.rt, "boot", err);
+                }
+            }
+        }
         if (super && IsKeyPressed(KEY_ENTER)) {
             // True fullscreen (a macOS fullscreen Space) fits the display
             // exactly and hides the menu bar, so the picture isn't pushed off
@@ -379,9 +421,9 @@ int main(int argc, char** argv) {
 
         // Run the cart, drawing into the framebuffer.
         BeginTextureMode(screen);
-            err = m3_CallV(f_update);
+            err = m3_CallV(cart.f_update);
         EndTextureMode();
-        if (err) die(rt, "update", err);
+        if (err) die(cart.rt, "update", err);
 
         // Blit the framebuffer to the window (y-flipped: render textures are
         // stored bottom-up).
@@ -395,6 +437,7 @@ int main(int argc, char** argv) {
 
     UnloadRenderTexture(screen);
     CloseWindow();
-    m3_FreeRuntime(rt);
+    m3_FreeRuntime(cart.rt);
+    free(cart.wasm);
     return 0;
 }
