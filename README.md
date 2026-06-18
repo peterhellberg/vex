@@ -34,6 +34,17 @@ There are two example carts: [`cart/main.c`](cart/main.c) (C) and
 [`zcart/main.zig`](zcart/main.zig) (Zig). Both compile to `wasm32` and use the
 same console API.
 
+## Controls
+
+| Key | Action |
+|-----|--------|
+| `Super`+`Enter` | toggle fullscreen |
+| `Super`+`I` | toggle integer scaling (crisp pixels vs. fill the screen) |
+| `Esc` | quit |
+
+`Super` is the Cmd key on macOS and the Super/Windows key on Linux. Arrow
+keys, `Z`, and `X` are passed to the cart via `btn()`.
+
 ## Writing a cart
 
 A cart is any `wasm32` module that exports `update()` (and optionally

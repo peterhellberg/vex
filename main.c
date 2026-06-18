@@ -283,8 +283,12 @@ int main(int argc, char** argv) {
         if (err) die(rt, "boot", err);
     }
 
+    bool integer_scale = false; // false: fill (fractional); true: crisp integer scale
+
     while (!WindowShouldClose()) {
-        // Console control: SUPER+ENTER (Cmd+Enter on macOS) toggles fullscreen.
+        // Console controls (Super = Cmd on macOS, Super/Windows key on Linux):
+        //   Super+Enter  toggle fullscreen
+        //   Super+I      toggle integer scaling (crisp pixels vs. fill)
         // Escape (raylib's default) closes the window.
         bool super = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
         if (super && IsKeyPressed(KEY_ENTER)) {
@@ -300,6 +304,7 @@ int main(int argc, char** argv) {
                 SetWindowSize(VEX_W * VEX_SCALE, VEX_H * VEX_SCALE);
             }
         }
+        if (super && IsKeyPressed(KEY_I)) integer_scale = !integer_scale;
 
         // Run the cart, drawing into the 128x128 framebuffer.
         BeginTextureMode(screen);
@@ -320,6 +325,12 @@ int main(int argc, char** argv) {
         float sw = GetRenderWidth()  / dpi.x;
         float sh = GetRenderHeight() / dpi.y;
         float scale = (sw / VEX_W < sh / VEX_H) ? sw / VEX_W : sh / VEX_H;
+        if (integer_scale) {
+            // Floor to a whole multiple so every source pixel maps to the same
+            // number of screen pixels (crisp, at the cost of more border).
+            int s = (int)scale;
+            scale = (float)(s < 1 ? 1 : s);
+        }
         float dw = VEX_W * scale, dh = VEX_H * scale;
         BeginDrawing();
             ClearBackground(BLACK);
