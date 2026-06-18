@@ -23,12 +23,16 @@ from source, so the only requirement is `zig` — no system packages.
 Requires only `zig` (0.17-dev). Dependencies are fetched on first build.
 
 ```sh
-zig build           # build ./vex + cart.wasm + zcart.wasm (into zig-out/bin)
-zig build run       # build, then run the C example cart
-zig build runz      # build, then run the Zig example cart
+zig build              # build ./vex + cart.wasm + zcart.wasm (into zig-out/bin)
+zig build run          # build, then run the C example cart
+zig build runz         # build, then run the Zig example cart
+zig build run -- -s 5  # forward flags to vex (here: window scale 5)
 ```
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`.
+
+`vex` is invoked as `vex [-s scale] <cart.wasm>`. The window is the 320×180
+framebuffer times `scale` (default 3, i.e. 960×540); `-s`/`--scale` overrides it.
 
 There are two example carts: [`cart/main.c`](cart/main.c) (C) and
 [`zcart/main.zig`](zcart/main.zig) (Zig). Both compile to `wasm32` and use the

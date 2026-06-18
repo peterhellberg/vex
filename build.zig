@@ -76,11 +76,14 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(cart_zig);
 
     // --- run steps ----------------------------------------------------------
+    // Extra args after `--` are forwarded to vex, e.g. `zig build run -- -s 5`.
     const run_c = b.addRunArtifact(exe);
     run_c.addFileArg(cart_c.getEmittedBin());
+    if (b.args) |a| run_c.addArgs(a);
     b.step("run", "Run the C example cart").dependOn(&run_c.step);
 
     const run_z = b.addRunArtifact(exe);
     run_z.addFileArg(cart_zig.getEmittedBin());
+    if (b.args) |a| run_z.addArgs(a);
     b.step("runz", "Run the Zig example cart").dependOn(&run_z.step);
 }

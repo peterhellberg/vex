@@ -11,13 +11,14 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "raylib.h"
 #include "wasm3.h"
 
 #define VEX_W      320   // logical screen width  (keep in sync with vex.h)
 #define VEX_H      180   // logical screen height (keep in sync with vex.h)
-#define VEX_SCALE    4   // window pixels per logical pixel (-> 1280x720 window)
+#define VEX_SCALE    3   // default window pixels per logical pixel (override with -s)
 #define VEX_FONT     8   // text size in logical pixels
 
 // Default SWEETIE-16 palette: 16 colors, indexed 0..15. Carts can override
@@ -242,11 +243,21 @@ static uint8_t* read_file(const char* path, size_t* out_len) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s <cart.wasm>\n", argv[0]);
+    int scale = VEX_SCALE;
+    const char* cart_path = NULL;
+    for (int i = 1; i < argc; i++) {
+        const char* a = argv[i];
+        if ((strcmp(a, "-s") == 0 || strcmp(a, "--scale") == 0) && i + 1 < argc) {
+            scale = atoi(argv[++i]);
+        } else if (cart_path == NULL) {
+            cart_path = a;
+        }
+    }
+    if (!cart_path) {
+        fprintf(stderr, "usage: %s [-s scale] <cart.wasm>\n", argv[0]);
         return 1;
     }
-    const char* cart_path = argv[1];
+    if (scale < 1) scale = 1;
 
     // ---- load the cart into a wasm3 interpreter --------------------------
     size_t wasm_len;
@@ -270,7 +281,7 @@ int main(int argc, char** argv) {
 
     // ---- raylib window + framebuffer -------------------------------------
     SetTraceLogLevel(LOG_WARNING);
-    InitWindow(VEX_W * VEX_SCALE, VEX_H * VEX_SCALE, "vex");
+    InitWindow(VEX_W * scale, VEX_H * scale, "vex");
     SetTargetFPS(60);
 
     RenderTexture2D screen = LoadRenderTexture(VEX_W, VEX_H);
@@ -303,7 +314,7 @@ int main(int argc, char** argv) {
                 integer_scale = true; // crisp by default in fullscreen
             } else {
                 ToggleFullscreen();
-                SetWindowSize(VEX_W * VEX_SCALE, VEX_H * VEX_SCALE);
+                SetWindowSize(VEX_W * scale, VEX_H * scale);
             }
         }
         if (super && IsKeyPressed(KEY_I)) integer_scale = !integer_scale;
