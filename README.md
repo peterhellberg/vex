@@ -4,19 +4,21 @@ A minimal WASM-based fantasy console in a single `main.c`.
 
 The console is the **host**: it opens a [raylib](https://www.raylib.com/)
 window, loads a `.wasm` *cart*, links a tiny drawing/input API the cart
-imports, and calls the cart's exported `update()` once per frame. Carts draw
+imports, and calls the cart's exported `update()` once per frame (60 fps).
+Carts draw
 into a fixed **320×180** framebuffer with a **16-color** [SWEETIE-16](https://lospec.com/palette-list/sweetie-16)
 palette (overridable at runtime), scaled up to the window with
 nearest-neighbour filtering.
 
 - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
   embeddable WASM interpreter (pure C, MIT). Only its core files are compiled.
-- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the C host,
-  the C cart, and the Zig cart.
+- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the host, the
+  `vex-init` scaffolder, and both example carts.
 - **Graphics/input:** [raylib](https://www.raylib.com/).
 
 Both dependencies are pulled in via [`build.zig.zon`](build.zig.zon) and built
-from source, so the only requirement is `zig` — no system packages.
+from source, so the only requirement is `zig` — no system packages. They are
+lazy: only the host needs them, so a cart-only build fetches neither.
 
 ## Build & run
 
@@ -52,6 +54,9 @@ same console API.
 
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. Arrow
 keys, `Z`, and `X` are passed to the cart via `btn()`.
+
+**Tip:** for a fast edit loop, leave `vex` running, rebuild the cart
+(`zig build`), and press `Super`+`R` to reload it in place.
 
 ## Starting a new cart
 
@@ -130,7 +135,7 @@ zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
 | `text(s, x, y, color)` | draw a string |
 | `title(s)` | set the window title |
 | `btn(button) -> int` | `1` if a button is held, else `0` |
-| `mx() -> int` / `my() -> int` | mouse position in screen pixels |
+| `mx() -> int` / `my() -> int` | mouse position in framebuffer pixels (`0..319` / `0..179`) |
 | `mbtn(button) -> int` | `1` if a mouse button is held (0 left, 1 right, 2 middle) |
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
 | `palreset()` | restore the default palette |
