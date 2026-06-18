@@ -60,15 +60,17 @@ SDK published at <https://github.com/peterhellberg/vex>. With the binaries
 installed (`make install`, so `vex` and `vex-init` are on your `PATH`):
 
 ```sh
-vex-init mygame      # creates mygame/ with main.zig, build.zig, build.zig.zon
+vex-init mygame      # creates mygame/ (src/cart.zig, build.zig, build.zig.zon)
+                     # and runs `zig fetch --save` to pin the vex dependency
 cd mygame
-zig fetch --save git+https://github.com/peterhellberg/vex.git
 zig build            # builds zig-out/bin/mygame.wasm
 vex zig-out/bin/mygame.wasm
 ```
 
-The generated `build.zig` depends on `vex` with `.{ .host = false }`, so only
-the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
+`vex-init` fetches the vex dependency for you (`zig fetch --save`); if that
+step can't run it prints the command to finish manually. The generated
+`build.zig` depends on `vex` with `.{ .host = false }`, so only the
+[`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
 
 ## Writing a cart
 

@@ -52,18 +52,50 @@ pub fn main(init: std.process.Init) !void {
         \\  build.zig.zon
         \\  .gitignore
         \\
-        \\Next steps:
-        \\  cd {s}
-        \\  zig fetch --save {s}
-        \\  zig build
-        \\  vex zig-out/bin/{s}.wasm
+        \\Fetching the vex SDK ({s})...
         \\
-    , .{ dir_path, dir_path, VEX_URL, name });
+    , .{ dir_path, VEX_URL });
+
+    if (fetchVex(io, dir)) {
+        std.debug.print(
+            \\
+            \\Next steps:
+            \\  cd {s}
+            \\  zig build
+            \\  vex zig-out/bin/{s}.wasm
+            \\
+        , .{ dir_path, name });
+    } else {
+        std.debug.print(
+            \\
+            \\vex-init: could not run `zig fetch` automatically. Finish manually:
+            \\  cd {s}
+            \\  zig fetch --save {s}
+            \\  zig build
+            \\  vex zig-out/bin/{s}.wasm
+            \\
+        , .{ dir_path, VEX_URL, name });
+    }
 }
 
 fn usage() noreturn {
     std.debug.print("usage: vex-init <name>\n", .{});
     std.process.exit(1);
+}
+
+// Run `zig fetch --save <vex>` inside the new project dir so build.zig.zon is
+// populated with the dependency hash. Inherits stdio so the user sees zig's
+// progress/output. Returns false if zig can't be spawned or exits non-zero.
+fn fetchVex(io: std.Io, dir: std.Io.Dir) bool {
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "zig", "fetch", "--save", VEX_URL },
+        .cwd = .{ .dir = dir },
+    }) catch return false;
+    const term = child.wait(io) catch return false;
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
 }
 
 // Turn an arbitrary project name into a valid Zig identifier for the package
