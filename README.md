@@ -31,6 +31,8 @@ zig build -Dhost=false  # build only the carts + SDK (skip the raylib host)
 ```
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`.
+`make install` copies the `vex` and `vex-init` binaries to `~/.local/bin`
+(override with `make install PREFIX=/usr/local`).
 
 `vex` is invoked as `vex [-s scale] <cart.wasm>`. The window is the 320×180
 framebuffer times `scale` (default 3, i.e. 960×540); `-s`/`--scale` overrides it.
@@ -54,7 +56,8 @@ keys, `Z`, and `X` are passed to the cart via `btn()`.
 ## Starting a new cart
 
 `vex-init` scaffolds a standalone Zig cart project that depends on the `vex`
-SDK published at <https://github.com/peterhellberg/vex>:
+SDK published at <https://github.com/peterhellberg/vex>. With the binaries
+installed (`make install`, so `vex` and `vex-init` are on your `PATH`):
 
 ```sh
 vex-init mygame      # creates mygame/ with main.zig, build.zig, build.zig.zon
