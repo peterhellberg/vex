@@ -68,6 +68,10 @@ export fn update() void {
     pal(10, (255 << 16) | (236 << 8) | blue); // 0xRRGGBB
 
     cls(0); // dark background
+
+    // Subtle guide line, behind everything: player center -> bottom center.
+    line(px + PLAYER / 2, py + PLAYER / 2, W / 2, H - 1, 15);
+
     text("VEX ZIG", 4, 4, 12); // white
     text("ARROWS + Z", 4, 14, 13); // muted blue-grey
 
@@ -83,6 +87,4 @@ export fn update() void {
     const fill: i32 = if (down(A)) 2 else 5;
     rect(px, py, PLAYER, PLAYER, fill);
     rectb(px, py, PLAYER, PLAYER, 12); // white border
-
-    line(0, H - 1, W - 1, H - 1, 6); // green ground
 }
