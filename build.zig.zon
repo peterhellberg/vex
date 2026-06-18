@@ -1,0 +1,28 @@
+.{
+    .name = .vex,
+    .version = "0.1.0",
+    // Globally unique package id, generated once by the Zig toolchain.
+    .fingerprint = 0xe969ab1c398dc67c, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0-dev.305+bdfbf432d",
+    .dependencies = .{
+        .wasm3 = .{
+            .url = "https://github.com/wasm3/wasm3/archive/refs/tags/v0.5.0.tar.gz",
+            .hash = "N-V-__8AAPJTRwDyyZ7xBJrI5d3EG3JfvAPjPvNcdHLp0zqS",
+        },
+        // Pinned to a raylib master commit (6.0.0-dev): the 5.5 release's
+        // build.zig.zon predates the enum-literal package name format.
+        .raylib = .{
+            .url = "https://github.com/raysan5/raylib/archive/aaacda6e147031f2af0cfb6c1fd7e64d761ddb1f.tar.gz",
+            .hash = "raylib-6.0.0-whq8uLXSLwWGU9sQmZVQm0RquGkb0vEediLE8EoK9IYn",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "main.c",
+        "vex.h",
+        "cart",
+        "zcart",
+        "README.md",
+    },
+}

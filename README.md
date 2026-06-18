@@ -9,21 +9,25 @@ into a fixed **128×128** framebuffer with a fixed **16-color** (PICO-8)
 palette, scaled up to the window with nearest-neighbour filtering.
 
 - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
-  embeddable WASM interpreter (pure C, MIT). Fetched automatically on first
-  build; only its core files are compiled.
-- **Compiler:** `zig cc` (for both the host and the carts).
-- **Graphics/input:** raylib.
+  embeddable WASM interpreter (pure C, MIT). Only its core files are compiled.
+- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the C host,
+  the C cart, and the Zig cart.
+- **Graphics/input:** [raylib](https://www.raylib.com/).
+
+Both dependencies are pulled in via [`build.zig.zon`](build.zig.zon) and built
+from source, so the only requirement is `zig` — no system packages.
 
 ## Build & run
 
-Requires `zig`, `git`, and raylib (`brew install raylib zig` on macOS).
+Requires only `zig` (0.17-dev). Dependencies are fetched on first build.
 
 ```sh
-make run      # build everything, then run the C example cart (cart.wasm)
-make runz     # build everything, then run the Zig example cart (zcart.wasm)
-make          # just build (./vex + cart.wasm + zcart.wasm)
-make clean    # remove build artifacts
+zig build           # build ./vex + cart.wasm + zcart.wasm (into zig-out/bin)
+zig build run       # build, then run the C example cart
+zig build runz      # build, then run the Zig example cart
 ```
+
+A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`.
 
 There are two example carts: [`cart/main.c`](cart/main.c) (C) and
 [`zcart/main.zig`](zcart/main.zig) (Zig). Both compile to `wasm32` and use the

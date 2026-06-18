@@ -1,6 +1,4 @@
-/vex
-*.wasm
-/vendor/
-*.log
+/zig-out/
 /.zig-cache/
-/zig-cache/
+/zig-pkg/
+*.log
