@@ -35,18 +35,19 @@ pub fn main(init: std.process.Init) !void {
     var dir = try cwd.openDir(io, dir_path, .{});
     defer dir.close(io);
 
-    const main_zig = try std.fmt.allocPrint(a, main_zig_tmpl, .{name});
+    const cart_zig = try std.fmt.allocPrint(a, cart_zig_tmpl, .{name});
     const build_zig = try std.fmt.allocPrint(a, build_zig_tmpl, .{name});
     const build_zon = try std.fmt.allocPrint(a, build_zon_tmpl, .{ pkg, fingerprint(pkg), VEX_URL });
 
-    try dir.writeFile(io, .{ .sub_path = "main.zig", .data = main_zig });
+    try dir.createDirPath(io, "src");
+    try dir.writeFile(io, .{ .sub_path = "src/cart.zig", .data = cart_zig });
     try dir.writeFile(io, .{ .sub_path = "build.zig", .data = build_zig });
     try dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = build_zon });
     try dir.writeFile(io, .{ .sub_path = ".gitignore", .data = gitignore });
 
     std.debug.print(
         \\Created {s}/
-        \\  main.zig
+        \\  src/cart.zig
         \\  build.zig
         \\  build.zig.zon
         \\  .gitignore
@@ -96,7 +97,7 @@ fn fingerprint(pkg: []const u8) u64 {
     return (@as(u64, checksum) << 32) | id;
 }
 
-const main_zig_tmpl =
+const cart_zig_tmpl =
     \\const vex = @import("vex");
     \\
     \\export fn boot() void {{
@@ -130,7 +131,7 @@ const build_zig_tmpl =
     \\    const cart = b.addExecutable(.{{
     \\        .name = "{s}",
     \\        .root_module = b.createModule(.{{
-    \\            .root_source_file = b.path("main.zig"),
+    \\            .root_source_file = b.path("src/cart.zig"),
     \\            .target = wasm_target,
     \\            .optimize = optimize,
     \\            .imports = &.{{.{{ .name = "vex", .module = vex.module("vex") }}}},
@@ -155,7 +156,7 @@ const build_zon_tmpl =
     \\    .paths = .{{
     \\        "build.zig",
     \\        "build.zig.zon",
-    \\        "main.zig",
+    \\        "src",
     \\    }},
     \\}}
     \\
