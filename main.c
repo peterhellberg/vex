@@ -195,18 +195,18 @@ m3ApiRawFunction(host_btn) {
 }
 
 // Mouse position, mapped from window space into logical screen coordinates.
-m3ApiRawFunction(host_mousex) {
+m3ApiRawFunction(host_mx) {
     m3ApiReturnType(int32_t)
     m3ApiReturn((int32_t)((GetMouseX() - g_view_ox) / g_view_scale));
 }
 
-m3ApiRawFunction(host_mousey) {
+m3ApiRawFunction(host_my) {
     m3ApiReturnType(int32_t)
     m3ApiReturn((int32_t)((GetMouseY() - g_view_oy) / g_view_scale));
 }
 
-// mousebtn(button) -> held? 0 left, 1 right, 2 middle (raylib button indices).
-m3ApiRawFunction(host_mousebtn) {
+// mbtn(button) -> held? 0 left, 1 right, 2 middle (raylib button indices).
+m3ApiRawFunction(host_mbtn) {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, button)
     int held = (button >= 0 && button <= 6) ? IsMouseButtonDown(button) : 0;
@@ -248,9 +248,9 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
     m3_LinkRawFunction(mod, m, "title",    "v(*)",     &host_title);
     m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);
-    m3_LinkRawFunction(mod, m, "mousex",   "i()",      &host_mousex);
-    m3_LinkRawFunction(mod, m, "mousey",   "i()",      &host_mousey);
-    m3_LinkRawFunction(mod, m, "mousebtn", "i(i)",     &host_mousebtn);
+    m3_LinkRawFunction(mod, m, "mx",       "i()",      &host_mx);
+    m3_LinkRawFunction(mod, m, "my",       "i()",      &host_my);
+    m3_LinkRawFunction(mod, m, "mbtn",     "i(i)",     &host_mbtn);
     m3_LinkRawFunction(mod, m, "pal",      "v(ii)",    &host_pal);
     m3_LinkRawFunction(mod, m, "palreset", "v()",      &host_palreset);
     return m3Err_none;

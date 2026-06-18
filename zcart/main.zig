@@ -22,9 +22,9 @@ extern "env" fn trib(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color
 extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
 extern "env" fn title(s: [*:0]const u8) void; // set window title
 extern "env" fn btn(button: i32) i32;
-extern "env" fn mousex() i32;
-extern "env" fn mousey() i32;
-extern "env" fn mousebtn(button: i32) i32;
+extern "env" fn mx() i32;
+extern "env" fn my() i32;
+extern "env" fn mbtn(button: i32) i32;
 extern "env" fn pal(index: i32, rgb: i32) void; // override palette entry (0xRRGGBB)
 
 // Buttons.
@@ -97,5 +97,5 @@ export fn update() void {
     rectb(px, py, PLAYER, PLAYER, 12); // white border
 
     // Mouse cursor: white dot, red while the left button is held.
-    circ(mousex(), mousey(), 3, if (mousebtn(0) != 0) 2 else 12);
+    circ(mx(), my(), 3, if (mbtn(0) != 0) 2 else 12);
 }

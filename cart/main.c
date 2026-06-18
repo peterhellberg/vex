@@ -47,5 +47,5 @@ VEX_EXPORT("update") void update(void) {
   rectb(px, py, PLAYER, PLAYER, 12);
 
   // Mouse cursor: white dot, red while the left button is held.
-  circ(mousex(), mousey(), 3, mousebtn(VEX_MOUSE_LEFT) ? 2 : 12);
+  circ(mx(), my(), 3, mbtn(VEX_MOUSE_LEFT) ? 2 : 12);
 }

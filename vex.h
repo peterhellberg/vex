@@ -42,9 +42,9 @@ VEX_IMPORT("text")  void text(const char* s, int x, int y, int color);
 VEX_IMPORT("title") void title(const char* s);                       // set window title
 VEX_IMPORT("btn")   int  btn(int button);                            // 1 if held, else 0
 
-VEX_IMPORT("mousex")   int mousex(void);            // mouse x in screen pixels
-VEX_IMPORT("mousey")   int mousey(void);            // mouse y in screen pixels
-VEX_IMPORT("mousebtn") int mousebtn(int button);    // 1 if mouse button held
+VEX_IMPORT("mx")   int mx(void);             // mouse x in screen pixels
+VEX_IMPORT("my")   int my(void);             // mouse y in screen pixels
+VEX_IMPORT("mbtn") int mbtn(int button);     // 1 if mouse button held
 
 VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
 VEX_IMPORT("palreset") void palreset(void);          // restore default palette
