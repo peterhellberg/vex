@@ -1,38 +1,15 @@
 // Example vex cart, written in Zig (0.17-dev) and compiled to wasm32.
 //
 // Move the player square with the arrow keys; press A (Z) to change its fill
-// color. A ball bounces around the screen. Same console API as the C cart,
-// imported from the "env" module the host links.
+// color. A ball bounces around the screen. The console API is imported from
+// the reusable vex.zig SDK.
 
-const W: i32 = 320;
-const H: i32 = 180;
-const PLAYER: i32 = 18;
-const R: i32 = 8; // ball radius
+const vex = @import("vex");
 
-// Host API: functions the console provides via the "env" import module.
-extern "env" fn cls(color: i32) void;
-extern "env" fn rect(x: i32, y: i32, w: i32, h: i32, color: i32) void;
-extern "env" fn rectb(x: i32, y: i32, w: i32, h: i32, color: i32) void;
-extern "env" fn circ(x: i32, y: i32, r: i32, color: i32) void;
-extern "env" fn circb(x: i32, y: i32, r: i32, color: i32) void;
-extern "env" fn ring(x: i32, y: i32, inner: i32, outer: i32, color: i32) void;
-extern "env" fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) void;
-extern "env" fn tri(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
-extern "env" fn trib(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
-extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
-extern "env" fn title(s: [*:0]const u8) void; // set window title
-extern "env" fn btn(button: i32) i32;
-extern "env" fn mx() i32;
-extern "env" fn my() i32;
-extern "env" fn mbtn(button: i32) i32;
-extern "env" fn pal(index: i32, rgb: i32) void; // override palette entry (0xRRGGBB)
-
-// Buttons.
-const LEFT: i32 = 0;
-const RIGHT: i32 = 1;
-const UP: i32 = 2;
-const DOWN: i32 = 3;
-const A: i32 = 4;
+const W = vex.WIDTH;
+const H = vex.HEIGHT;
+const PLAYER = 18;
+const R = 8; // ball radius
 
 // All mutable cart state lives on a single struct instance.
 const State = struct {
@@ -47,12 +24,8 @@ const State = struct {
 
 var state: State = .{};
 
-fn down(button: i32) bool {
-    return btn(button) != 0;
-}
-
 export fn boot() void {
-    title("vex - Zig cart");
+    vex.title("vex - Zig cart");
     state.px = (W - PLAYER) / 2;
     state.py = (H - PLAYER) / 2;
 }
@@ -61,10 +34,10 @@ export fn update() void {
     const s = &state;
 
     // Move the player, clamped to the screen.
-    if (down(LEFT) and s.px > 0) s.px -= 1;
-    if (down(RIGHT) and s.px < W - PLAYER) s.px += 1;
-    if (down(UP) and s.py > 0) s.py -= 1;
-    if (down(DOWN) and s.py < H - PLAYER) s.py += 1;
+    if (vex.down(vex.LEFT) and s.px > 0) s.px -= 1;
+    if (vex.down(vex.RIGHT) and s.px < W - PLAYER) s.px += 1;
+    if (vex.down(vex.UP) and s.py > 0) s.py -= 1;
+    if (vex.down(vex.DOWN) and s.py < H - PLAYER) s.py += 1;
 
     // Bounce the ball off the walls.
     s.bx += s.vx;
@@ -75,34 +48,34 @@ export fn update() void {
     // Pulse palette index 10 (the ball's color) to show live palette changes.
     s.t += 1;
     const phase = @mod(s.t, 120);
-    const k: i32 = if (phase < 60) phase else 120 - phase; // triangle wave 0..60..0
-    const blue: i32 = 39 + k * 3;
-    pal(10, (255 << 16) | (236 << 8) | blue); // 0xRRGGBB
+    const k = if (phase < 60) phase else 120 - phase; // triangle wave 0..60..0
+    const blue = 39 + k * 3;
+    vex.pal(10, (255 << 16) | (236 << 8) | blue); // 0xRRGGBB
 
-    cls(0); // dark background
+    vex.cls(0); // dark background
 
     // Subtle guide line, behind everything: player center -> bottom center.
-    line(s.px + PLAYER / 2, s.py + PLAYER / 2, W / 2, H - 1, 15);
+    vex.line(s.px + PLAYER / 2, s.py + PLAYER / 2, W / 2, H - 1, 15);
 
-    text("VEX ZIG", 6, 6, 12); // white
-    text("ARROWS + Z", 6, 18, 13); // muted blue-grey
+    vex.text("VEX ZIG", 6, 6, 12); // white
+    vex.text("ARROWS + Z", 6, 18, 13); // muted blue-grey
 
-    circb(60, 44, 9, 13); // outlined moon
+    vex.circb(60, 44, 9, 13); // outlined moon
 
     // Mountain range across the width: alternating filled and outlined peaks.
-    tri(0, H - 1, 48, H - 60, 96, H - 1, 14);
-    trib(72, H - 1, 132, H - 84, 192, H - 1, 12);
-    tri(150, H - 1, 210, H - 52, 270, H - 1, 14);
-    trib(248, H - 1, 296, H - 72, 319, H - 1, 12);
+    vex.tri(0, H - 1, 48, H - 60, 96, H - 1, 14);
+    vex.trib(72, H - 1, 132, H - 84, 192, H - 1, 12);
+    vex.tri(150, H - 1, 210, H - 52, 270, H - 1, 14);
+    vex.trib(248, H - 1, 296, H - 72, 319, H - 1, 12);
 
-    circ(s.bx, s.by, R, 10); // ball (palette index 10, pulsed above)
-    ring(s.bx, s.by, R + 3, R + 5, 11); // cyan ring orbiting the ball
+    vex.circ(s.bx, s.by, R, 10); // ball (palette index 10, pulsed above)
+    vex.ring(s.bx, s.by, R + 3, R + 5, 11); // cyan ring orbiting the ball
 
     // Player: filled square (red while A held, otherwise green) with a border.
-    const fill: i32 = if (down(A)) 2 else 5;
-    rect(s.px, s.py, PLAYER, PLAYER, fill);
-    rectb(s.px, s.py, PLAYER, PLAYER, 12); // white border
+    const fill: i32 = if (vex.down(vex.A)) 2 else 5;
+    vex.rect(s.px, s.py, PLAYER, PLAYER, fill);
+    vex.rectb(s.px, s.py, PLAYER, PLAYER, 12); // white border
 
     // Mouse cursor: white dot, red while the left button is held.
-    circ(mx(), my(), 3, if (mbtn(0) != 0) 2 else 12);
+    vex.circ(vex.mx(), vex.my(), 3, if (vex.mdown(vex.MOUSE_LEFT)) 2 else 12);
 }

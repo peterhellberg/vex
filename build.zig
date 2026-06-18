@@ -62,13 +62,15 @@ pub fn build(b: *std.Build) void {
     cart_c.entry = .disabled;
     b.installArtifact(cart_c);
 
-    // Zig cart.
+    // Zig cart. Carts import the host API from the reusable vex.zig SDK.
+    const vex_mod = b.createModule(.{ .root_source_file = b.path("vex.zig") });
     const cart_zig = b.addExecutable(.{
         .name = "zcart",
         .root_module = b.createModule(.{
             .root_source_file = b.path("zcart/main.zig"),
             .target = wasm_target,
             .optimize = .ReleaseSmall,
+            .imports = &.{.{ .name = "vex", .module = vex_mod }},
         }),
     });
     cart_zig.entry = .disabled;

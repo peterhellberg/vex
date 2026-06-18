@@ -74,22 +74,20 @@ zig cc --target=wasm32-freestanding -nostdlib -O2 -Wl,--no-entry -I. \
 ./vex mycart.wasm
 ```
 
-Or in Zig — declare the API as `extern "env"` imports and `export` the entry
-points:
+Or in Zig — import the [`vex.zig`](vex.zig) SDK and `export` the entry points:
 
 ```zig
-extern "env" fn cls(color: i32) void;
-extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
+const vex = @import("vex");
 
 export fn update() void {
-    cls(1);
-    text("HELLO", 4, 4, 7);
+    vex.cls(1);                 // clear to dark blue
+    vex.text("HELLO", 4, 4, 12); // white text
 }
 ```
 
 ```sh
-zig build-exe mycart.zig -target wasm32-freestanding -O ReleaseSmall \
-    -fno-entry -rdynamic -femit-bin=mycart.wasm
+zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
+    -femit-bin=mycart.wasm --dep vex -Mroot=mycart.zig -Mvex=vex.zig
 ./vex mycart.wasm
 ```
 
