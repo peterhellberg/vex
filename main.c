@@ -283,7 +283,8 @@ int main(int argc, char** argv) {
         if (err) die(rt, "boot", err);
     }
 
-    bool integer_scale = false; // false: fill (fractional); true: crisp integer scale
+    bool integer_scale = false; // crisp integer scale vs. fractional fill;
+                                // enabled automatically on entering fullscreen
 
     while (!WindowShouldClose()) {
         // Console controls (Super = Cmd on macOS, Super/Windows key on Linux):
@@ -299,6 +300,7 @@ int main(int argc, char** argv) {
             if (!IsWindowFullscreen()) {
                 SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
                 ToggleFullscreen();
+                integer_scale = true; // crisp by default in fullscreen
             } else {
                 ToggleFullscreen();
                 SetWindowSize(VEX_W * VEX_SCALE, VEX_H * VEX_SCALE);
