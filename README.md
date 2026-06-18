@@ -5,8 +5,9 @@ A minimal WASM-based fantasy console in a single `main.c`.
 The console is the **host**: it opens a [raylib](https://www.raylib.com/)
 window, loads a `.wasm` *cart*, links a tiny drawing/input API the cart
 imports, and calls the cart's exported `update()` once per frame. Carts draw
-into a fixed **128×128** framebuffer with a fixed **16-color** (PICO-8)
-palette, scaled up to the window with nearest-neighbour filtering.
+into a fixed **128×128** framebuffer with a **16-color** [SWEETIE-16](https://lospec.com/palette-list/sweetie-16)
+palette (overridable at runtime), scaled up to the window with
+nearest-neighbour filtering.
 
 - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
   embeddable WASM interpreter (pure C, MIT). Only its core files are compiled.
@@ -88,6 +89,8 @@ zig build-exe mycart.zig -target wasm32-freestanding -O ReleaseSmall \
 | `line(x0, y0, x1, y1, color)` | line |
 | `text(s, x, y, color)` | draw a string |
 | `btn(button) -> int` | `1` if a button is held, else `0` |
+| `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
+| `palreset()` | restore the default palette |
 
 `color` is a palette index `0..15`. Buttons: `0` left, `1` right, `2` up,
 `3` down, `4` A (`Z` key), `5` B (`X` key) — mapped to the arrow keys.

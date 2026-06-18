@@ -11,7 +11,7 @@
 #define VEX_IMPORT(name) __attribute__((import_module("env"), import_name(name)))
 #define VEX_EXPORT(name) __attribute__((export_name(name)))
 
-// Screen is 128x128. Colors are PICO-8 palette indices 0..15.
+// Screen is 128x128. Colors are SWEETIE-16 palette indices 0..15.
 #define VEX_WIDTH  128
 #define VEX_HEIGHT 128
 
@@ -31,5 +31,8 @@ VEX_IMPORT("circ")  void circ(int x, int y, int r, int color);       // filled c
 VEX_IMPORT("line")  void line(int x0, int y0, int x1, int y1, int color);
 VEX_IMPORT("text")  void text(const char* s, int x, int y, int color);
 VEX_IMPORT("btn")   int  btn(int button);                            // 1 if held, else 0
+
+VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
+VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 
 #endif // VEX_H

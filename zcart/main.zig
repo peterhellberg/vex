@@ -17,6 +17,7 @@ extern "env" fn circ(x: i32, y: i32, r: i32, color: i32) void;
 extern "env" fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) void;
 extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
 extern "env" fn btn(button: i32) i32;
+extern "env" fn pal(index: i32, rgb: i32) void; // override palette entry (0xRRGGBB)
 
 // Buttons.
 const LEFT: i32 = 0;
@@ -31,6 +32,7 @@ var bx: i32 = 24;
 var by: i32 = 80;
 var vx: i32 = 1;
 var vy: i32 = 1;
+var t: i32 = 0;
 
 fn down(button: i32) bool {
     return btn(button) != 0;
@@ -54,16 +56,23 @@ export fn update() void {
     if (bx < R or bx > W - R) vx = -vx;
     if (by < R or by > H - R) vy = -vy;
 
-    cls(1); // dark blue background
-    text("VEX ZIG", 4, 4, 7);
-    text("ARROWS + Z", 4, 14, 13);
+    // Pulse palette index 10 (the ball's color) to show live palette changes.
+    t += 1;
+    const phase = @mod(t, 120);
+    const k: i32 = if (phase < 60) phase else 120 - phase; // triangle wave 0..60..0
+    const blue: i32 = 39 + k * 3;
+    pal(10, (255 << 16) | (236 << 8) | blue); // 0xRRGGBB
 
-    circ(bx, by, R, 10); // yellow ball
+    cls(0); // dark background
+    text("VEX ZIG", 4, 4, 12); // white
+    text("ARROWS + Z", 4, 14, 13); // muted blue-grey
+
+    circ(bx, by, R, 10); // ball (palette index 10, pulsed above)
 
     // Player: filled square (red while A held, otherwise green) with a border.
-    const fill: i32 = if (down(A)) 8 else 11;
+    const fill: i32 = if (down(A)) 2 else 5;
     rect(px, py, PLAYER, PLAYER, fill);
-    rectb(px, py, PLAYER, PLAYER, 7);
+    rectb(px, py, PLAYER, PLAYER, 12); // white border
 
-    line(0, H - 1, W - 1, H - 1, 3); // ground
+    line(0, H - 1, W - 1, H - 1, 6); // green ground
 }

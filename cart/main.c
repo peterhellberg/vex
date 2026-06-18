@@ -21,16 +21,16 @@ VEX_EXPORT("update") void update(void) {
   if (btn(VEX_DOWN) && py < VEX_HEIGHT - PLAYER)
     py++;
 
-  cls(1); // dark blue background
-  text("VEX", 4, 4, 7);
-  text("ARROWS + Z", 4, 14, 13);
+  cls(0); // dark background
+  text("VEX", 4, 4, 12);          // white
+  text("ARROWS + Z", 4, 14, 13);  // muted blue-grey
 
-  circ(VEX_WIDTH / 2, 40, 12, 9); // orange sun
-  line(0, VEX_HEIGHT - 1, VEX_WIDTH - 1, VEX_HEIGHT - 1, 3);
+  circ(VEX_WIDTH / 2, 40, 12, 4); // yellow sun
+  line(0, VEX_HEIGHT - 1, VEX_WIDTH - 1, VEX_HEIGHT - 1, 6); // green ground
 
   // Player: a filled square (red while A held, otherwise green) with a white
   // border drawn around the same square.
-  int fill = btn(VEX_A) ? 8 : 11;
+  int fill = btn(VEX_A) ? 2 : 5;
   rect(px, py, PLAYER, PLAYER, fill);
-  rectb(px, py, PLAYER, PLAYER, 7);
+  rectb(px, py, PLAYER, PLAYER, 12);
 }

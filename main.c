@@ -20,14 +20,20 @@
 #define VEX_SCALE    4   // window pixels per logical pixel
 #define VEX_FONT     8   // text size in logical pixels
 
-// PICO-8 palette: 16 fixed colors, indexed 0..15.
-static const Color PALETTE[16] = {
-    {  0,   0,   0, 255}, { 29,  43,  83, 255}, {126,  37,  83, 255}, {  0, 135,  81, 255},
-    {171,  82,  54, 255}, { 95,  87,  79, 255}, {194, 195, 199, 255}, {255, 241, 232, 255},
-    {255,   0,  77, 255}, {255, 163,   0, 255}, {255, 236,  39, 255}, {  0, 228,  54, 255},
-    { 41, 173, 255, 255}, {131, 118, 156, 255}, {255, 119, 168, 255}, {255, 204, 170, 255},
+// Default SWEETIE-16 palette: 16 colors, indexed 0..15. Carts can override
+// entries at runtime via pal()/palreset(); `palette` holds the live colors.
+static const Color DEFAULT_PALETTE[16] = {
+    { 26,  28,  44, 255}, { 93,  39,  93, 255}, {177,  62,  83, 255}, {239, 125,  87, 255},
+    {255, 205, 117, 255}, {167, 240, 112, 255}, { 56, 183, 100, 255}, { 37, 113, 121, 255},
+    { 41,  54, 111, 255}, { 59,  93, 201, 255}, { 65, 166, 246, 255}, {115, 239, 247, 255},
+    {244, 244, 244, 255}, {148, 176, 194, 255}, { 86, 108, 134, 255}, { 51,  60,  87, 255},
 };
-#define PAL(c) (PALETTE[(unsigned)(c) & 15])
+static Color palette[16];
+#define PAL(c) (palette[(unsigned)(c) & 15])
+
+static void reset_palette(void) {
+    for (int i = 0; i < 16; i++) palette[i] = DEFAULT_PALETTE[i];
+}
 
 // ---- host API: functions the cart imports from module "env" --------------
 // These run inside BeginTextureMode(), so raylib draws into the framebuffer.
@@ -119,6 +125,24 @@ m3ApiRawFunction(host_btn) {
     m3ApiReturn(held);
 }
 
+// pal(index, rgb): override one palette entry (index 0..15) with a packed
+// 0xRRGGBB color.
+m3ApiRawFunction(host_pal) {
+    m3ApiGetArg(int32_t, index)
+    m3ApiGetArg(int32_t, rgb)
+    palette[(unsigned)index & 15] = (Color){
+        (unsigned char)((rgb >> 16) & 0xFF), (unsigned char)((rgb >> 8) & 0xFF),
+        (unsigned char)(rgb & 0xFF), 255,
+    };
+    m3ApiSuccess();
+}
+
+// palreset(): restore the default palette.
+m3ApiRawFunction(host_palreset) {
+    reset_palette();
+    m3ApiSuccess();
+}
+
 static M3Result link_host(IM3Module mod) {
     const char* m = "env";
     // Linking a function the cart doesn't import returns functionLookupFailed,
@@ -129,8 +153,10 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "rectb", "v(iiiii)", &host_rectb);
     m3_LinkRawFunction(mod, m, "circ",  "v(iiii)",  &host_circ);
     m3_LinkRawFunction(mod, m, "line",  "v(iiiii)", &host_line);
-    m3_LinkRawFunction(mod, m, "text",  "v(*iii)",  &host_text);
-    m3_LinkRawFunction(mod, m, "btn",   "i(i)",     &host_btn);
+    m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
+    m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);
+    m3_LinkRawFunction(mod, m, "pal",      "v(ii)",    &host_pal);
+    m3_LinkRawFunction(mod, m, "palreset", "v()",      &host_palreset);
     return m3Err_none;
 }
 
@@ -192,6 +218,8 @@ int main(int argc, char** argv) {
 
     RenderTexture2D screen = LoadRenderTexture(VEX_W, VEX_H);
     SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
+
+    reset_palette();
 
     if (f_boot) {
         err = m3_CallV(f_boot);
