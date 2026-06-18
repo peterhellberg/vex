@@ -23,7 +23,7 @@
 #define VEX_A     4
 #define VEX_B     5
 
-// Mouse buttons, as passed to mousebtn().
+// Mouse buttons, as passed to mbtn().
 #define VEX_MOUSE_LEFT   0
 #define VEX_MOUSE_RIGHT  1
 #define VEX_MOUSE_MIDDLE 2
