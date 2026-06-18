@@ -11,9 +11,9 @@
 #define VEX_IMPORT(name) __attribute__((import_module("env"), import_name(name)))
 #define VEX_EXPORT(name) __attribute__((export_name(name)))
 
-// Screen is 128x128. Colors are SWEETIE-16 palette indices 0..15.
-#define VEX_WIDTH  128
-#define VEX_HEIGHT 128
+// Screen is 320x180. Colors are SWEETIE-16 palette indices 0..15.
+#define VEX_WIDTH  320
+#define VEX_HEIGHT 180
 
 // Buttons, as passed to btn().
 #define VEX_LEFT  0

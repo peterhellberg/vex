@@ -4,10 +4,10 @@
 // color. A ball bounces around the screen. Same console API as the C cart,
 // imported from the "env" module the host links.
 
-const W: i32 = 128;
-const H: i32 = 128;
-const PLAYER: i32 = 12;
-const R: i32 = 6; // ball radius
+const W: i32 = 320;
+const H: i32 = 180;
+const PLAYER: i32 = 18;
+const R: i32 = 8; // ball radius
 
 // Host API: functions the console provides via the "env" import module.
 extern "env" fn cls(color: i32) void;
@@ -32,8 +32,8 @@ const A: i32 = 4;
 
 var px: i32 = (W - PLAYER) / 2;
 var py: i32 = (H - PLAYER) / 2;
-var bx: i32 = 24;
-var by: i32 = 80;
+var bx: i32 = 40;
+var by: i32 = 60;
 var vx: i32 = 1;
 var vy: i32 = 1;
 var t: i32 = 0;
@@ -72,16 +72,19 @@ export fn update() void {
     // Subtle guide line, behind everything: player center -> bottom center.
     line(px + PLAYER / 2, py + PLAYER / 2, W / 2, H - 1, 15);
 
-    text("VEX ZIG", 4, 4, 12); // white
-    text("ARROWS + Z", 4, 14, 13); // muted blue-grey
+    text("VEX ZIG", 6, 6, 12); // white
+    text("ARROWS + Z", 6, 18, 13); // muted blue-grey
+
+    circb(60, 44, 9, 13); // outlined moon
+
+    // Mountain range across the width: alternating filled and outlined peaks.
+    tri(0, H - 1, 48, H - 60, 96, H - 1, 14);
+    trib(72, H - 1, 132, H - 84, 192, H - 1, 12);
+    tri(150, H - 1, 210, H - 52, 270, H - 1, 14);
+    trib(248, H - 1, 296, H - 72, 319, H - 1, 12);
 
     circ(bx, by, R, 10); // ball (palette index 10, pulsed above)
     ring(bx, by, R + 3, R + 5, 11); // cyan ring orbiting the ball
-    circb(108, 22, 8, 13); // outlined moon
-
-    // Mountains: one outlined (left), one filled (right), side by side.
-    trib(4, H - 1, 30, H - 26, 56, H - 1, 12);
-    tri(64, H - 1, 94, H - 40, 124, H - 1, 14);
 
     // Player: filled square (red while A held, otherwise green) with a border.
     const fill: i32 = if (down(A)) 2 else 5;

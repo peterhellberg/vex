@@ -15,9 +15,9 @@
 #include "raylib.h"
 #include "wasm3.h"
 
-#define VEX_W      128   // logical screen width
-#define VEX_H      128   // logical screen height
-#define VEX_SCALE    4   // window pixels per logical pixel
+#define VEX_W      320   // logical screen width  (keep in sync with vex.h)
+#define VEX_H      180   // logical screen height (keep in sync with vex.h)
+#define VEX_SCALE    4   // window pixels per logical pixel (-> 1280x720 window)
 #define VEX_FONT     8   // text size in logical pixels
 
 // Default SWEETIE-16 palette: 16 colors, indexed 0..15. Carts can override

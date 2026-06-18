@@ -5,7 +5,7 @@ A minimal WASM-based fantasy console in a single `main.c`.
 The console is the **host**: it opens a [raylib](https://www.raylib.com/)
 window, loads a `.wasm` *cart*, links a tiny drawing/input API the cart
 imports, and calls the cart's exported `update()` once per frame. Carts draw
-into a fixed **128×128** framebuffer with a **16-color** [SWEETIE-16](https://lospec.com/palette-list/sweetie-16)
+into a fixed **320×180** framebuffer with a **16-color** [SWEETIE-16](https://lospec.com/palette-list/sweetie-16)
 palette (overridable at runtime), scaled up to the window with
 nearest-neighbour filtering.
 
