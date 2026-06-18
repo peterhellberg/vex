@@ -23,10 +23,11 @@ from source, so the only requirement is `zig` — no system packages.
 Requires only `zig` (0.17-dev). Dependencies are fetched on first build.
 
 ```sh
-zig build              # build ./vex + cart.wasm + zcart.wasm (into zig-out/bin)
-zig build run          # build, then run the C example cart
-zig build runz         # build, then run the Zig example cart
-zig build run -- -s 5  # forward flags to vex (here: window scale 5)
+zig build               # build ./vex + ./vex-init + cart.wasm + zcart.wasm
+zig build run           # build, then run the C example cart
+zig build runz          # build, then run the Zig example cart
+zig build run -- -s 5   # forward flags to vex (here: window scale 5)
+zig build -Dhost=false  # build only the carts + SDK (skip the raylib host)
 ```
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`.
@@ -49,6 +50,22 @@ same console API.
 
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. Arrow
 keys, `Z`, and `X` are passed to the cart via `btn()`.
+
+## Starting a new cart
+
+`vex-init` scaffolds a standalone Zig cart project that depends on the `vex`
+SDK published at <https://github.com/peterhellberg/vex>:
+
+```sh
+vex-init mygame      # creates mygame/ with main.zig, build.zig, build.zig.zon
+cd mygame
+zig fetch --save git+https://github.com/peterhellberg/vex.git
+zig build            # builds zig-out/bin/mygame.wasm
+vex zig-out/bin/mygame.wasm
+```
+
+The generated `build.zig` depends on `vex` with `.{ .host = false }`, so only
+the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
 
 ## Writing a cart
 
