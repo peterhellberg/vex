@@ -25,7 +25,9 @@ VEX_EXPORT("update") void update(void) {
   text("VEX", 4, 4, 12);          // white
   text("ARROWS + Z", 4, 14, 13);  // muted blue-grey
 
-  circ(VEX_WIDTH / 2, 40, 12, 4); // yellow sun
+  circ(VEX_WIDTH / 2, 40, 12, 4);     // yellow sun
+  ring(VEX_WIDTH / 2, 40, 15, 17, 3); // orange ring around it
+  circb(108, 22, 8, 13);              // outlined moon
 
   // Mountains: one outlined (left), one filled (right), side by side.
   trib(4, VEX_HEIGHT - 1, 30, VEX_HEIGHT - 26, 56, VEX_HEIGHT - 1, 12);

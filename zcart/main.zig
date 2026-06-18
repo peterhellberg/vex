@@ -14,6 +14,8 @@ extern "env" fn cls(color: i32) void;
 extern "env" fn rect(x: i32, y: i32, w: i32, h: i32, color: i32) void;
 extern "env" fn rectb(x: i32, y: i32, w: i32, h: i32, color: i32) void;
 extern "env" fn circ(x: i32, y: i32, r: i32, color: i32) void;
+extern "env" fn circb(x: i32, y: i32, r: i32, color: i32) void;
+extern "env" fn ring(x: i32, y: i32, inner: i32, outer: i32, color: i32) void;
 extern "env" fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) void;
 extern "env" fn tri(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
 extern "env" fn trib(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
@@ -70,6 +72,8 @@ export fn update() void {
     text("ARROWS + Z", 4, 14, 13); // muted blue-grey
 
     circ(bx, by, R, 10); // ball (palette index 10, pulsed above)
+    ring(bx, by, R + 3, R + 5, 11); // cyan ring orbiting the ball
+    circb(108, 22, 8, 13); // outlined moon
 
     // Mountains: one outlined (left), one filled (right), side by side.
     trib(4, H - 1, 30, H - 26, 56, H - 1, 12);

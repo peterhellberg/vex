@@ -86,6 +86,8 @@ zig build-exe mycart.zig -target wasm32-freestanding -O ReleaseSmall \
 | `rect(x, y, w, h, color)` | filled rectangle |
 | `rectb(x, y, w, h, color)` | rectangle outline |
 | `circ(x, y, r, color)` | filled circle |
+| `circb(x, y, r, color)` | circle outline |
+| `ring(x, y, inner, outer, color)` | filled ring (annulus) |
 | `line(x0, y0, x1, y1, color)` | line |
 | `tri(x1, y1, x2, y2, x3, y3, color)` | filled triangle |
 | `trib(x1, y1, x2, y2, x3, y3, color)` | triangle outline |

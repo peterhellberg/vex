@@ -87,6 +87,27 @@ m3ApiRawFunction(host_circ) {
     m3ApiSuccess();
 }
 
+m3ApiRawFunction(host_circb) {
+    m3ApiGetArg(int32_t, x)
+    m3ApiGetArg(int32_t, y)
+    m3ApiGetArg(int32_t, r)
+    m3ApiGetArg(int32_t, color)
+    DrawCircleLines(x, y, (float)r, PAL(color));
+    m3ApiSuccess();
+}
+
+// ring(x, y, inner, outer, color): filled annulus. segments=0 lets raylib pick
+// a smooth segment count automatically.
+m3ApiRawFunction(host_ring) {
+    m3ApiGetArg(int32_t, x)
+    m3ApiGetArg(int32_t, y)
+    m3ApiGetArg(int32_t, inner)
+    m3ApiGetArg(int32_t, outer)
+    m3ApiGetArg(int32_t, color)
+    DrawRing((Vector2){x, y}, (float)inner, (float)outer, 0.0f, 360.0f, 0, PAL(color));
+    m3ApiSuccess();
+}
+
 m3ApiRawFunction(host_line) {
     m3ApiGetArg(int32_t, x0)
     m3ApiGetArg(int32_t, y0)
@@ -184,6 +205,8 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "rect",  "v(iiiii)", &host_rect);
     m3_LinkRawFunction(mod, m, "rectb", "v(iiiii)", &host_rectb);
     m3_LinkRawFunction(mod, m, "circ",  "v(iiii)",  &host_circ);
+    m3_LinkRawFunction(mod, m, "circb", "v(iiii)",  &host_circb);
+    m3_LinkRawFunction(mod, m, "ring",  "v(iiiii)", &host_ring);
     m3_LinkRawFunction(mod, m, "line",  "v(iiiii)", &host_line);
     m3_LinkRawFunction(mod, m, "tri",   "v(iiiiiii)", &host_tri);
     m3_LinkRawFunction(mod, m, "trib",  "v(iiiiiii)", &host_trib);
