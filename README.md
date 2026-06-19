@@ -1,17 +1,18 @@
 # vex
 
-A minimal WASM-based fantasy console in a single `main.c`.
+A minimal WASM-based fantasy console in a single `main.c`
 
 The console is the **host**: it opens a [raylib](https://www.raylib.com/)
 window, loads a `.wasm` *cart*, links a tiny drawing/input API the cart
-imports, and calls the cart's exported `update()` once per frame (60 fps).
-Carts draw
-into a fixed **320×180** framebuffer with a **16-color** [SWEETIE-16](https://lospec.com/palette-list/sweetie-16)
-palette (overridable at runtime), scaled up to the window with
-nearest-neighbour filtering.
+imports, and calls the cart's exported `update()` once per frame _(60 fps)_.
+
+Carts draw into a fixed **320×180** framebuffer with a **16-color** 
+[SWEETIE-16](https://lospec.com/palette-list/sweetie-16) palette 
+_(overridable at runtime)_, scaled up to the window with nearest-neighbour filtering.
 
 - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
-  embeddable WASM interpreter (pure C, MIT). Only its core files are compiled.
+  embeddable WASM interpreter _(pure C, MIT)_. 
+  Only its core files are compiled.
 - **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the host, the
   `vex-init` scaffolder, and both example carts.
 - **Graphics/input:** [raylib](https://www.raylib.com/).
@@ -32,38 +33,46 @@ zig build run -- -s 5   # forward flags to vex (here: window scale 5)
 zig build -Dhost=false  # build only the carts + SDK (skip the raylib host)
 ```
 
-A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`.
-`make install` copies the `vex` and `vex-init` binaries to `~/.local/bin`
-(override with `make install PREFIX=/usr/local`).
+A `Makefile` wraps these as `make`, `make run`, `make runz`, 
+and `make clean`. `make install` copies the `vex` and `vex-init` 
+binaries to `~/.local/bin`
+_(override with `make install PREFIX=/usr/local`)_.
 
-`vex` is invoked as `vex [-s scale] <cart.wasm>`. The window is the 320×180
-framebuffer times `scale` (default 3, i.e. 960×540); `-s`/`--scale` overrides it.
+`vex` is invoked as `vex [-s scale] <cart.wasm>`. 
 
-There are two example carts: [`cart/main.c`](cart/main.c) (C) and
-[`zcart/main.zig`](zcart/main.zig) (Zig). Both compile to `wasm32` and use the
-same console API.
+The window is the 320×180 framebuffer times `scale` 
+_(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it.
+
+There are two example carts: 
+
+- [`cart/main.c`](cart/main.c) (C)
+- [`zcart/main.zig`](zcart/main.zig) (Zig)
+
+Both compile to `wasm32` and use the same console API.
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
 | `Super`+`Enter` | toggle fullscreen |
-| `Super`+`I` | toggle integer scaling (crisp pixels vs. fill the screen; on by default in fullscreen) |
-| `Super`+`R` | reload the cart from disk (hot reload) |
+| `Super`+`I` | toggle integer scaling _(crisp pixels vs. fill the screen; on by default in fullscreen)_ |
+| `Super`+`R` | reload the cart from disk _(hot reload)_ |
 | `Esc` | quit |
 
-`Super` is the Cmd key on macOS and the Super/Windows key on Linux. Arrow
-keys, `Z`, and `X` are passed to the cart via `btn()`.
+`Super` is the Cmd key on macOS and the Super/Windows key on Linux. 
+
+Arrow keys, `Z`, and `X` are passed to the cart via `btn()`.
 
 > [!Tip]
 > For a fast edit loop, leave `vex` running, rebuild the cart
-> (`zig build`), and press `Super`+`R` to reload it in place.
+> (`zig build`), and press `Super`+`R` to reload it.
 
 ## Starting a new cart
 
 `vex-init` scaffolds a standalone Zig cart project that depends on the `vex`
-SDK published at <https://github.com/peterhellberg/vex>. With the binaries
-installed (`make install`, so `vex` and `vex-init` are on your `PATH`):
+SDK which is published at <https://github.com/peterhellberg/vex>. 
+
+With the binaries installed (`make install`, so `vex` and `vex-init` are on your `PATH`):
 
 ```sh
 vex-init mygame      # creates mygame/ (src/cart.zig, build.zig, build.zig.zon)
@@ -74,15 +83,17 @@ vex zig-out/bin/mygame.wasm
 ```
 
 `vex-init` fetches the vex dependency for you (`zig fetch --save`); if that
-step can't run it prints the command to finish manually. The generated
-`build.zig` depends on `vex` with `.{ .host = false }`, so only the
-[`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
+step can't run it prints the command to finish manually. 
+
+The generated `build.zig` depends on `vex` with `.{ .host = false }`, 
+so only the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
 
 ## Writing a cart
 
-A cart is any `wasm32` module that exports `update()` (and optionally
-`boot()`) and imports the API from module `env`. In C, include
-[`vex.h`](vex.h):
+A cart is any `wasm32` module that exports `update()` _(and optionally
+`boot()`)_ and imports the API from `env`. 
+
+In C, include [`vex.h`](vex.h):
 
 ```c
 #include "vex.h"
@@ -94,12 +105,12 @@ VEX_EXPORT("update") void update(void) {
 }
 ```
 
-Compile it to wasm:
+Compile it to WASM:
 
 ```sh
 zig cc --target=wasm32-freestanding -nostdlib -O2 -Wl,--no-entry -I. \
        -o mycart.wasm mycart.c
-./vex mycart.wasm
+vex mycart.wasm
 ```
 
 Or in Zig — import the [`vex.zig`](vex.zig) SDK and `export` the entry points:
@@ -116,7 +127,7 @@ export fn update() void {
 ```sh
 zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
     -femit-bin=mycart.wasm --dep vex -Mroot=mycart.zig -Mvex=vex.zig
-./vex mycart.wasm
+vex mycart.wasm
 ```
 
 ## API
@@ -141,5 +152,12 @@ zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
 | `palreset()` | restore the default palette |
 
-`color` is a palette index `0..15`. Buttons: `0` left, `1` right, `2` up,
-`3` down, `4` A (`Z` key), `5` B (`X` key) — mapped to the arrow keys.
+`color` is a palette index `0..15`
+
+Buttons: 
+ - `0` left 
+ - `1` right 
+ - `2` up
+ - `3` down 
+ - `4` A (`Z` key)
+ - `5` B (`X` key)
