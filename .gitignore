@@ -2,3 +2,4 @@
 /.zig-cache/
 /zig-pkg/
 *.log
+mycart*
