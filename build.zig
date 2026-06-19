@@ -14,7 +14,10 @@ const std = @import("std");
 // wasm3) from being fetched.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+    const optimize = b.standardOptimizeOption(.{
+        .preferred_optimize_mode = .ReleaseFast,
+    });
+
     const build_host = b.option(bool, "host", "Build the console host (needs raylib + wasm3)") orelse true;
 
     // The cart SDK, exposed as a public module so external carts can
@@ -77,7 +80,10 @@ pub fn build(b: *std.Build) void {
             "m3_info.c", "m3_module.c", "m3_optimize.c", "m3_parse.c",
         };
 
-        if (b.lazyDependency("raylib", .{ .target = target, .optimize = optimize })) |raylib_dep| {
+        if (b.lazyDependency("raylib", .{
+            .target = target,
+            .optimize = optimize,
+        })) |raylib_dep| {
             if (b.lazyDependency("wasm3", .{})) |wasm3| {
                 const raylib = raylib_dep.artifact("raylib");
 
@@ -89,7 +95,10 @@ pub fn build(b: *std.Build) void {
                         .link_libc = true,
                     }),
                 });
-                exe.root_module.addCSourceFile(.{ .file = b.path("main.c"), .flags = &.{"-std=c11"} });
+                exe.root_module.addCSourceFile(.{
+                    .file = b.path("main.c"),
+                    .flags = &.{"-std=c23"},
+                });
                 exe.root_module.addCSourceFiles(.{
                     .root = wasm3.path("source"),
                     .files = &wasm3_core,
