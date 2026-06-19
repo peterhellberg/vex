@@ -12,7 +12,7 @@
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 
-.PHONY: all run runz install uninstall clean
+.PHONY: all run runz docs install uninstall clean
 
 all:
 	zig build
@@ -22,6 +22,9 @@ run:
 
 runz:
 	zig build runz
+
+docs:
+	zig build-lib -fno-emit-bin -femit-docs vex.zig
 
 install: all
 	mkdir -p $(BINDIR)
