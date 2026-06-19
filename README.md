@@ -55,8 +55,9 @@ same console API.
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. Arrow
 keys, `Z`, and `X` are passed to the cart via `btn()`.
 
-**Tip:** for a fast edit loop, leave `vex` running, rebuild the cart
-(`zig build`), and press `Super`+`R` to reload it in place.
+> [!Tip]
+> For a fast edit loop, leave `vex` running, rebuild the cart
+> (`zig build`), and press `Super`+`R` to reload it in place.
 
 ## Starting a new cart
 
