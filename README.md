@@ -126,8 +126,18 @@ go run tools/vex-web.go mycart.wasm   # or run the server directly
 
 It serves the page on <http://localhost:8383/> and opens your browser there
 _(`--no-open` skips that; `-addr host:port` changes the address)_. The cart is
-served on `/cart.wasm`, **read from disk on every request** — so rebuilding the
-cart and refreshing the page loads the new bytes, no restart needed.
+served on `/cart.wasm`, **read from disk on every request**, and the page
+watches it over Server-Sent Events _(`/reload`)_ — so rebuilding the cart
+**live-reloads** it in the browser, no refresh or restart needed.
+
+> [!Tip]
+> **Live-reload workflow:** run a watching build in one terminal and the server
+> in another — every rebuild reloads the cart in the browser automatically.
+>
+> ```sh
+> zig build --watch                 # terminal 1: rebuild carts on every change
+> go run tools/vex-web.go zig-out/bin/zcart.wasm  # terminal 2: serve + auto-reload
+> ```
 
 Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
 `mx()`/`my()`/`mbtn()`, just like the native host.
