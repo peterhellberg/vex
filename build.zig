@@ -20,6 +20,16 @@ pub fn build(b: *std.Build) void {
 
     const build_host = b.option(bool, "host", "Build the console host (needs raylib + wasm3)") orelse true;
 
+    // raylib's Linux display backend. Forwarded to the raylib dependency below;
+    // X11 (the default) also covers Wayland via XWayland. Tag names match
+    // raylib's own enum so the value passes straight through.
+    const LinuxDisplayBackend = enum { X11, Wayland, Both, None };
+    const linux_display_backend = b.option(
+        LinuxDisplayBackend,
+        "linux_display_backend",
+        "raylib Linux display backend: X11 (default), Wayland, Both, None",
+    ) orelse .X11;
+
     // The cart SDK, exposed as a public module so external carts can
     // `@import("vex")`. Cheap to expose -- it pulls in no other dependencies.
     const vex_mod = b.addModule("vex", .{ .root_source_file = b.path("vex.zig") });
@@ -83,6 +93,7 @@ pub fn build(b: *std.Build) void {
         if (b.lazyDependency("raylib", .{
             .target = target,
             .optimize = optimize,
+            .linux_display_backend = linux_display_backend,
         })) |raylib_dep| {
             if (b.lazyDependency("wasm3", .{})) |wasm3| {
                 const raylib = raylib_dep.artifact("raylib");

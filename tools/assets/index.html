@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>vex</title>
+
+<style>
+html, body {
+    margin: 0;
+    height: 100%;
+}
+
+body {
+    background: black;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+canvas {
+    /* Largest 16:9 box that fits the viewport, centred by the flex body. */
+    width: min(100vw, calc(100vh * 16 / 9));
+    aspect-ratio: 16 / 9;
+    image-rendering: pixelated;
+}
+</style>
+</head>
+<body>
+
+<canvas id="screen"></canvas>
+
+<script type="module">
+  import { start } from "./vex.js";
+
+  window.addEventListener("load", () => {
+    start("cart.wasm");
+  });
+</script>
+</body>
+</html>

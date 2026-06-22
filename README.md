@@ -18,12 +18,24 @@ _(overridable at runtime)_, scaled up to the window with nearest-neighbour filte
 - **Graphics/input:** [raylib](https://www.raylib.com/).
 
 Both dependencies are pulled in via [`build.zig.zon`](build.zig.zon) and built
-from source, so the only requirement is `zig` — no system packages. They are
-lazy: only the host needs them, so a cart-only build fetches neither.
+from source. On macOS and Windows the only requirement is `zig`. On Linux the
+host links the system X11/OpenGL libraries, so a handful of `-dev` packages are
+needed too _(see [Linux prerequisites](#linux-prerequisites))_. The deps are
+lazy: only the host needs them, so a cart-only build (`-Dhost=false`) fetches
+neither and needs no system packages on any platform.
 
 ## Build & run
 
-Requires only `zig` (0.17-dev). Dependencies are fetched on first build.
+Needs the pinned `zig` (`0.17.0-dev.305+bdfbf432d`, see
+[`build.zig.zon`](build.zig.zon)). Dependencies are fetched on first build.
+
+> [!Important]
+> Use the pinned dev build, not `master`. `std.Build`'s API churns between
+> 0.17 nightlies, and a newer/older `zig` will fail to compile this project's
+> *and* raylib's `build.zig` (e.g. `no field named 'args' in struct 'Build'`).
+> Download the exact build from a
+> [community mirror](https://ziglang.org/download/community-mirrors.txt), e.g.
+> `https://pkg.hexops.org/zig/zig-<arch>-linux-0.17.0-dev.305+bdfbf432d.tar.xz`.
 
 ```sh
 zig build               # build ./vex + ./vex-init + cart.wasm + zcart.wasm
@@ -37,6 +49,34 @@ A `Makefile` wraps these as `make`, `make run`, `make runz`,
 and `make clean`. `make install` copies the `vex` and `vex-init` 
 binaries to `~/.local/bin`
 _(override with `make install PREFIX=/usr/local`)_.
+
+### Linux prerequisites
+
+The host links raylib's default X11 backend, so the matching system libraries
+must be present. On Debian/Ubuntu _(22.04 and newer)_:
+
+```sh
+sudo apt install \
+    libgl1-mesa-dev libx11-dev libxrandr-dev \
+    libxinerama-dev libxi-dev libxcursor-dev pkg-config
+```
+
+Equivalents: Fedora `mesa-libGL-devel libX11-devel libXrandr-devel
+libXinerama-devel libXi-devel libXcursor-devel`; Arch `mesa libx11 libxrandr
+libxinerama libxi libxcursor`. Without them the build stops at
+`unable to find dynamic system library 'GL'`.
+
+The resulting `vex` is statically linked against raylib and wasm3; only the
+system X11/GL libraries (present on any desktop) are needed at runtime. To
+target Wayland directly instead of X11, pass
+`-Dlinux_display_backend=Wayland` _(also needs `libwayland-dev`,
+`libxkbcommon-dev`, and `wayland-protocols`; these pull in `wayland-scanner`)_.
+
+> [!Note]
+> On Linux the link step prints `warning(link): unexpected LLD stderr` and a
+> few `archive member '…/libGL.so' is neither ET_REL nor LLVM bitcode`
+> warnings. These are harmless — raylib's static archive references the system
+> `.so`s by path — and `zig build` still exits `0` with a working `vex` binary.
 
 `vex` is invoked as `vex [-s scale] <cart.wasm>`. 
 
