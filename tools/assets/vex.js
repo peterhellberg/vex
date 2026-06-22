@@ -771,6 +771,12 @@ async function instantiateCart(bytes)
 
     updateMemoryViews();
 
+    // Start each cart from a clean palette and framebuffer *before* boot(), so
+    // any pal() overrides boot() makes survive into the main loop (matches the
+    // native host order: reset_palette() then boot()).
+    palreset();
+    clear();
+
     if (instance.exports.boot)
         instance.exports.boot();
 }
@@ -813,9 +819,8 @@ function run()
     if (rafId !== null)
         cancelAnimationFrame(rafId);
 
-    palreset();
-    clear();
-
+    // palette + framebuffer were already reset before boot() in
+    // instantiateCart(); resetting here would clobber boot()'s pal() overrides.
     rafId = requestAnimationFrame(frame);
 }
 
