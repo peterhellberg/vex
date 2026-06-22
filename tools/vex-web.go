@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 //go:embed assets/index.html
@@ -65,6 +66,7 @@ func main() {
 
 	mux.HandleFunc("/vex.js", serveBytes(vexJS, "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/cart.wasm", serveCart(cart))
+	mux.HandleFunc("/reload", serveReload(cart))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -132,6 +134,50 @@ func serveBytes(b []byte, contentType string) http.HandlerFunc {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(b)
+	}
+}
+
+// serveReload returns a Server-Sent Events handler that pushes a "reload"
+// event whenever the cart file's modification time changes. The page listens
+// on it so a rebuilt cart (e.g. from `zig build --watch`) live-reloads in the
+// browser without a manual refresh.
+func serveReload(path string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Connection", "keep-alive")
+
+		var last int64
+		if fi, err := os.Stat(path); err == nil {
+			last = fi.ModTime().UnixNano()
+		}
+
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				fi, err := os.Stat(path)
+				if err != nil {
+					continue
+				}
+
+				if m := fi.ModTime().UnixNano(); m != last {
+					last = m
+					fmt.Fprint(w, "data: reload\n\n")
+					flusher.Flush()
+				}
+			}
+		}
 	}
 }
 

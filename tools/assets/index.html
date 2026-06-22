@@ -33,8 +33,13 @@ canvas {
 <script type="module">
   import { start } from "./vex.js";
 
-  window.addEventListener("load", () => {
-    start("cart.wasm");
+  window.addEventListener("load", async () => {
+    await start("cart.wasm");
+
+    // Dev live-reload: the server pushes an SSE event when the cart file
+    // changes (e.g. after `zig build --watch` rebuilds it); reload it without
+    // a manual refresh.
+    new EventSource("reload").onmessage = () => start("cart.wasm");
   });
 </script>
 </body>
