@@ -18,8 +18,10 @@ package main
 
 import (
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -44,26 +46,41 @@ type Input struct {
 }
 
 func main() {
+	if err := run(os.Args, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// run parses args, wires up the server and serves until it errors. It takes its
+// arguments and output explicitly so it can be exercised without touching
+// process globals.
+func run(args []string, stderr io.Writer) error {
 	var in Input
 
-	flag.StringVar(&in.addr, "addr", ":8383", "address to listen on")
-	flag.BoolVar(&in.noOpen, "no-open", false, "don't open the browser on start")
-	flag.DurationVar(&in.poll, "poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
+	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fs.SetOutput(stderr)
 
-	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(),
+	fs.StringVar(&in.addr, "addr", ":8383", "address to listen on")
+	fs.BoolVar(&in.noOpen, "no-open", false, "don't open the browser on start")
+	fs.DurationVar(&in.poll, "poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
+
+	fs.Usage = func() {
+		fmt.Fprintf(stderr,
 			"usage: %s [-addr host:port] [--no-open] <cart.wasm>\n",
-			filepath.Base(os.Args[0]))
-		flag.PrintDefaults()
+			filepath.Base(args[0]))
+		fs.PrintDefaults()
 	}
 
-	flag.Parse()
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
 
-	cart := flag.Arg(0)
+	cart := fs.Arg(0)
 
 	if cart == "" {
-		flag.Usage()
-		os.Exit(2)
+		fs.Usage()
+		return errors.New("no cart specified")
 	}
 
 	// Warn early if the cart is missing, but keep serving: it may be (re)built
@@ -91,7 +108,7 @@ func main() {
 	// ahead of the server and hits a connection refused.
 	ln, err := net.Listen("tcp", in.addr)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	url := serverURL(in.addr)
@@ -104,9 +121,7 @@ func main() {
 		}
 	}
 
-	if err := http.Serve(ln, mux); err != nil {
-		log.Fatal(err)
-	}
+	return http.Serve(ln, mux)
 }
 
 // serverURL builds the http URL to visit from a listen address, substituting a
