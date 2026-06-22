@@ -36,10 +36,19 @@ var indexHTML []byte
 //go:embed assets/vex.js
 var vexJS []byte
 
+// Input holds the parsed command-line flags.
+type Input struct {
+	addr   string
+	noOpen bool
+	poll   time.Duration
+}
+
 func main() {
-	addr := flag.String("addr", ":8383", "address to listen on")
-	noOpen := flag.Bool("no-open", false, "don't open the browser on start")
-	poll := flag.Duration("poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
+	var in Input
+
+	flag.StringVar(&in.addr, "addr", ":8383", "address to listen on")
+	flag.BoolVar(&in.noOpen, "no-open", false, "don't open the browser on start")
+	flag.DurationVar(&in.poll, "poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(),
@@ -67,7 +76,7 @@ func main() {
 
 	mux.HandleFunc("/vex.js", serveBytes(vexJS, "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/cart.wasm", serveCart(cart))
-	mux.HandleFunc("/reload", serveReload(cart, *poll))
+	mux.HandleFunc("/reload", serveReload(cart, in.poll))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -80,16 +89,16 @@ func main() {
 
 	// Bind the listener before opening the browser so the page never races
 	// ahead of the server and hits a connection refused.
-	ln, err := net.Listen("tcp", *addr)
+	ln, err := net.Listen("tcp", in.addr)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	url := serverURL(*addr)
+	url := serverURL(in.addr)
 
 	log.Printf("vex-web: serving cart %q on %s", cart, url)
 
-	if !*noOpen {
+	if !in.noOpen {
 		if err := openBrowser(url); err != nil {
 			log.Printf("could not open browser: %v (visit %s)", err, url)
 		}
