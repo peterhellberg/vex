@@ -19,7 +19,6 @@
 #define VEX_W      320   // logical screen width  (keep in sync with vex.h)
 #define VEX_H      180   // logical screen height (keep in sync with vex.h)
 #define VEX_SCALE    3   // default window pixels per logical pixel (override with -s)
-#define VEX_FONT     8   // text size in logical pixels
 
 // Default SWEETIE-16 palette: 16 colors, indexed 0..15. Carts can override
 // entries at runtime via pal()/palreset(); `palette` holds the live colors.
@@ -31,6 +30,127 @@ static const Color DEFAULT_PALETTE[16] = {
 };
 static Color palette[16];
 #define PAL(c) (palette[(unsigned)(c) & 15])
+
+// 8x8 bitmap font, shared byte-for-byte with the web host (tools/assets/vex.js)
+// so text() looks identical in both. Glyphs cover ASCII 32..127; FONT8[c - 32]
+// packs one glyph as a 64-bit value where the most-significant byte is the top
+// row and the most-significant bit of each byte is the left pixel.
+#define VEX_FONT_FIRST 32
+static const uint64_t FONT8[96] = {
+    0x0000000000000000ULL, // 32  space
+    0x1010101010001000ULL, // 33  !
+    0x2828000000000000ULL, // 34  "
+    0x28287C287C282800ULL, // 35  #
+    0x103C5038147C1000ULL, // 36  $
+    0x6094681629063000ULL, // 37  %
+    0x20505028105A2400ULL, // 38  &
+    0x1010000000000000ULL, // 39  '
+    0x1020404040201000ULL, // 40  (
+    0x1008040404081000ULL, // 41  )
+    0x0008143C14080000ULL, // 42  *
+    0x0010107C10100000ULL, // 43  +
+    0x0000000000101020ULL, // 44  ,
+    0x0000007C00000000ULL, // 45  -
+    0x0000000000100000ULL, // 46  .
+    0x0204081020408000ULL, // 47  /
+    0x3C66666E76663C00ULL, // 48  0
+    0x1030501010107C00ULL, // 49  1
+    0x3C66061C30607E00ULL, // 50  2
+    0x3C66061C06663C00ULL, // 51  3
+    0x0C1C2C4C7E0C0C00ULL, // 52  4
+    0x7E607C0606663C00ULL, // 53  5
+    0x3C66607C66663C00ULL, // 54  6
+    0x7E060C1830303000ULL, // 55  7
+    0x3C66663C66663C00ULL, // 56  8
+    0x3C66663E06663C00ULL, // 57  9
+    0x0000100000100000ULL, // 58  :
+    0x0000100000101020ULL, // 59  ;
+    0x0C18306030180C00ULL, // 60  <
+    0x00007C007C000000ULL, // 61  =
+    0x6030180C18306000ULL, // 62  >
+    0x3C66060C10001000ULL, // 63  ?
+    0x3C666E6E6E603C00ULL, // 64  @
+    0x183C66667E666600ULL, // 65  A
+    0x7C66667C66667C00ULL, // 66  B
+    0x3C66606060663C00ULL, // 67  C
+    0x786C6666666C7800ULL, // 68  D
+    0x7E60607860607E00ULL, // 69  E
+    0x7E60607860606000ULL, // 70  F
+    0x3C66606E66663C00ULL, // 71  G
+    0x6666667E66666600ULL, // 72  H
+    0x3C18181818183C00ULL, // 73  I
+    0x1E0C0C0C6C6C3800ULL, // 74  J
+    0x666C7878786C6600ULL, // 75  K
+    0x6060606060607E00ULL, // 76  L
+    0x63777F6B63636300ULL, // 77  M
+    0x66767E7E6E666600ULL, // 78  N
+    0x3C66666666663C00ULL, // 79  O
+    0x7C66667C60606000ULL, // 80  P
+    0x3C6666666A6C3A00ULL, // 81  Q
+    0x7C66667C786C6600ULL, // 82  R
+    0x3C66603C06663C00ULL, // 83  S
+    0x7E18181818181800ULL, // 84  T
+    0x6666666666663C00ULL, // 85  U
+    0x66666666663C1800ULL, // 86  V
+    0x6363636B7F776300ULL, // 87  W
+    0x66663C3C66666600ULL, // 88  X
+    0x6666663C18181800ULL, // 89  Y
+    0x7E060C1830607E00ULL, // 90  Z
+    0x3C30303030303C00ULL, // 91  [
+    0x8040201008040200ULL, // 92  backslash
+    0x3C0C0C0C0C0C3C00ULL, // 93  ]
+    0x10386C0000000000ULL, // 94  ^
+    0x000000000000007FULL, // 95  _
+    0x2010080000000000ULL, // 96  `
+    0x00003C063E663E00ULL, // 97  a
+    0x60607C6666667C00ULL, // 98  b
+    0x00003C6660663C00ULL, // 99  c
+    0x06063E6666663E00ULL, // 100 d
+    0x00003C667E603C00ULL, // 101 e
+    0x1C30307830303000ULL, // 102 f
+    0x00003E66663E063CULL, // 103 g
+    0x60607C6666666600ULL, // 104 h
+    0x1800181818183C00ULL, // 105 i
+    0x060006060666663CULL, // 106 j
+    0x6060666C786C6600ULL, // 107 k
+    0x1818181818181800ULL, // 108 l
+    0x0000667F7F6B6300ULL, // 109 m
+    0x00007C6666666600ULL, // 110 n
+    0x00003C6666663C00ULL, // 111 o
+    0x00007C66667C6060ULL, // 112 p
+    0x00003E66663E0606ULL, // 113 q
+    0x00006C7660606000ULL, // 114 r
+    0x00003E603C067C00ULL, // 115 s
+    0x30307C3030301C00ULL, // 116 t
+    0x0000666666663E00ULL, // 117 u
+    0x00006666663C1800ULL, // 118 v
+    0x0000636B7F7F3600ULL, // 119 w
+    0x0000663C183C6600ULL, // 120 x
+    0x00006666663E0C38ULL, // 121 y
+    0x00007E0C18307E00ULL, // 122 z
+    0x0E18183018180E00ULL, // 123 {
+    0x1818180018181800ULL, // 124 |
+    0x7018180C18187000ULL, // 125 }
+    0x0000000000000000ULL, // 126 ~
+    0x0000000000000000ULL  // 127 DEL
+};
+
+// Draw a string with the 8x8 font: one framebuffer pixel per set bit, advancing
+// 8 px per glyph (unsupported chars leave an 8 px gap) -- matching vex.js text().
+static void draw_text(const char* s, int x, int y, Color c) {
+    for (; *s; s++, x += 8) {
+        int idx = (unsigned char)*s - VEX_FONT_FIRST;
+        if (idx < 0 || idx >= 96) continue;
+
+        uint64_t glyph = FONT8[idx];
+        for (int row = 0; row < 8; row++) {
+            unsigned bits = (unsigned)(glyph >> ((7 - row) * 8)) & 0xFF;
+            for (int col = 0; col < 8; col++) {
+                if (bits & (1u << (7 - col))) DrawPixel(x + col, y + row, c);
+            }
+        }
+    }
+}
 
 // Current framebuffer->window mapping (logical points), used to map raylib's
 // window-space mouse position back into the cart's logical coordinates.
@@ -171,7 +291,7 @@ m3ApiRawFunction(host_text) {
     m3ApiCheckMem(s, 1);
     char buf[128];
     cart_cstr(runtime, _mem, s, buf, sizeof(buf));
-    DrawText(buf, x, y, VEX_FONT, PAL(color));
+    draw_text(buf, x, y, PAL(color));
     m3ApiSuccess();
 }
 
