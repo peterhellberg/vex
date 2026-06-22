@@ -39,6 +39,7 @@ var vexJS []byte
 func main() {
 	addr := flag.String("addr", ":8383", "address to listen on")
 	noOpen := flag.Bool("no-open", false, "don't open the browser on start")
+	poll := flag.Duration("poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(),
@@ -66,7 +67,7 @@ func main() {
 
 	mux.HandleFunc("/vex.js", serveBytes(vexJS, "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/cart.wasm", serveCart(cart))
-	mux.HandleFunc("/reload", serveReload(cart))
+	mux.HandleFunc("/reload", serveReload(cart, *poll))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -140,8 +141,9 @@ func serveBytes(b []byte, contentType string) http.HandlerFunc {
 // serveReload returns a Server-Sent Events handler that pushes a "reload"
 // event whenever the cart file's modification time changes. The page listens
 // on it so a rebuilt cart (e.g. from `zig build --watch`) live-reloads in the
-// browser without a manual refresh.
-func serveReload(path string) http.HandlerFunc {
+// browser without a manual refresh. interval controls how often the cart is
+// stat()ed for changes.
+func serveReload(path string, interval time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -158,7 +160,7 @@ func serveReload(path string) http.HandlerFunc {
 			last = fi.ModTime().UnixNano()
 		}
 
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
