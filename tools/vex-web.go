@@ -29,6 +29,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -106,12 +108,12 @@ func run(args []string, stderr io.Writer) error {
 
 	// Bind the listener before opening the browser so the page never races
 	// ahead of the server and hits a connection refused.
-	ln, err := net.Listen("tcp", in.addr)
+	ln, err := listen(in.addr, 5)
 	if err != nil {
 		return err
 	}
 
-	url := serverURL(in.addr)
+	url := serverURL(ln.Addr().String())
 
 	log.Printf("vex-web: serving cart %q on %s", cart, url)
 
@@ -122,6 +124,39 @@ func run(args []string, stderr io.Writer) error {
 	}
 
 	return http.Serve(ln, mux)
+}
+
+// listen binds a TCP listener to addr, retrying on the next port number (up to
+// tries attempts) whenever the chosen port is already in use.
+func listen(addr string, tries int) (net.Listener, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range tries {
+		a := net.JoinHostPort(host, strconv.Itoa(n+i))
+
+		ln, err := net.Listen("tcp", a)
+		if err == nil {
+			return ln, nil
+		}
+
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, err
+		}
+
+		if i < tries-1 {
+			log.Printf("vex-web: port %d in use, trying %d", n+i, n+i+1)
+		}
+	}
+
+	return nil, fmt.Errorf("no free port after %d attempts starting at %s", tries, addr)
 }
 
 // serverURL builds the http URL to visit from a listen address, substituting a
