@@ -107,6 +107,37 @@ Arrow keys, `Z`, and `X` are passed to the cart via `btn()`.
 > For a fast edit loop, leave `vex` running, rebuild the cart
 > (`zig build`), and press `Super`+`R` to reload it.
 
+## Web version
+
+The same carts run unchanged in the browser. `vex-web`
+_([`tools/vex-web.go`](tools/vex-web.go))_ is a small self-contained Go server
+that serves a `<canvas>`-based host — [`vex.js`](tools/assets/vex.js)
+reimplements the console API _(framebuffer, SWEETIE-16 palette, drawing, input,
+and the shared **8×8 bitmap font**)_ in JavaScript and draws into the same fixed
+**320×180** framebuffer, scaled up to fill the window while keeping the aspect
+ratio. `index.html` and `vex.js` are embedded into the binary _(via
+`//go:embed`)_, so a built `vex-web` needs nothing beside it but a cart.
+
+```sh
+make web                              # build, then serve cart.wasm on :8383
+make web CART=zig-out/bin/zcart.wasm  # serve a different cart
+go run tools/vex-web.go mycart.wasm   # or run the server directly
+```
+
+It serves the page on <http://localhost:8383/> and opens your browser there
+_(`--no-open` skips that; `-addr host:port` changes the address)_. The cart is
+served on `/cart.wasm`, **read from disk on every request** — so rebuilding the
+cart and refreshing the page loads the new bytes, no restart needed.
+
+Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
+`mx()`/`my()`/`mbtn()`, just like the native host.
+
+> [!Tip]
+> **Drag and drop** any `.wasm` onto the page to load it in place of the
+> default cart — handy for trying a build without restarting the server.
+
+`make install` puts `vex-web` on your `PATH` alongside `vex` and `vex-init`.
+
 ## Starting a new cart
 
 `vex-init` scaffolds a standalone Zig cart project that depends on the `vex`
