@@ -438,10 +438,27 @@ static bool load_cart(IM3Environment env, const char* path, Cart* out) {
     if (err) { fprintf(stderr, "vex: load: %s\n", err); m3_FreeModule(mod); m3_FreeRuntime(rt); free(wasm); return false; }
     link_host(mod);
 
+    // Resolving update() compiles it, which is where wasm3 first notices a
+    // missing import -- a cart calling a host function this vex doesn't link
+    // (e.g. an API that was removed/renamed, or is newer than this build).
+    // Distinguish that from a cart that genuinely lacks an update() export, so
+    // the message points at the real cause instead of blaming the export.
     IM3Function f_boot = NULL, f_update = NULL;
     m3_FindFunction(&f_boot, rt, "boot");                 // optional
     err = m3_FindFunction(&f_update, rt, "update");
-    if (err || !f_update) {
+    if (err == m3Err_functionImportMissing) {
+        M3ErrorInfo info;
+        m3_GetErrorInfo(rt, &info);
+        fprintf(stderr, "vex: cart needs a host function this vex doesn't provide%s%s\n",
+                (info.message && info.message[0]) ? ": " : "",
+                (info.message && info.message[0]) ? info.message : "");
+        m3_FreeRuntime(rt); free(wasm); return false;
+    }
+    if (err && err != m3Err_functionLookupFailed) {
+        fprintf(stderr, "vex: cannot load cart: %s\n", err);
+        m3_FreeRuntime(rt); free(wasm); return false;
+    }
+    if (!f_update) {
         fprintf(stderr, "vex: cart has no update() export\n");
         m3_FreeRuntime(rt); free(wasm); return false;
     }
