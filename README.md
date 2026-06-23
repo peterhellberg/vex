@@ -1,18 +1,23 @@
 # vex
 
-A minimal WASM-based fantasy console in a single [`main.c`](main.c).
+A minimal WASM-based fantasy console in a single [`main.c`](main.c)
 
-The console is the **host**: it opens a window, loads a `.wasm` *cart*, links a
-tiny drawing/input API the cart imports, and calls the cart's exported
-`update()` once per frame _(60 fps)_. Carts draw into a fixed **320×180**,
-**16-color** framebuffer.
+The console is the **host**:
+
+ - it opens a window, 
+ - loads a `.wasm` *cart*
+ - links a tiny drawing/input API the cart imports 
+ - calls the cart's exported `update()` once per frame _(60 fps)_ 
+
+_Carts draw into a fixed **320×180**, **16-color** framebuffer._
 
 For the specs and internals, see [How vex works](#how-vex-works).
 
 ## Build & run
 
-Needs the pinned `zig` (`0.17.0-dev.305+bdfbf432d`, see
-[`build.zig.zon`](build.zig.zon)). Dependencies are fetched on first build.
+Needs the pinned `zig` (`0.17.0-dev.305+bdfbf432d`, see [`build.zig.zon`](build.zig.zon)).
+
+Dependencies are fetched on first build.
 
 > [!Important]
 > Use the pinned dev build, not `master`. `std.Build`'s API churns between
@@ -20,7 +25,7 @@ Needs the pinned `zig` (`0.17.0-dev.305+bdfbf432d`, see
 > *and* raylib's `build.zig` (e.g. `no field named 'args' in struct 'Build'`).
 > Download the exact build from a
 > [community mirror](https://ziglang.org/download/community-mirrors.txt), e.g.
-> `https://pkg.hexops.org/zig/zig-<arch>-linux-0.17.0-dev.305+bdfbf432d.tar.xz`.
+> `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.305+bdfbf432d.tar.xz`.
 
 ```sh
 zig build --prefix .    # build vex + vex-init + cart.wasm + zcart.wasm into ./bin
@@ -36,15 +41,19 @@ they need no prefix.
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`,
 passing `--prefix .` for you so all binaries — including the Go `vex-web` — land
-in `./bin`. `make install` copies `vex`, `vex-init`, and `vex-web` from there to
+in `./bin`. 
+
+`make install` copies `vex`, `vex-init`, and `vex-web` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
 
 `vex` is invoked as `vex [-s scale] [-w] <cart.wasm>`. 
 
 The window is the 320×180 framebuffer times `scale` 
-_(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it. With `-w`/`--watch`,
-vex polls the cart file and reloads it automatically whenever it changes — the
-native counterpart to vex-web's live-reload (see [Web version](#web-version)).
+_(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it. 
+
+With `-w`/`--watch`, vex polls the cart file and reloads it 
+automatically whenever it changes — the native counterpart 
+to vex-web's live-reload (see [Web version](#web-version)).
 
 There are two example carts: 
 
@@ -55,8 +64,10 @@ Both compile to `wasm32` and use the same console API.
 
 ### Linux prerequisites
 
-The host links raylib's default X11 backend, so the matching system libraries
-must be present. On Debian/Ubuntu _(22.04 and newer)_:
+The host links raylib's default X11 backend, so 
+the matching system libraries must be present. 
+
+On Debian/Ubuntu _(22.04 and newer)_:
 
 ```sh
 sudo apt install \
@@ -88,37 +99,36 @@ system X11/GL libraries (present on any desktop) are needed at runtime.
 
 Arrow keys, `Z`, and `X` are passed to the cart via `btn()`.
 
-> [!Tip]
-> For a fast edit loop, run `vex -w <cart.wasm>` and rebuild the cart in
-> another terminal (`zig build --watch`) — vex reloads it on every rebuild.
-> Without `-w`, press `Super`+`R` to reload manually.
-
 ## Web version
 
-The same carts run unchanged in the browser. `vex-web`
-_([`cmd/vex-web/main.go`](cmd/vex-web/main.go))_ is a small self-contained Go
-server that serves a `<canvas>`-based host — [`vex.js`](cmd/vex-web/assets/vex.js)
+The same carts run unchanged in the browser. 
+
+`vex-web` _([`cmd/vex-web/main.go`](cmd/vex-web/main.go))_ is a small self-contained 
+Go server that serves a `<canvas>`-based host — [`vex.js`](cmd/vex-web/assets/vex.js) 
 reimplements the console API _(framebuffer, SWEETIE-16 palette, drawing, input,
 and the shared **8×8 bitmap font**)_ in JavaScript and draws into the same fixed
 **320×180** framebuffer, scaled up to fill the window while keeping the aspect
-ratio. `index.html` and `vex.js` are embedded into the binary _(via
-`//go:embed`)_, so a built `vex-web` needs nothing beside it but a cart.
+ratio. 
+
+`index.html` and `vex.js` are embedded into the binary _(via
+`//go:embed`)_, so `vex-web` needs nothing beside it but a vex cart.
 
 ```sh
 # straight from GitHub, no checkout needed:
 go run github.com/peterhellberg/vex/cmd/vex-web@latest mycart.wasm
 
-# or from a checkout:
+# or from a checkout of this repo:
 make web                          # build, then serve cart.wasm on :8383
 make web CART=bin/zcart.wasm      # serve a different cart
 go run ./cmd/vex-web mycart.wasm  # run the server directly
 ```
 
 It serves the page on <http://localhost:8383/> and opens your browser there
-_(`-no-open` skips that; `-addr host:port` changes the address)_. The cart is
-served on `/cart.wasm`, **read from disk on every request**, and the page
-watches it over Server-Sent Events _(`/reload`)_ — so rebuilding the cart
-**live-reloads** it in the browser, no refresh or restart needed.
+_(`-no-open` skips that; `-addr host:port` changes the address)_. 
+
+The cart is served on `/cart.wasm`, **read from disk on every request**, 
+and the page watches it over Server-Sent Events _(`/reload`)_ — so rebuilding 
+the cart **live-reloads** it in the browser, no refresh or restart needed.
 
 > [!Tip]
 > **Live-reload workflow:** run a watching build in one terminal and the server
@@ -158,19 +168,18 @@ zig build            # builds zig-out/bin/mygame.wasm
 vex zig-out/bin/mygame.wasm
 ```
 
-`vex-init` fetches the vex dependency for you (`zig fetch --save`); if that
-step can't run it prints the command to finish manually. 
+`vex-init` fetches the vex dependency for you (`zig fetch --save`); 
+if that step can't run it prints the command to finish manually. 
 
 The generated `build.zig` depends on `vex` with `.{ .host = false }`, 
 so only the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
 
 ### Writing a cart by hand
 
-A cart is any `wasm32` module that exports `update()` _(and optionally
-`boot()`)_ and imports the API from `env`. 
+A cart is any `wasm32` module that exports `update()` 
+_(and optionally `boot()`)_ and imports the API from `env`.
 
-Both SDKs are a single file you drop next to your cart — grab the one for your
-language:
+Both SDKs are a single file you drop next to your cart:
 
 ```sh
 curl -LO https://raw.githubusercontent.com/peterhellberg/vex/main/vex.h    # C
@@ -239,10 +248,10 @@ vex mycart.wasm
 `color` is a palette index `0..15`
 
 Buttons: 
- - `0` left 
- - `1` right 
+ - `0` left
+ - `1` right
  - `2` up
- - `3` down 
+ - `3` down
  - `4` A (`Z` key)
  - `5` B (`X` key)
 
@@ -288,5 +297,6 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
 Both dependencies are pulled in via [`build.zig.zon`](build.zig.zon) and built
 from source. They're lazy: only the host needs them, so a cart-only build
 (`-Dhost=false`) fetches neither and needs no system packages on any platform.
+
 On macOS and Windows the only requirement is `zig`; on Linux the host also links
 the system X11/OpenGL libraries _(see [Linux prerequisites](#linux-prerequisites))_.
