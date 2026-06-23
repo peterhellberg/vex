@@ -85,8 +85,8 @@ _(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it.
 
 There are two example carts: 
 
-- [`cart/main.c`](cart/main.c) (C)
-- [`zcart/main.zig`](zcart/main.zig) (Zig)
+- [`examples/cart/main.c`](examples/cart/main.c) (C)
+- [`examples/zcart/main.zig`](examples/zcart/main.zig) (Zig)
 
 Both compile to `wasm32` and use the same console API.
 

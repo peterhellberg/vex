@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSmall,
         }),
     });
-    cart_c.root_module.addCSourceFile(.{ .file = b.path("cart/main.c") });
+    cart_c.root_module.addCSourceFile(.{ .file = b.path("examples/cart/main.c") });
     cart_c.root_module.addIncludePath(b.path(".")); // for vex.h
     cart_c.entry = .disabled;
     b.installArtifact(cart_c);
@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
     const cart_zig = b.addExecutable(.{
         .name = "zcart",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("zcart/main.zig"),
+            .root_source_file = b.path("examples/zcart/main.zig"),
             .target = wasm_target,
             .optimize = .ReleaseSmall,
             .imports = &.{.{ .name = "vex", .module = vex_mod }},
