@@ -697,7 +697,7 @@
     }
 
     function onSearchKeyDown(ev) {
-      switch (ev.key) {
+      switch (ev.code) {
         case "Enter":
           if (ev.shiftKey || ev.ctrlKey || ev.altKey) return;
 
@@ -763,7 +763,7 @@
     }
 
     function onWindowKeyDown(ev) {
-        switch (ev.key) {
+        switch (ev.code) {
             case "Escape":
                 if (ev.shiftKey || ev.ctrlKey || ev.altKey) return;
                 if (!domHelpModal.classList.contains("hidden")) {
@@ -772,22 +772,22 @@
                     ev.stopPropagation();
                 }
                 break;
-            case "s":
-                if (ev.ctrlKey || ev.altKey) return;
+            case "KeyS":
+                if (ev.shiftKey || ev.ctrlKey || ev.altKey) return;
                 domSearch.focus();
                 domSearch.select();
                 ev.preventDefault();
                 ev.stopPropagation();
                 startAsyncSearch();
                 break;
-            case "u":
-                if (ev.ctrlKey || ev.altKey) return;
+            case "KeyU":
+                if (ev.shiftKey || ev.ctrlKey || ev.altKey) return;
                 ev.preventDefault();
                 ev.stopPropagation();
                 navigateToSource();
                 break;
-            case "?":
-                if (ev.ctrlKey || ev.altKey) return;
+            case "Slash":
+                if (!ev.shiftKey || ev.ctrlKey || ev.altKey) return;
                 ev.preventDefault();
                 ev.stopPropagation();
                 showHelpModal();
