@@ -20,7 +20,8 @@
 // it: index.html, vex.js and the cart wasm are written to bundle/<name>/ (where
 // <name> is the cart's base name without extension) and the directory is also
 // archived to bundle/<name>.zip. The bundle runs the cart without any server,
-// so it can be hosted as plain static files.
+// so it can be hosted as plain static files. The paths it wrote are reported on
+// stdout; everything else (warnings, server logs) goes to stderr.
 package main
 
 import (
@@ -30,7 +31,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -58,7 +58,7 @@ type Input struct {
 }
 
 func main() {
-	if err := run(os.Args, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+	if err := run(os.Args, os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -66,8 +66,9 @@ func main() {
 
 // run parses args, wires up the server and serves until it errors. It takes its
 // arguments and output explicitly so it can be exercised without touching
-// process globals.
-func run(args []string, stderr io.Writer) error {
+// process globals. Diagnostics go to stderr; the bundle command writes its
+// result to stdout.
+func run(args []string, stdout, stderr io.Writer) error {
 	var in Input
 
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
@@ -97,19 +98,19 @@ func run(args []string, stderr io.Writer) error {
 	}
 
 	if in.bundle {
-		return writeBundle(cart)
+		return writeBundle(cart, stdout)
 	}
 
 	// Warn early if the cart is missing, but keep serving: it may be (re)built
 	// after the server starts.
 	if _, err := os.Stat(cart); err != nil {
-		log.Printf("warning: %v", err)
+		fmt.Fprintf(stderr, "warning: %v\n", err)
 	}
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/vex.js", serveBytes(vexJS, "text/javascript; charset=utf-8"))
-	mux.HandleFunc("/cart.wasm", serveCart(cart))
+	mux.HandleFunc("/cart.wasm", serveCart(cart, stderr))
 	mux.HandleFunc("/reload", serveReload(cart, in.poll))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -123,18 +124,18 @@ func run(args []string, stderr io.Writer) error {
 
 	// Bind the listener before opening the browser so the page never races
 	// ahead of the server and hits a connection refused.
-	ln, err := listen(in.addr, 5)
+	ln, err := listen(in.addr, 5, stderr)
 	if err != nil {
 		return err
 	}
 
 	url := serverURL(ln.Addr().String())
 
-	log.Printf("vex-web: serving cart %q on %s", cart, url)
+	fmt.Fprintf(stderr, "serving cart %q on %s\n", cart, url)
 
 	if !in.noOpen {
 		if err := openBrowser(url); err != nil {
-			log.Printf("could not open browser: %v (visit %s)", err, url)
+			fmt.Fprintf(stderr, "could not open browser: %v (visit %s)\n", err, url)
 		}
 	}
 
@@ -143,7 +144,7 @@ func run(args []string, stderr io.Writer) error {
 
 // listen binds a TCP listener to addr, retrying on the next port number (up to
 // tries attempts) whenever the chosen port is already in use.
-func listen(addr string, tries int) (net.Listener, error) {
+func listen(addr string, tries int, stderr io.Writer) (net.Listener, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -167,7 +168,7 @@ func listen(addr string, tries int) (net.Listener, error) {
 		}
 
 		if i < tries-1 {
-			log.Printf("vex-web: port %d in use, trying %d", n+i, n+i+1)
+			fmt.Fprintf(stderr, "port %d in use, trying %d\n", n+i, n+i+1)
 		}
 	}
 
@@ -259,11 +260,11 @@ func serveReload(path string, interval time.Duration) http.HandlerFunc {
 
 // serveCart returns a handler that reads the cart from disk on each request, so
 // rebuilding it and refreshing the page is enough to load the new bytes.
-func serveCart(path string) http.HandlerFunc {
+func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("read %s: %v", path, err)
+			fmt.Fprintf(stderr, "read %s: %v\n", path, err)
 			http.Error(w, "cart not found", http.StatusNotFound)
 			return
 		}
@@ -285,7 +286,7 @@ type bundleFile struct {
 // server: index.html, vex.js and the cart wasm are written to bundle/<name>/
 // (where <name> is the cart's base name without extension) and the directory is
 // also archived to bundle/<name>.zip.
-func writeBundle(cart string) error {
+func writeBundle(cart string, stdout io.Writer) error {
 	wasm, err := os.ReadFile(cart)
 	if err != nil {
 		return fmt.Errorf("read cart: %w", err)
@@ -316,7 +317,7 @@ func writeBundle(cart string) error {
 		return err
 	}
 
-	log.Printf("vex-web: wrote bundle %s and %s", dir, zipPath)
+	fmt.Fprintf(stdout, "wrote bundle %s and %s\n", dir, zipPath)
 
 	return nil
 }
