@@ -1,28 +1,13 @@
 # vex
 
-A minimal WASM-based fantasy console in a single `main.c`
+A minimal WASM-based fantasy console in a single [`main.c`](main.c).
 
-The console is the **host**: it opens a [raylib](https://www.raylib.com/)
-window, loads a `.wasm` *cart*, links a tiny drawing/input API the cart
-imports, and calls the cart's exported `update()` once per frame _(60 fps)_.
+The console is the **host**: it opens a window, loads a `.wasm` *cart*, links a
+tiny drawing/input API the cart imports, and calls the cart's exported
+`update()` once per frame _(60 fps)_. Carts draw into a fixed **320×180**,
+**16-color** framebuffer.
 
-Carts draw into a fixed **320×180** framebuffer with a **16-color** 
-[SWEETIE-16](https://lospec.com/palette-list/sweetie-16) palette 
-_(overridable at runtime)_, scaled up to the window with nearest-neighbour filtering.
-
-- **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
-  embeddable WASM interpreter _(pure C, MIT)_. 
-  Only its core files are compiled.
-- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the host, the
-  `vex-init` scaffolder, and both example carts.
-- **Graphics/input:** [raylib](https://www.raylib.com/).
-
-Both dependencies are pulled in via [`build.zig.zon`](build.zig.zon) and built
-from source. On macOS and Windows the only requirement is `zig`. On Linux the
-host links the system X11/OpenGL libraries, so a handful of `-dev` packages are
-needed too _(see [Linux prerequisites](#linux-prerequisites))_. The deps are
-lazy: only the host needs them, so a cart-only build (`-Dhost=false`) fetches
-neither and needs no system packages on any platform.
+For the specs and internals, see [How vex works](#how-vex-works).
 
 ## Build & run
 
@@ -257,3 +242,33 @@ Buttons:
  - `3` down 
  - `4` A (`Z` key)
  - `5` B (`X` key)
+
+## How vex works
+
+The host — a single [`main.c`](main.c) — opens a [raylib](https://www.raylib.com/)
+window and runs the cart on the [wasm3](https://github.com/wasm3/wasm3)
+interpreter. It links a small `env` API into the cart's imports, calls the
+cart's exported `boot()` once at start and `update()` once per frame, then blits
+the 320×180 framebuffer to the window with nearest-neighbour scaling.
+
+### Specs
+
+- **Display** — 320×180 framebuffer, scaled to the window with nearest-neighbour filtering.
+- **Palette** — 16 colors ([SWEETIE-16](https://lospec.com/palette-list/sweetie-16)), overridable at runtime via `pal()`.
+- **Frame rate** — 60 fps; carts export `update()` (per frame) and optionally `boot()` (once at start).
+- **Input** — 6 buttons (arrow keys + `Z`/`X`) and the mouse (position + 3 buttons).
+- **Cart** — any `wasm32` module that exports `update()` and imports the API from `env`.
+
+### Components
+
+- **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest embeddable
+  WASM interpreter _(pure C, MIT)_; only its core files are compiled.
+- **Graphics/input:** [raylib](https://www.raylib.com/).
+- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the host, the
+  `vex-init` scaffolder, and both example carts.
+
+Both dependencies are pulled in via [`build.zig.zon`](build.zig.zon) and built
+from source. They're lazy: only the host needs them, so a cart-only build
+(`-Dhost=false`) fetches neither and needs no system packages on any platform.
+On macOS and Windows the only requirement is `zig`; on Linux the host also links
+the system X11/OpenGL libraries _(see [Linux prerequisites](#linux-prerequisites))_.
