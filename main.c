@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "raylib.h"
+#include "rlgl.h"
 #include "wasm3.h"
 
 #define VEX_W      320   // logical screen width  (keep in sync with vex.h)
@@ -568,15 +569,36 @@ int main(int argc, char** argv) {
         }
         if (super && IsKeyPressed(KEY_I)) integer_scale = !integer_scale;
 
-        // Compute this frame's framebuffer->window mapping: fit the VEX_W x
-        // VEX_H screen into the window preserving aspect ratio and centering
-        // (letterboxed). The drawing coordinate space is the render (drawable)
+        // Compute this frame's framebuffer->surface mapping: fit the VEX_W x
+        // VEX_H screen into the visible surface preserving aspect ratio and
+        // centering (letterboxed). Normally the surface is the render (drawable)
         // size divided by the DPI scale -- GetScreenWidth/Height can't be used,
-        // they go stale when toggling fullscreen on macOS. The mapping is also
-        // stored in g_view_* so the mouse can be mapped back to logical coords.
+        // they go stale when toggling fullscreen on macOS.
+        //
+        // On scaled/HiDPI displays raylib's render size can disagree with the
+        // real GL surface in fullscreen: a 4K monitor shown at a 1920x1080
+        // "looks like" mode reports render=3840 while the surface raylib draws
+        // onto is the monitor's logical 1920x1080 -- so scaling against render
+        // puts the picture in a corner. GetMonitorWidth/Height matches the
+        // surface; when (and only when) it disagrees with render, map against
+        // the monitor size and take over the GL viewport below. Where they
+        // agree (a 1:1 display, typical X11, etc.) this is a no-op and the
+        // render-size path is used unchanged. The mapping is stored in
+        // g_view_* so the mouse maps back to logical coords.
+        int mon = GetCurrentMonitor();
+        bool surface_mismatch = IsWindowFullscreen() &&
+            (GetMonitorWidth(mon)  != GetRenderWidth() ||
+             GetMonitorHeight(mon) != GetRenderHeight());
+
         Vector2 dpi = GetWindowScaleDPI();
-        float sw = GetRenderWidth()  / dpi.x;
-        float sh = GetRenderHeight() / dpi.y;
+        float sw, sh;
+        if (surface_mismatch) {
+            sw = (float)GetMonitorWidth(mon);
+            sh = (float)GetMonitorHeight(mon);
+        } else {
+            sw = GetRenderWidth()  / dpi.x;
+            sh = GetRenderHeight() / dpi.y;
+        }
         float scale = (sw / VEX_W < sh / VEX_H) ? sw / VEX_W : sh / VEX_H;
         if (integer_scale) {
             // Floor to a whole multiple so every source pixel maps to the same
@@ -594,13 +616,32 @@ int main(int argc, char** argv) {
         EndTextureMode();
         if (err) die(cart.rt, "update", err);
 
-        // Blit the framebuffer to the window (y-flipped: render textures are
-        // stored bottom-up).
+        // Blit the framebuffer to the screen (src height negative: render
+        // textures are stored bottom-up).
+        Rectangle src = { 0, 0, (float)VEX_W, -(float)VEX_H };
         BeginDrawing();
             ClearBackground(BLACK);
-            Rectangle src = { 0, 0, (float)VEX_W, -(float)VEX_H };
-            Rectangle dst = { ox, oy, dw, dh };
-            DrawTexturePro(screen.texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+            if (surface_mismatch) {
+                // raylib's auto viewport tracks its (wrong) render size, so
+                // drive the viewport directly: set it to the letterboxed
+                // destination in real surface pixels and draw the framebuffer
+                // 1:1 into it. GL's viewport origin is the bottom-left.
+                rlDrawRenderBatchActive();
+                rlViewport((int)ox, (int)(sh - dh - oy), (int)dw, (int)dh);
+                rlMatrixMode(RL_PROJECTION); rlPushMatrix(); rlLoadIdentity();
+                rlOrtho(0, VEX_W, VEX_H, 0, -1.0, 1.0);
+                rlMatrixMode(RL_MODELVIEW); rlLoadIdentity();
+                DrawTexturePro(screen.texture, src,
+                    (Rectangle){ 0, 0, (float)VEX_W, (float)VEX_H },
+                    (Vector2){ 0, 0 }, 0.0f, WHITE);
+                rlDrawRenderBatchActive();
+                rlMatrixMode(RL_PROJECTION); rlPopMatrix();
+                rlMatrixMode(RL_MODELVIEW); rlLoadIdentity();
+                rlViewport(0, 0, (int)sw, (int)sh); // restore for next frame
+            } else {
+                Rectangle dst = { ox, oy, dw, dh };
+                DrawTexturePro(screen.texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+            }
         EndDrawing();
     }
 
