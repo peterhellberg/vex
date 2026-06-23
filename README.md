@@ -143,8 +143,8 @@ watches it over Server-Sent Events _(`/reload`)_ — so rebuilding the cart
 > in another — every rebuild reloads the cart in the browser automatically.
 >
 > ```sh
-> zig build --prefix . --watch          # terminal 1: rebuild carts on every change
-> go run ./cmd/vex-web bin/zcart.wasm    # terminal 2: serve + auto-reload
+> zig build --watch                 # terminal 1: rebuild carts on every change
+> go run ./cmd/vex-web zig-out/bin/zcart.wasm  # terminal 2: serve + auto-reload
 > ```
 
 Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
