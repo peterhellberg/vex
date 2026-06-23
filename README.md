@@ -39,10 +39,12 @@ passing `--prefix .` for you so all binaries — including the Go `vex-web` — 
 in `./bin`. `make install` copies `vex`, `vex-init`, and `vex-web` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
 
-`vex` is invoked as `vex [-s scale] <cart.wasm>`. 
+`vex` is invoked as `vex [-s scale] [-w] <cart.wasm>`. 
 
 The window is the 320×180 framebuffer times `scale` 
-_(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it.
+_(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it. With `-w`/`--watch`,
+vex polls the cart file and reloads it automatically whenever it changes — the
+native counterpart to vex-web's live-reload (see [Web version](#web-version)).
 
 There are two example carts: 
 
@@ -79,7 +81,7 @@ system X11/GL libraries (present on any desktop) are needed at runtime.
 |-----|--------|
 | `Super`+`Enter` | toggle fullscreen |
 | `Super`+`I` | toggle integer scaling _(crisp pixels vs. fill the screen; on by default in fullscreen)_ |
-| `Super`+`R` | reload the cart from disk _(hot reload)_ |
+| `Super`+`R` | reload the cart from disk _(also automatic with `-w`/`--watch`)_ |
 | `Esc` | quit |
 
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. 
@@ -87,8 +89,9 @@ system X11/GL libraries (present on any desktop) are needed at runtime.
 Arrow keys, `Z`, and `X` are passed to the cart via `btn()`.
 
 > [!Tip]
-> For a fast edit loop, leave `vex` running, rebuild the cart
-> (`zig build`), and press `Super`+`R` to reload it.
+> For a fast edit loop, run `vex -w <cart.wasm>` and rebuild the cart in
+> another terminal (`zig build --watch`) — vex reloads it on every rebuild.
+> Without `-w`, press `Super`+`R` to reload manually.
 
 ## Web version
 

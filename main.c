@@ -19,6 +19,7 @@
 #define VEX_W      320   // logical screen width  (keep in sync with vex.h)
 #define VEX_H      180   // logical screen height (keep in sync with vex.h)
 #define VEX_SCALE    3   // default window pixels per logical pixel (override with -s)
+#define VEX_WATCH_FRAMES 30 // -w/--watch: poll the cart's mtime every ~0.5s (at 60fps)
 
 // Default SWEETIE-16 palette: 16 colors, indexed 0..15. Carts can override
 // entries at runtime via pal()/palreset(); `palette` holds the live colors.
@@ -449,19 +450,40 @@ static bool load_cart(IM3Environment env, const char* path, Cart* out) {
     return true;
 }
 
+// Reload the cart from disk into a fresh runtime, swapping it in only if it
+// loads cleanly -- a bad or half-written file leaves the running cart untouched.
+// Resets the palette and re-runs boot(), matching a fresh start. Returns true if
+// the cart was replaced.
+static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
+    Cart fresh;
+    if (!load_cart(env, path, &fresh)) return false;
+    m3_FreeRuntime(cart->rt);
+    free(cart->wasm);
+    *cart = fresh;
+    reset_palette();
+    if (cart->f_boot) {
+        M3Result err = m3_CallV(cart->f_boot);
+        if (err) die(cart->rt, "boot", err);
+    }
+    return true;
+}
+
 int main(int argc, char** argv) {
     int scale = VEX_SCALE;
+    bool watch = false; // -w/--watch: auto-reload the cart when its file changes
     const char* cart_path = NULL;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if ((strcmp(a, "-s") == 0 || strcmp(a, "--scale") == 0) && i + 1 < argc) {
             scale = atoi(argv[++i]);
+        } else if (strcmp(a, "-w") == 0 || strcmp(a, "--watch") == 0) {
+            watch = true;
         } else if (cart_path == NULL) {
             cart_path = a;
         }
     }
     if (!cart_path) {
-        fprintf(stderr, "usage: %s [-s scale] <cart.wasm>\n", argv[0]);
+        fprintf(stderr, "usage: %s [-s scale] [-w] <cart.wasm>\n", argv[0]);
         return 1;
     }
     if (scale < 1) scale = 1;
@@ -490,27 +512,28 @@ int main(int argc, char** argv) {
     bool integer_scale = false; // crisp integer scale vs. fractional fill;
                                 // enabled automatically on entering fullscreen
 
+    long last_mod = GetFileModTime(cart_path); // cart mtime, for -watch reloads
+    int  poll = 0;                             // frames since the last mtime poll
+
     while (!WindowShouldClose()) {
         // Console controls (Super = Cmd on macOS, Super/Windows key on Linux):
         //   Super+Enter  toggle fullscreen
         //   Super+I      toggle integer scaling (crisp pixels vs. fill)
-        //   Super+R      reload the cart from disk (hot reload)
+        //   Super+R      reload the cart from disk (also automatic with -watch)
         // Escape (raylib's default) closes the window.
         bool super = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
-        if (super && IsKeyPressed(KEY_R)) {
-            // Reload from disk into a fresh runtime. Keep the running cart if
-            // the new file fails to parse/load, so a bad save isn't fatal.
-            Cart fresh;
-            if (load_cart(env, cart_path, &fresh)) {
-                m3_FreeRuntime(cart.rt);
-                free(cart.wasm);
-                cart = fresh;
-                reset_palette();    // start the reloaded cart from a clean palette
-                if (cart.f_boot) {
-                    err = m3_CallV(cart.f_boot);
-                    if (err) die(cart.rt, "boot", err);
-                }
-            }
+
+        // Reload on Super+R, and -- with -watch -- automatically when the cart
+        // file's mtime changes (polled every ~0.5s). reload_cart keeps the
+        // running cart if the new file is bad or half-written, so last_mod only
+        // advances on a successful load.
+        bool want_reload = super && IsKeyPressed(KEY_R);
+        if (watch && ++poll >= VEX_WATCH_FRAMES) {
+            poll = 0;
+            if (GetFileModTime(cart_path) != last_mod) want_reload = true;
+        }
+        if (want_reload && reload_cart(env, cart_path, &cart)) {
+            last_mod = GetFileModTime(cart_path);
         }
         if (super && IsKeyPressed(KEY_ENTER)) {
             // True fullscreen (a macOS fullscreen Space) fits the display
