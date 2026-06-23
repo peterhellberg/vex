@@ -184,12 +184,13 @@ const build_zig_tmpl =
     \\    // run/web point vex and vex-web at the *installed* wasm
     \\    // (zig-out/bin/<name>.wasm) -- a stable path, unlike the build cache. Run
     \\    // `zig build --watch` in another terminal to rebuild on every edit; vex
-    \\    // reloads with Super+R and vex-web reloads automatically. Both tools must
-    \\    // be on your PATH (e.g. via `make install` in the vex repo).
+    \\    // (started with --watch) and vex-web both reload it automatically. Both
+    \\    // tools must be on your PATH (e.g. via `make install` in the vex repo).
     \\    const wasm = b.getInstallPath(.bin, cart.out_filename);
     \\
-    \\    // `zig build run` builds + installs the cart and runs it in vex.
-    \\    const run = b.addSystemCommand(&.{{"vex"}});
+    \\    // `zig build run` builds + installs the cart and runs it in vex, with
+    \\    // --watch so a concurrent `zig build --watch` reloads it automatically.
+    \\    const run = b.addSystemCommand(&.{{ "vex", "--watch" }});
     \\    run.addArg(wasm);
     \\    run.step.dependOn(b.getInstallStep());
     \\    if (b.args) |args| run.addArgs(args);
