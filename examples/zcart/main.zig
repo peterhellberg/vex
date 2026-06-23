@@ -24,6 +24,21 @@ const State = struct {
 
 var state: State = .{};
 
+// 8x8 sprite for blit(): one byte per pixel (palette index), 0 = transparent.
+// A little face (yellow 4, dark features 15) blitted onto the player.
+// zig fmt: off
+const FACE = [_]u8{
+    0,  0,  4,  4,  4,  4,  0,  0,
+    0,  4,  4,  4,  4,  4,  4,  0,
+    4,  4,  15, 4,  4,  15, 4,  4,
+    4,  4,  4,  4,  4,  4,  4,  4,
+    4,  15, 4,  4,  4,  4,  15, 4,
+    4,  4,  15, 15, 15, 15, 4,  4,
+    0,  4,  4,  4,  4,  4,  4,  0,
+    0,  0,  4,  4,  4,  4,  0,  0,
+};
+// zig fmt: on
+
 export fn boot() void {
     vex.title("vex - Zig cart");
     state.px = (W - P) / 2;
@@ -74,6 +89,10 @@ inline fn draw(s: *State) void {
 
     vex.rect(s.px, s.py, P, P, fill);
     vex.rectb(s.px, s.py, P, P, 12); // white border
+
+    // Sprite: the 8x8 face blitted onto the player, centered. Index 0 is the
+    // transparent key, so the player's fill shows through the corners.
+    vex.blit(&FACE, s.px + (P - 8) / 2, s.py + (P - 8) / 2, 8, 8, 0);
 
     const cfill: i32 = if (vex.mdown(vex.MOUSE_LEFT)) 2 else 12;
 
