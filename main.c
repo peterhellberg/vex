@@ -229,18 +229,6 @@ m3ApiRawFunction(host_circb) {
     m3ApiSuccess();
 }
 
-// ring(x, y, inner, outer, color): filled annulus. segments=0 lets raylib pick
-// a smooth segment count automatically.
-m3ApiRawFunction(host_ring) {
-    m3ApiGetArg(int32_t, x)
-    m3ApiGetArg(int32_t, y)
-    m3ApiGetArg(int32_t, inner)
-    m3ApiGetArg(int32_t, outer)
-    m3ApiGetArg(int32_t, color)
-    DrawRing((Vector2){x, y}, (float)inner, (float)outer, 0.0f, 360.0f, 0, PAL(color));
-    m3ApiSuccess();
-}
-
 m3ApiRawFunction(host_line) {
     m3ApiGetArg(int32_t, x0)
     m3ApiGetArg(int32_t, y0)
@@ -280,6 +268,27 @@ m3ApiRawFunction(host_trib) {
     m3ApiGetArg(int32_t, y3)
     m3ApiGetArg(int32_t, color)
     DrawTriangleLines((Vector2){x1, y1}, (Vector2){x2, y2}, (Vector2){x3, y3}, PAL(color));
+    m3ApiSuccess();
+}
+
+// blit(data, x, y, w, h, key): draw a w*h bitmap of palette indices (one byte
+// per pixel) with its top-left at (x, y). Pixels equal to key are skipped, so a
+// key outside 0..15 (e.g. -1) draws every pixel.
+m3ApiRawFunction(host_blit) {
+    m3ApiGetArgMem(const uint8_t*, data)
+    m3ApiGetArg(int32_t, x)
+    m3ApiGetArg(int32_t, y)
+    m3ApiGetArg(int32_t, w)
+    m3ApiGetArg(int32_t, h)
+    m3ApiGetArg(int32_t, key)
+    if (w <= 0 || h <= 0) m3ApiSuccess();
+    m3ApiCheckMem(data, (size_t)w * (size_t)h);
+    for (int32_t row = 0; row < h; row++) {
+        for (int32_t col = 0; col < w; col++) {
+            int32_t c = data[(size_t)row * w + col];
+            if (c != key) DrawPixel(x + col, y + row, PAL(c));
+        }
+    }
     m3ApiSuccess();
 }
 
@@ -361,10 +370,10 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "rectb", "v(iiiii)", &host_rectb);
     m3_LinkRawFunction(mod, m, "circ",  "v(iiii)",  &host_circ);
     m3_LinkRawFunction(mod, m, "circb", "v(iiii)",  &host_circb);
-    m3_LinkRawFunction(mod, m, "ring",  "v(iiiii)", &host_ring);
     m3_LinkRawFunction(mod, m, "line",  "v(iiiii)", &host_line);
     m3_LinkRawFunction(mod, m, "tri",   "v(iiiiiii)", &host_tri);
     m3_LinkRawFunction(mod, m, "trib",  "v(iiiiiii)", &host_trib);
+    m3_LinkRawFunction(mod, m, "blit",  "v(*iiiii)", &host_blit);
     m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
     m3_LinkRawFunction(mod, m, "title",    "v(*)",     &host_title);
     m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);

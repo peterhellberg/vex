@@ -55,15 +55,16 @@ pub extern "env" fn rectb(x: i32, y: i32, w: i32, h: i32, color: i32) void;
 pub extern "env" fn circ(x: i32, y: i32, r: i32, color: i32) void;
 /// Draw a circle outline of radius `r` centered at (`x`, `y`).
 pub extern "env" fn circb(x: i32, y: i32, r: i32, color: i32) void;
-/// Draw a filled ring (annulus) centered at (`x`, `y`), between radii
-/// `inner` and `outer`.
-pub extern "env" fn ring(x: i32, y: i32, inner: i32, outer: i32, color: i32) void;
 /// Draw a line from (`x0`, `y0`) to (`x1`, `y1`).
 pub extern "env" fn line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) void;
 /// Draw a filled triangle through the three points (any winding order).
 pub extern "env" fn tri(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
 /// Draw a triangle outline through the three points.
 pub extern "env" fn trib(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, color: i32) void;
+/// Draw a `w`×`h` bitmap of palette indices (one byte per pixel) from `data`,
+/// top-left at (`x`, `y`). Pixels equal to `key` are skipped — pass a value
+/// outside `0..15` (e.g. `-1`) to draw every pixel.
+pub extern "env" fn blit(data: [*]const u8, x: i32, y: i32, w: i32, h: i32, key: i32) void;
 /// Draw the NUL-terminated string `s` with its top-left at (`x`, `y`).
 pub extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
 /// Set the console window title to the NUL-terminated string `s`.

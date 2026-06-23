@@ -369,7 +369,7 @@ function circ(cx, cy, r, color)
     }
 }
 
-// helper: horizontal line span (used by circ + ring)
+// helper: horizontal line span (used by circ)
 function hline(x0, x1, y, color)
 {
     if (y < 0 || y >= VEX_H)
@@ -445,59 +445,35 @@ function circb(cx, cy, r, color)
     }
 }
 
-//// Part 9: ring() (filled annulus)
+//// Part 9: blit() (bitmap from cart memory)
 
 // =========================================================================
-// ring()
+// blit()
 // =========================================================================
 
-function ring(cx, cy, inner, outer, color)
+function blit(ptr, x, y, w, h, key)
 {
-    cx |= 0;
-    cy |= 0;
+    x |= 0;
+    y |= 0;
+    w |= 0;
+    h |= 0;
 
-    if (outer < inner)
+    if (w <= 0 || h <= 0)
+        return;
+
+    updateMemoryViews();
+
+    for (let row = 0; row < h; row++)
     {
-        let t = outer;
-        outer = inner;
-        inner = t;
-    }
-
-    inner |= 0;
-    outer |= 0;
-
-    const outer2 = outer * outer;
-    const inner2 = inner * inner;
-
-    // We scan a square bounding box and draw spans for pixels in annulus
-    for (let y = -outer; y <= outer; y++)
-    {
-        const yy = y * y;
-
-        let spanStart = -1;
-
-        for (let x = -outer; x <= outer; x++)
+        for (let col = 0; col < w; col++)
         {
-            const d = x * x + yy;
+            const c = mem8[ptr + row * w + col];
 
-            if (d <= outer2 && d >= inner2)
-            {
-                if (spanStart === -1)
-                    spanStart = x;
-            }
-            else
-            {
-                if (spanStart !== -1)
-                {
-                    hline(cx + spanStart, cx + x - 1, cy + y, color);
-                    spanStart = -1;
-                }
-            }
-        }
+            // Out-of-bounds reads (undefined) and key pixels are skipped.
+            if (c === undefined || c === key)
+                continue;
 
-        if (spanStart !== -1)
-        {
-            hline(cx + spanStart, cx + outer, cy + y, color);
+            pset(x + col, y + row, c);
         }
     }
 }
@@ -739,10 +715,10 @@ const env =
     rectb,
     circ,
     circb,
-    ring,
     line,
     tri,
     trib,
+    blit,
 
     text,
     title,

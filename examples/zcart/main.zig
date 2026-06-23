@@ -86,7 +86,7 @@ inline fn draw(s: *State) void {
     vex.trib(248, H - 1, 296, H - 72, 319, H - 1, 12);
 
     vex.circ(s.bx, s.by, R, 10); // ball (palette index 10, pulsed above)
-    vex.ring(s.bx, s.by, R + 3, R + 5, 11); // cyan ring orbiting the ball
+    vex.circb(s.bx, s.by, R + 4, 11); // cyan ring orbiting the ball
 
     // Mouse cursor: white dot, red while the left button is held.
     vex.circ(vex.mx(), vex.my(), 3, cfill);

@@ -221,10 +221,10 @@ vex mycart.wasm
 | `rectb(x, y, w, h, color)` | rectangle outline |
 | `circ(x, y, r, color)` | filled circle |
 | `circb(x, y, r, color)` | circle outline |
-| `ring(x, y, inner, outer, color)` | filled ring (annulus) |
 | `line(x0, y0, x1, y1, color)` | line |
 | `tri(x1, y1, x2, y2, x3, y3, color)` | filled triangle |
 | `trib(x1, y1, x2, y2, x3, y3, color)` | triangle outline |
+| `blit(data, x, y, w, h, key)` | draw a `w`×`h` bitmap of palette indices (one byte/pixel); pixels equal to `key` are skipped |
 | `text(s, x, y, color)` | draw a string |
 | `title(s)` | set the window title |
 | `btn(button) -> int` | `1` if a button is held, else `0` |

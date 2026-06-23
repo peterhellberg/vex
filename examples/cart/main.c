@@ -6,6 +6,21 @@
 
 static int px, py;
 
+// 8x8 sprite for blit(): one byte per pixel (palette index), 0 = transparent.
+// A little face (yellow 4, dark features 15) blitted onto the player.
+// clang-format off
+static const unsigned char FACE[8 * 8] = {
+    0,  0,  4,  4,  4,  4,  0,  0,
+    0,  4,  4,  4,  4,  4,  4,  0,
+    4,  4,  15, 4,  4,  15, 4,  4,
+    4,  4,  4,  4,  4,  4,  4,  4,
+    4,  15, 4,  4,  4,  4,  15, 4,
+    4,  4,  15, 15, 15, 15, 4,  4,
+    0,  4,  4,  4,  4,  4,  4,  0,
+    0,  0,  4,  4,  4,  4,  0,  0,
+};
+// clang-format on
+
 VEX_EXPORT("boot") void boot(void) {
   title("vex - C cart");
   px = (VEX_WIDTH - PLAYER) / 2;
@@ -27,12 +42,12 @@ VEX_EXPORT("update") void update(void) {
   // Subtle guide line, behind everything: player center -> bottom center.
   line(px + PLAYER / 2, py + PLAYER / 2, VEX_WIDTH / 2, VEX_HEIGHT - 1, 15);
 
-  text("VEX", 6, 6, 12);          // white
-  text("ARROWS + Z", 6, 18, 13);  // muted blue-grey
+  text("VEX", 6, 6, 12);         // white
+  text("ARROWS + Z", 6, 18, 13); // muted blue-grey
 
-  circ(264, 40, 14, 4);     // yellow sun (upper right)
-  ring(264, 40, 17, 19, 3); // orange ring around it
-  circb(60, 44, 9, 13);     // outlined moon
+  circ(264, 40, 14, 4);  // yellow sun (upper right)
+  circb(264, 40, 18, 3); // orange ring around it
+  circb(60, 44, 9, 13);  // outlined moon
 
   // Mountain range across the width: alternating filled and outlined peaks.
   tri(0, VEX_HEIGHT - 1, 48, VEX_HEIGHT - 60, 96, VEX_HEIGHT - 1, 14);
@@ -45,6 +60,10 @@ VEX_EXPORT("update") void update(void) {
   int fill = btn(VEX_A) ? 2 : 5;
   rect(px, py, PLAYER, PLAYER, fill);
   rectb(px, py, PLAYER, PLAYER, 12);
+
+  // Sprite: the 8x8 face blitted onto the player, centered. Index 0 is the
+  // transparent key, so the player's fill shows through the corners.
+  blit(FACE, px + (PLAYER - 8) / 2, py + (PLAYER - 8) / 2, 8, 8, 0);
 
   // Mouse cursor: white dot, red while the left button is held.
   circ(mx(), my(), 3, mbtn(VEX_MOUSE_LEFT) ? 2 : 12);
