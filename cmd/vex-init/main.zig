@@ -149,10 +149,6 @@ const build_zig_tmpl =
     \\const std = @import("std");
     \\
     \\pub fn build(b: *std.Build) void {{
-    \\    const optimize = b.standardOptimizeOption(.{{
-    \\        .preferred_optimize_mode = .ReleaseSmall,
-    \\    }});
-    \\
     \\    // Carts compile to wasm32-freestanding.
     \\    const wasm_target = b.resolveTargetQuery(.{{
     \\        .cpu_arch = .wasm32,
@@ -169,7 +165,7 @@ const build_zig_tmpl =
     \\        .root_module = b.createModule(.{{
     \\            .root_source_file = b.path("src/cart.zig"),
     \\            .target = wasm_target,
-    \\            .optimize = optimize,
+    \\            .optimize = .ReleaseSmall,
     \\            .imports = &.{{
     \\                .{{
     \\                    .name = "vex",
