@@ -259,6 +259,21 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
 - **Input** — 6 buttons (arrow keys + `Z`/`X`) and the mouse (position + 3 buttons).
 - **Cart** — any `wasm32` module that exports `update()` and imports the API from `env`.
 
+### Drawing & input
+
+- **Lifecycle** — the host calls `boot()` once at start _(optional)_ and
+  `update()` every frame at 60 fps; do your drawing from there.
+- **Coordinates** — the framebuffer origin is the **top-left**; `x` runs
+  `0..319` and `y` runs `0..179`.
+- **The framebuffer persists between frames** — it is *not* cleared for you, so
+  start `update()` with `cls(color)` (or redraw the whole screen) to avoid
+  leftovers from the previous frame.
+- **Color is a palette index** `0..15`, never a raw RGB value. Remap an entry at
+  runtime with `pal(index, 0xRRGGBB)` and restore the defaults with `palreset()`.
+- **Input** — read the buttons with `btn(n)` _(the d-pad and A/B, mapped to the
+  arrow keys and `Z`/`X`)_ and the mouse with `mx()`/`my()`/`mbtn(n)`. See the
+  [API](#api) for the exact button numbers.
+
 ### Components
 
 - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest embeddable
