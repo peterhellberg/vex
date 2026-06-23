@@ -38,17 +38,21 @@ Needs the pinned `zig` (`0.17.0-dev.305+bdfbf432d`, see
 > `https://pkg.hexops.org/zig/zig-<arch>-linux-0.17.0-dev.305+bdfbf432d.tar.xz`.
 
 ```sh
-zig build               # build ./vex + ./vex-init + cart.wasm + zcart.wasm
+zig build --prefix .    # build vex + vex-init + cart.wasm + zcart.wasm into ./bin
 zig build run           # build, then run the C example cart
 zig build runz          # build, then run the Zig example cart
 zig build run -- -s 5   # forward flags to vex (here: window scale 5)
-zig build -Dhost=false  # build only the carts + SDK (skip the raylib host)
+zig build --prefix . -Dhost=false   # only the carts + SDK (skip the raylib host)
 ```
 
-A `Makefile` wraps these as `make`, `make run`, `make runz`, 
-and `make clean`. `make install` copies the `vex` and `vex-init` 
-binaries to `~/.local/bin`
-_(override with `make install PREFIX=/usr/local`)_.
+`--prefix .` installs into `./bin`; a plain `zig build` uses Zig's default
+`zig-out/`. The `run`/`runz` steps execute straight from the build cache, so
+they need no prefix.
+
+A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`,
+passing `--prefix .` for you so all binaries — including the Go `vex-web` — land
+in `./bin`. `make install` copies `vex`, `vex-init`, and `vex-web` from there to
+`~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
 
 ### Linux prerequisites
 
@@ -123,9 +127,9 @@ ratio. `index.html` and `vex.js` are embedded into the binary _(via
 go run github.com/peterhellberg/vex/cmd/vex-web@latest mycart.wasm
 
 # or from a checkout:
-make web                              # build, then serve cart.wasm on :8383
-make web CART=zig-out/bin/zcart.wasm  # serve a different cart
-go run ./cmd/vex-web mycart.wasm      # run the server directly
+make web                          # build, then serve cart.wasm on :8383
+make web CART=bin/zcart.wasm      # serve a different cart
+go run ./cmd/vex-web mycart.wasm  # run the server directly
 ```
 
 It serves the page on <http://localhost:8383/> and opens your browser there
@@ -139,8 +143,8 @@ watches it over Server-Sent Events _(`/reload`)_ — so rebuilding the cart
 > in another — every rebuild reloads the cart in the browser automatically.
 >
 > ```sh
-> zig build --watch                 # terminal 1: rebuild carts on every change
-> go run ./cmd/vex-web zig-out/bin/zcart.wasm  # terminal 2: serve + auto-reload
+> zig build --prefix . --watch          # terminal 1: rebuild carts on every change
+> go run ./cmd/vex-web bin/zcart.wasm    # terminal 2: serve + auto-reload
 > ```
 
 Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
