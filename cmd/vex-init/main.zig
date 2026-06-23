@@ -61,10 +61,11 @@ pub fn main(init: std.process.Init) !void {
             \\
             \\Next steps:
             \\  cd {s}
-            \\  zig build run    # build the cart and run it in vex
-            \\  zig build web    # build the cart and serve it with vex-web
+            \\  zig build run     # build the cart and run it in vex
+            \\  zig build web     # build the cart and serve it with vex-web
+            \\  zig build bundle  # write a static bundle/ ready to upload
             \\
-            \\(run/web need the vex and vex-web binaries on your PATH)
+            \\(these steps need the vex and vex-web binaries on your PATH)
             \\
         , .{dir_path});
     } else {
@@ -202,6 +203,13 @@ const build_zig_tmpl =
     \\    web.step.dependOn(b.getInstallStep());
     \\    if (b.args) |args| web.addArgs(args);
     \\    b.step("web", "Build the cart and serve it with vex-web").dependOn(&web.step);
+    \\
+    \\    // `zig build bundle` builds + installs the cart and writes a static
+    \\    // bundle (bundle/<name>/ and bundle/<name>.zip) ready to host anywhere.
+    \\    const bundle = b.addSystemCommand(&.{{ "vex-web", "-bundle" }});
+    \\    bundle.addArg(wasm);
+    \\    bundle.step.dependOn(b.getInstallStep());
+    \\    b.step("bundle", "Build the cart and write a static bundle with vex-web").dependOn(&bundle.step);
     \\}}
     \\
 ;
@@ -227,5 +235,6 @@ const build_zon_tmpl =
 const gitignore =
     \\/zig-out/
     \\/.zig-cache/
+    \\/bundle/
     \\
 ;
