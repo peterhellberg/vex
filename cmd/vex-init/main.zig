@@ -61,20 +61,21 @@ pub fn main(init: std.process.Init) !void {
             \\
             \\Next steps:
             \\  cd {s}
-            \\  zig build
-            \\  vex zig-out/bin/{s}.wasm
+            \\  zig build run    # build the cart and run it in vex
+            \\  zig build web    # build the cart and serve it with vex-web
             \\
-        , .{ dir_path, name });
+            \\(run/web need the vex and vex-web binaries on your PATH)
+            \\
+        , .{dir_path});
     } else {
         std.debug.print(
             \\
             \\vex-init: could not run `zig fetch` automatically. Finish manually:
             \\  cd {s}
             \\  zig fetch --save {s}
-            \\  zig build
-            \\  vex zig-out/bin/{s}.wasm
+            \\  zig build run    # then run it in vex (or `zig build web`)
             \\
-        , .{ dir_path, VEX_URL, name });
+        , .{ dir_path, VEX_URL });
     }
 }
 
@@ -147,7 +148,9 @@ const build_zig_tmpl =
     \\const std = @import("std");
     \\
     \\pub fn build(b: *std.Build) void {{
-    \\    const optimize = b.standardOptimizeOption(.{{ .preferred_optimize_mode = .ReleaseSmall }});
+    \\    const optimize = b.standardOptimizeOption(.{{
+    \\        .preferred_optimize_mode = .ReleaseSmall,
+    \\    }});
     \\
     \\    // Carts compile to wasm32-freestanding.
     \\    const wasm_target = b.resolveTargetQuery(.{{
@@ -166,12 +169,38 @@ const build_zig_tmpl =
     \\            .root_source_file = b.path("src/cart.zig"),
     \\            .target = wasm_target,
     \\            .optimize = optimize,
-    \\            .imports = &.{{.{{ .name = "vex", .module = vex.module("vex") }}}},
+    \\            .imports = &.{{
+    \\                .{{
+    \\                    .name = "vex",
+    \\                    .module = vex.module("vex"),
+    \\                }},
+    \\            }},
     \\        }}),
     \\    }});
     \\    cart.entry = .disabled; // no _start; the console calls update()
     \\    cart.rdynamic = true; // export boot()/update()
     \\    b.installArtifact(cart);
+    \\
+    \\    // run/web point vex and vex-web at the *installed* wasm
+    \\    // (zig-out/bin/<name>.wasm) -- a stable path, unlike the build cache. Run
+    \\    // `zig build --watch` in another terminal to rebuild on every edit; vex
+    \\    // reloads with Super+R and vex-web reloads automatically. Both tools must
+    \\    // be on your PATH (e.g. via `make install` in the vex repo).
+    \\    const wasm = b.getInstallPath(.bin, cart.out_filename);
+    \\
+    \\    // `zig build run` builds + installs the cart and runs it in vex.
+    \\    const run = b.addSystemCommand(&.{{"vex"}});
+    \\    run.addArg(wasm);
+    \\    run.step.dependOn(b.getInstallStep());
+    \\    if (b.args) |args| run.addArgs(args);
+    \\    b.step("run", "Build the cart and run it in vex").dependOn(&run.step);
+    \\
+    \\    // `zig build web` builds + installs the cart and serves it via vex-web.
+    \\    const web = b.addSystemCommand(&.{{"vex-web"}});
+    \\    web.addArg(wasm);
+    \\    web.step.dependOn(b.getInstallStep());
+    \\    if (b.args) |args| web.addArgs(args);
+    \\    b.step("web", "Build the cart and serve it with vex-web").dependOn(&web.step);
     \\}}
     \\
 ;
