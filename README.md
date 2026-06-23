@@ -150,7 +150,12 @@ Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
 
 `make install` puts `vex-web` on your `PATH` alongside `vex` and `vex-init`.
 
-## Scaffolding a cart with vex-init
+## Creating a cart
+
+Two ways to start: scaffold a Zig project with `vex-init`, or write a cart by
+hand in C or Zig. Either way a cart is a `wasm32` module — see the [API](#api).
+
+### Scaffolding a cart with vex-init
 
 `vex-init` scaffolds a standalone Zig cart project that depends on the `vex`
 SDK which is published at <https://github.com/peterhellberg/vex>. 
@@ -171,7 +176,7 @@ step can't run it prints the command to finish manually.
 The generated `build.zig` depends on `vex` with `.{ .host = false }`, 
 so only the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
 
-## Writing a cart by hand
+### Writing a cart by hand
 
 A cart is any `wasm32` module that exports `update()` _(and optionally
 `boot()`)_ and imports the API from `env`. 
