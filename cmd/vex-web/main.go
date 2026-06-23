@@ -3,11 +3,11 @@
 //
 // Usage:
 //
-//	go run tools/vex-web.go [-addr host:port] <cart.wasm>
-//	go run tools/vex-web.go -bundle <cart.wasm>
+//	go run github.com/peterhellberg/vex/cmd/vex-web@latest [-addr host:port] <cart.wasm>
+//	go run ./cmd/vex-web -bundle <cart.wasm>
 //
-// index.html and vex.js are embedded into the binary (from tools/assets), so a
-// built vex-web needs no files alongside it. The cart given as the first
+// index.html and vex.js are embedded into the binary (from cmd/vex-web/assets),
+// so a built vex-web needs no files alongside it. The cart given as the first
 // argument is served on /cart.wasm, read from disk on every request — so
 // rebuilding the cart and refreshing the page picks up the new bytes without
 // restarting the server.

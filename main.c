@@ -31,7 +31,7 @@ static const Color DEFAULT_PALETTE[16] = {
 static Color palette[16];
 #define PAL(c) (palette[(unsigned)(c) & 15])
 
-// 8x8 bitmap font, shared byte-for-byte with the web host (tools/assets/vex.js)
+// 8x8 bitmap font, shared byte-for-byte with the web host (cmd/vex-web/assets/vex.js)
 // so text() looks identical in both. Glyphs cover ASCII 32..127; FONT8[c - 32]
 // packs one glyph as a 64-bit value where the most-significant byte is the top
 // row and the most-significant bit of each byte is the left pixel.

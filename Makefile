@@ -28,13 +28,13 @@ runz:
 	zig build runz
 
 web: all
-	go run tools/vex-web.go $(CART)
+	go run ./cmd/vex-web $(CART)
 
 docs:
 	zig build-lib -fno-emit-bin -femit-docs vex.zig
 
 install: all
-	go build -o zig-out/bin/vex-web ./tools/vex-web.go
+	go build -o zig-out/bin/vex-web ./cmd/vex-web
 	mkdir -p $(BINDIR)
 	install -m 0755 zig-out/bin/vex $(BINDIR)/vex
 	install -m 0755 zig-out/bin/vex-init $(BINDIR)/vex-init

@@ -110,8 +110,8 @@ Arrow keys, `Z`, and `X` are passed to the cart via `btn()`.
 ## Web version
 
 The same carts run unchanged in the browser. `vex-web`
-_([`tools/vex-web.go`](tools/vex-web.go))_ is a small self-contained Go server
-that serves a `<canvas>`-based host — [`vex.js`](tools/assets/vex.js)
+_([`cmd/vex-web/main.go`](cmd/vex-web/main.go))_ is a small self-contained Go
+server that serves a `<canvas>`-based host — [`vex.js`](cmd/vex-web/assets/vex.js)
 reimplements the console API _(framebuffer, SWEETIE-16 palette, drawing, input,
 and the shared **8×8 bitmap font**)_ in JavaScript and draws into the same fixed
 **320×180** framebuffer, scaled up to fill the window while keeping the aspect
@@ -119,9 +119,13 @@ ratio. `index.html` and `vex.js` are embedded into the binary _(via
 `//go:embed`)_, so a built `vex-web` needs nothing beside it but a cart.
 
 ```sh
+# straight from GitHub, no checkout needed:
+go run github.com/peterhellberg/vex/cmd/vex-web@latest mycart.wasm
+
+# or from a checkout:
 make web                              # build, then serve cart.wasm on :8383
 make web CART=zig-out/bin/zcart.wasm  # serve a different cart
-go run tools/vex-web.go mycart.wasm   # or run the server directly
+go run ./cmd/vex-web mycart.wasm      # run the server directly
 ```
 
 It serves the page on <http://localhost:8383/> and opens your browser there
@@ -136,7 +140,7 @@ watches it over Server-Sent Events _(`/reload`)_ — so rebuilding the cart
 >
 > ```sh
 > zig build --watch                 # terminal 1: rebuild carts on every change
-> go run tools/vex-web.go zig-out/bin/zcart.wasm  # terminal 2: serve + auto-reload
+> go run ./cmd/vex-web zig-out/bin/zcart.wasm  # terminal 2: serve + auto-reload
 > ```
 
 Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
