@@ -4,6 +4,7 @@
 // Usage:
 //
 //	go run tools/vex-web.go [-addr host:port] <cart.wasm>
+//	go run tools/vex-web.go -bundle <cart.wasm>
 //
 // index.html and vex.js are embedded into the binary (from tools/assets), so a
 // built vex-web needs no files alongside it. The cart given as the first
@@ -14,9 +15,16 @@
 // /cart.wasm is the default cart the page loads on start; drag-and-dropping a
 // different .wasm onto the page still works and is handled entirely in the
 // browser.
+//
+// With -bundle, vex-web writes a static bundle for the cart instead of serving
+// it: index.html, vex.js and the cart wasm are written to bundle/<name>/ (where
+// <name> is the cart's base name without extension) and the directory is also
+// archived to bundle/<name>.zip. The bundle runs the cart without any server,
+// so it can be hosted as plain static files.
 package main
 
 import (
+	"archive/zip"
 	_ "embed"
 	"errors"
 	"flag"
@@ -30,6 +38,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -45,6 +54,7 @@ type Input struct {
 	addr   string
 	noOpen bool
 	poll   time.Duration
+	bundle bool
 }
 
 func main() {
@@ -66,10 +76,11 @@ func run(args []string, stderr io.Writer) error {
 	fs.StringVar(&in.addr, "addr", ":8383", "address to listen on")
 	fs.BoolVar(&in.noOpen, "no-open", false, "don't open the browser on start")
 	fs.DurationVar(&in.poll, "poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
+	fs.BoolVar(&in.bundle, "bundle", false, "write a static bundle for the cart to bundle/<name>/ (and .zip) instead of serving")
 
 	fs.Usage = func() {
 		fmt.Fprintf(stderr,
-			"usage: %s [-addr host:port] [--no-open] <cart.wasm>\n",
+			"usage: %s [-addr host:port] [-no-open] [-bundle] <cart.wasm>\n",
 			filepath.Base(args[0]))
 		fs.PrintDefaults()
 	}
@@ -83,6 +94,10 @@ func run(args []string, stderr io.Writer) error {
 	if cart == "" {
 		fs.Usage()
 		return errors.New("no cart specified")
+	}
+
+	if in.bundle {
+		return writeBundle(cart)
 	}
 
 	// Warn early if the cart is missing, but keep serving: it may be (re)built
@@ -257,4 +272,106 @@ func serveCart(path string) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(b)
 	}
+}
+
+// bundleFile is one entry written into a static bundle (both to disk and into
+// the zip archive).
+type bundleFile struct {
+	name string
+	data []byte
+}
+
+// writeBundle builds a self-contained static bundle that runs cart without a
+// server: index.html, vex.js and the cart wasm are written to bundle/<name>/
+// (where <name> is the cart's base name without extension) and the directory is
+// also archived to bundle/<name>.zip.
+func writeBundle(cart string) error {
+	wasm, err := os.ReadFile(cart)
+	if err != nil {
+		return fmt.Errorf("read cart: %w", err)
+	}
+
+	cartFile := filepath.Base(cart)
+	name := strings.TrimSuffix(cartFile, filepath.Ext(cartFile))
+
+	files := []bundleFile{
+		{"index.html", bundleIndexHTML(cartFile)},
+		{"vex.js", vexJS},
+		{cartFile, wasm},
+	}
+
+	dir := filepath.Join("bundle", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f.name), f.data, 0o644); err != nil {
+			return err
+		}
+	}
+
+	zipPath := filepath.Join("bundle", name+".zip")
+	if err := writeBundleZip(zipPath, name, files); err != nil {
+		return err
+	}
+
+	log.Printf("vex-web: wrote bundle %s and %s", dir, zipPath)
+
+	return nil
+}
+
+// bundleIndexHTML returns a static copy of the embedded index.html that loads
+// cartFile directly, with the dev-only live-reload (SSE) script replaced so the
+// page works straight from the filesystem with no server behind it.
+func bundleIndexHTML(cartFile string) []byte {
+	const (
+		startTag = `<script type="module">`
+		endTag   = "</script>"
+	)
+
+	html := string(indexHTML)
+
+	i := strings.Index(html, startTag)
+	if i < 0 {
+		return indexHTML
+	}
+
+	j := strings.Index(html[i:], endTag)
+	if j < 0 {
+		return indexHTML
+	}
+	j += i + len(endTag)
+
+	script := startTag + "\n" +
+		`  import { start } from "./vex.js";` + "\n\n" +
+		`  window.addEventListener("load", () => start(` + strconv.Quote(cartFile) + "));\n" +
+		endTag
+
+	return []byte(html[:i] + script + html[j:])
+}
+
+// writeBundleZip archives files into the zip at path, placing every entry under
+// a prefix/ directory so unzipping recreates the bundle folder.
+func writeBundleZip(path, prefix string, files []bundleFile) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+
+	for _, file := range files {
+		w, err := zw.Create(prefix + "/" + file.name)
+		if err != nil {
+			return err
+		}
+
+		if _, err := w.Write(file.data); err != nil {
+			return err
+		}
+	}
+
+	return zw.Close()
 }
