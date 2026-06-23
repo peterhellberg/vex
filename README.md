@@ -54,34 +54,6 @@ passing `--prefix .` for you so all binaries — including the Go `vex-web` — 
 in `./bin`. `make install` copies `vex`, `vex-init`, and `vex-web` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
 
-### Linux prerequisites
-
-The host links raylib's default X11 backend, so the matching system libraries
-must be present. On Debian/Ubuntu _(22.04 and newer)_:
-
-```sh
-sudo apt install \
-    libgl1-mesa-dev libx11-dev libxrandr-dev \
-    libxinerama-dev libxi-dev libxcursor-dev pkg-config
-```
-
-Equivalents: Fedora `mesa-libGL-devel libX11-devel libXrandr-devel
-libXinerama-devel libXi-devel libXcursor-devel`; Arch `mesa libx11 libxrandr
-libxinerama libxi libxcursor`. Without them the build stops at
-`unable to find dynamic system library 'GL'`.
-
-The resulting `vex` is statically linked against raylib and wasm3; only the
-system X11/GL libraries (present on any desktop) are needed at runtime. To
-target Wayland directly instead of X11, pass
-`-Dlinux_display_backend=Wayland` _(also needs `libwayland-dev`,
-`libxkbcommon-dev`, and `wayland-protocols`; these pull in `wayland-scanner`)_.
-
-> [!Note]
-> On Linux the link step prints `warning(link): unexpected LLD stderr` and a
-> few `archive member '…/libGL.so' is neither ET_REL nor LLVM bitcode`
-> warnings. These are harmless — raylib's static archive references the system
-> `.so`s by path — and `zig build` still exits `0` with a working `vex` binary.
-
 `vex` is invoked as `vex [-s scale] <cart.wasm>`. 
 
 The window is the 320×180 framebuffer times `scale` 
@@ -93,6 +65,28 @@ There are two example carts:
 - [`examples/zcart/main.zig`](examples/zcart/main.zig) (Zig)
 
 Both compile to `wasm32` and use the same console API.
+
+### Linux prerequisites
+
+The host links raylib's default X11 backend, so the matching system libraries
+must be present. On Debian/Ubuntu _(22.04 and newer)_:
+
+```sh
+sudo apt install \
+    libgl1-mesa-dev libx11-dev libxrandr-dev \
+    libxinerama-dev libxi-dev libxcursor-dev pkg-config
+```
+
+Without them the build stops at `unable to find dynamic system library 'GL'`.
+
+The resulting `vex` is statically linked against raylib and wasm3; only the
+system X11/GL libraries (present on any desktop) are needed at runtime.
+
+> [!Note]
+> On Linux the link step prints `warning(link): unexpected LLD stderr` and a
+> few `archive member '…/libGL.so' is neither ET_REL nor LLVM bitcode`
+> warnings. These are harmless — raylib's static archive references the system
+> `.so`s by path — and `zig build` still exits `0` with a working `vex` binary.
 
 ## Controls
 
@@ -133,7 +127,7 @@ go run ./cmd/vex-web mycart.wasm  # run the server directly
 ```
 
 It serves the page on <http://localhost:8383/> and opens your browser there
-_(`--no-open` skips that; `-addr host:port` changes the address)_. The cart is
+_(`-no-open` skips that; `-addr host:port` changes the address)_. The cart is
 served on `/cart.wasm`, **read from disk on every request**, and the page
 watches it over Server-Sent Events _(`/reload`)_ — so rebuilding the cart
 **live-reloads** it in the browser, no refresh or restart needed.
@@ -156,7 +150,7 @@ Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
 
 `make install` puts `vex-web` on your `PATH` alongside `vex` and `vex-init`.
 
-## Starting a new cart
+## Scaffolding a cart with vex-init
 
 `vex-init` scaffolds a standalone Zig cart project that depends on the `vex`
 SDK which is published at <https://github.com/peterhellberg/vex>. 
@@ -177,7 +171,7 @@ step can't run it prints the command to finish manually.
 The generated `build.zig` depends on `vex` with `.{ .host = false }`, 
 so only the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
 
-## Writing a cart
+## Writing a cart by hand
 
 A cart is any `wasm32` module that exports `update()` _(and optionally
 `boot()`)_ and imports the API from `env`. 
@@ -188,9 +182,9 @@ In C, include [`vex.h`](vex.h):
 #include "vex.h"
 
 VEX_EXPORT("update") void update(void) {
-    cls(1);                 // clear to dark blue
-    text("HELLO", 4, 4, 7); // white text
-    rect(60, 60, 8, 8, 11); // green square
+    cls(8);                 // clear to dark blue
+    text("HELLO", 4, 4, 12); // white text
+    rect(60, 60, 8, 8, 6);  // green square
 }
 ```
 
@@ -208,7 +202,7 @@ Or in Zig — import the [`vex.zig`](vex.zig) SDK and `export` the entry points:
 const vex = @import("vex");
 
 export fn update() void {
-    vex.cls(1);                 // clear to dark blue
+    vex.cls(8);                 // clear to dark blue
     vex.text("HELLO", 4, 4, 12); // white text
 }
 ```
