@@ -71,7 +71,7 @@ pub fn build(b: *std.Build) void {
     const init_exe = b.addExecutable(.{
         .name = "vex-init",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/vex-init.zig"),
+            .root_source_file = b.path("cmd/vex-init/main.zig"),
             .target = target,
             .optimize = optimize,
         }),
