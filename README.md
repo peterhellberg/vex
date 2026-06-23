@@ -181,6 +181,14 @@ so only the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm
 A cart is any `wasm32` module that exports `update()` _(and optionally
 `boot()`)_ and imports the API from `env`. 
 
+Both SDKs are a single file you drop next to your cart — grab the one for your
+language:
+
+```sh
+curl -LO https://raw.githubusercontent.com/peterhellberg/vex/main/vex.h    # C
+curl -LO https://raw.githubusercontent.com/peterhellberg/vex/main/vex.zig  # Zig
+```
+
 In C, include [`vex.h`](vex.h):
 
 ```c
