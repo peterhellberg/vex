@@ -131,7 +131,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	url := serverURL(ln.Addr().String())
 
-	fmt.Fprintf(stderr, "serving cart %q on %s\n", cart, url)
+	fmt.Fprintf(stderr, "serving cart %s on %s\n", displayPath(cart), url)
 
 	if !in.noOpen {
 		if err := openBrowser(url); err != nil {
@@ -173,6 +173,25 @@ func listen(addr string, tries int, stderr io.Writer) (net.Listener, error) {
 	}
 
 	return nil, fmt.Errorf("no free port after %d attempts starting at %s", tries, addr)
+}
+
+// displayPath shortens an absolute cart path to one relative to the current
+// directory for logging — e.g. zig build (which passes an absolute installed
+// path) shows "zig-out/bin/cart.wasm" rather than the full path. It falls back
+// to the original whenever a relative form can't be computed or would escape
+// the working directory (start with "..").
+func displayPath(path string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return path
+	}
+
+	rel, err := filepath.Rel(cwd, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return path
+	}
+
+	return rel
 }
 
 // serverURL builds the http URL to visit from a listen address, substituting a
@@ -264,7 +283,7 @@ func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			fmt.Fprintf(stderr, "read %s: %v\n", path, err)
+			fmt.Fprintf(stderr, "read %s: %v\n", displayPath(path), err)
 			http.Error(w, "cart not found", http.StatusNotFound)
 			return
 		}
