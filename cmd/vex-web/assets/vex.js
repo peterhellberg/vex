@@ -110,6 +110,14 @@ function btn(button)
     return 0;
 }
 
+function btnp(button)
+{
+    const held = btn(button);
+    const prev = (prevButtons >> button) & 1;
+
+    return held && !prev ? 1 : 0;
+}
+
 let mouseX = 0;
 let mouseY = 0;
 
@@ -156,6 +164,7 @@ function mbtn(button)
 let instance = null;
 let memory = null;
 let mem8 = null;
+let prevButtons = 0;
 
 function updateMemoryViews()
 {
@@ -727,6 +736,7 @@ const env =
     title,
 
     btn,
+    btnp,
     mx,
     my,
     mbtn,
@@ -782,6 +792,12 @@ function frame()
 
     // push framebuffer to canvas
     present();
+
+    // Capture button state for next frame's btnp().
+    prevButtons = 0;
+
+    for (let i = 0; i < 6; i++)
+        if (btn(i)) prevButtons |= (1 << i);
 
     rafId = requestAnimationFrame(frame);
 }
