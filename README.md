@@ -165,6 +165,7 @@ vex-init mygame      # creates mygame/ (src/cart.zig, build.zig, build.zig.zon)
                      # and runs `zig fetch --save` to pin the vex dependency
 cd mygame
 zig build            # builds zig-out/bin/mygame.wasm
+
 vex zig-out/bin/mygame.wasm
 ```
 
@@ -201,9 +202,9 @@ VEX_EXPORT("update") void update(void) {
 Compile it to WASM:
 
 ```sh
-zig cc --target=wasm32-freestanding -nostdlib -O2 -Wl,--no-entry -I. \
-       -o mycart.wasm mycart.c
-vex mycart.wasm
+zig cc --target=wasm32-freestanding \
+  -nostdlib -Os -Wl,--no-entry -I. \
+  -o mycart.wasm mycart.c
 ```
 
 Or in Zig — import the [`vex.zig`](vex.zig) SDK and `export` the entry points:
@@ -218,9 +219,10 @@ export fn update() void {
 ```
 
 ```sh
-zig build-exe -target wasm32-freestanding -O ReleaseSmall -fno-entry -rdynamic \
-    -femit-bin=mycart.wasm --dep vex -Mroot=mycart.zig -Mvex=vex.zig
-vex mycart.wasm
+zig build-exe -target wasm32-freestanding \
+  -O ReleaseSmall -fno-entry -rdynamic \
+  -femit-bin=mycart.wasm --dep vex \
+  -Mroot=mycart.zig -Mvex=vex.zig
 ```
 
 ## API
