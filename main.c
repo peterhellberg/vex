@@ -158,6 +158,10 @@ static void draw_text(const char* s, int x, int y, Color c) {
 // window-space mouse position back into the cart's logical coordinates.
 static float g_view_scale = 1.0f, g_view_ox = 0.0f, g_view_oy = 0.0f;
 
+// Button key mappings and previous-frame state for btnp() edge detection.
+static const int VEX_KEYS[6] = { KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_Z, KEY_X };
+static uint8_t g_prev_btns = 0;
+
 static void reset_palette(void) {
     for (int i = 0; i < 16; i++) palette[i] = DEFAULT_PALETTE[i];
 }
@@ -321,9 +325,17 @@ m3ApiRawFunction(host_title) {
 m3ApiRawFunction(host_btn) {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, button)
-    static const int keys[6] = { KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_Z, KEY_X };
-    int held = (button >= 0 && button < 6) ? IsKeyDown(keys[button]) : 0;
+    int held = (button >= 0 && button < 6) ? IsKeyDown(VEX_KEYS[button]) : 0;
     m3ApiReturn(held);
+}
+
+// btnp(button) -> just pressed this frame? Same buttons as btn().
+m3ApiRawFunction(host_btnp) {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, button)
+    int held = (button >= 0 && button < 6) ? IsKeyDown(VEX_KEYS[button]) : 0;
+    int prev = (button >= 0 && button < 6) ? ((g_prev_btns >> button) & 1) : 0;
+    m3ApiReturn(held && !prev);
 }
 
 // Mouse position, mapped from window space into logical screen coordinates.
@@ -380,6 +392,7 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
     m3_LinkRawFunction(mod, m, "title",    "v(*)",     &host_title);
     m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);
+    m3_LinkRawFunction(mod, m, "btnp",     "i(i)",     &host_btnp);
     m3_LinkRawFunction(mod, m, "mx",       "i()",      &host_mx);
     m3_LinkRawFunction(mod, m, "my",       "i()",      &host_my);
     m3_LinkRawFunction(mod, m, "mbtn",     "i(i)",     &host_mbtn);
@@ -616,6 +629,12 @@ int main(int argc, char** argv) {
             err = m3_CallV(cart.f_update);
         EndTextureMode();
         if (err) die(cart.rt, "update", err);
+
+        // Capture button state for next frame's btnp() edge detection.
+        g_prev_btns = 0;
+        for (int i = 0; i < 6; i++) {
+            if (IsKeyDown(VEX_KEYS[i])) g_prev_btns |= (1u << i);
+        }
 
         // Blit the framebuffer to the screen (src height negative: render
         // textures are stored bottom-up).
