@@ -573,6 +573,9 @@ int main(int argc, char** argv) {
             // True fullscreen (a macOS fullscreen Space) fits the display
             // exactly and hides the menu bar, so the picture isn't pushed off
             // the bottom of a notched screen as borderless-windowed would.
+            // Toggling fullscreen can recreate the GL context (macOS), so the
+            // render texture must be re-created afterwards.
+            UnloadRenderTexture(screen);
             int mon = GetCurrentMonitor();
             if (!IsWindowFullscreen()) {
                 SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
@@ -582,6 +585,8 @@ int main(int argc, char** argv) {
                 ToggleFullscreen();
                 SetWindowSize(VEX_W * scale, VEX_H * scale);
             }
+            screen = LoadRenderTexture(VEX_W, VEX_H);
+            SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
         }
         if (super && IsKeyPressed(KEY_I)) integer_scale = !integer_scale;
 
