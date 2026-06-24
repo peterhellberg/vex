@@ -672,8 +672,8 @@ int main(int argc, char** argv) {
 
     UnloadRenderTexture(screen);
     CloseWindow();
-    m3_FreeEnvironment(env);
     m3_FreeRuntime(cart.rt);
+    m3_FreeEnvironment(env);
     free(cart.wasm);
     return 0;
 }
