@@ -461,6 +461,9 @@ function blit(ptr, x, y, w, h, key)
     if (w <= 0 || h <= 0)
         return;
 
+    if (ptr < 0 || ptr + w * h > mem8.length)
+        return;
+
     updateMemoryViews();
 
     for (let row = 0; row < h; row++)
@@ -762,7 +765,7 @@ async function loadCart(url)
     const res = await fetch(url);
 
     if (!res.ok)
-        throw new Error("failed to load cart");
+        throw new Error(`failed to load cart (HTTP ${res.status})`);
 
     await instantiateCart(await res.arrayBuffer());
 }
@@ -802,9 +805,16 @@ function run()
 
 export async function start(cartPath)
 {
-    await loadCart(cartPath);
+    try
+    {
+        await loadCart(cartPath);
 
-    run();
+        run();
+    }
+    catch (err)
+    {
+        console.error("vex: failed to load cart:", err);
+    }
 }
 
 // Load a cart from raw bytes (e.g. a dropped .wasm file).
