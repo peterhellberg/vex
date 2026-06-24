@@ -197,6 +197,7 @@ m3ApiRawFunction(host_rect) {
     m3ApiGetArg(int32_t, w)
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
+    if (w <= 0 || h <= 0) m3ApiSuccess();
     DrawRectangle(x, y, w, h, PAL(color));
     m3ApiSuccess();
 }
@@ -207,6 +208,7 @@ m3ApiRawFunction(host_rectb) {
     m3ApiGetArg(int32_t, w)
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
+    if (w <= 0 || h <= 0) m3ApiSuccess();
     // A 1px outline drawn as four filled edges inside the w*h box, so corners
     // are solid and pixel-aligned (DrawRectangleLines leaves corner gaps).
     Color c = PAL(color);
@@ -222,6 +224,7 @@ m3ApiRawFunction(host_circ) {
     m3ApiGetArg(int32_t, y)
     m3ApiGetArg(int32_t, r)
     m3ApiGetArg(int32_t, color)
+    if (r < 0) r = 0;
     DrawCircle(x, y, (float)r, PAL(color));
     m3ApiSuccess();
 }
@@ -231,6 +234,7 @@ m3ApiRawFunction(host_circb) {
     m3ApiGetArg(int32_t, y)
     m3ApiGetArg(int32_t, r)
     m3ApiGetArg(int32_t, color)
+    if (r < 0) r = 0;
     DrawCircleLines(x, y, (float)r, PAL(color));
     m3ApiSuccess();
 }
@@ -255,7 +259,8 @@ m3ApiRawFunction(host_tri) {
     m3ApiGetArg(int32_t, color)
     // raylib keeps backface culling on, so a back-facing winding would be
     // dropped. Normalize to the front-facing order so any vertex order draws.
-    int64_t cross = (int64_t)(x2 - x1) * (y3 - y1) - (int64_t)(y2 - y1) * (x3 - x1);
+    // Cast before subtraction to avoid int32_t overflow UB.
+    int64_t cross = ((int64_t)x2 - x1) * ((int64_t)y3 - y1) - ((int64_t)y2 - y1) * ((int64_t)x3 - x1);
     if (cross > 0) {
         int32_t tx = x2, ty = y2;
         x2 = x3; y2 = y3;
