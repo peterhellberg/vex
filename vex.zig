@@ -71,6 +71,8 @@ pub extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
 pub extern "env" fn title(s: [*:0]const u8) void;
 /// Return `1` while the button is held, else `0`. See `LEFT`…`B`.
 pub extern "env" fn btn(button: i32) i32;
+/// Return `1` if the button was just pressed this frame, else `0`.
+pub extern "env" fn btnp(button: i32) i32;
 /// Mouse x position, in framebuffer pixels (`0`…`WIDTH - 1`).
 pub extern "env" fn mx() i32;
 /// Mouse y position, in framebuffer pixels (`0`…`HEIGHT - 1`).
@@ -91,4 +93,9 @@ pub fn down(button: i32) bool {
 /// `true` while the mouse button is held — shorthand for `mbtn(button) != 0`.
 pub fn mdown(button: i32) bool {
     return mbtn(button) != 0;
+}
+
+/// `true` if the button was just pressed this frame — shorthand for `btnp(button) != 0`.
+pub fn pressed(button: i32) bool {
+    return btnp(button) != 0;
 }

@@ -41,6 +41,7 @@ VEX_IMPORT("blit")  void blit(const void* data, int x, int y, int w, int h, int 
 VEX_IMPORT("text")  void text(const char* s, int x, int y, int color);
 VEX_IMPORT("title") void title(const char* s);                       // set window title
 VEX_IMPORT("btn")   int  btn(int button);                            // 1 if held, else 0
+VEX_IMPORT("btnp")  int  btnp(int button);                           // 1 if just pressed this frame
 
 VEX_IMPORT("mx")   int mx(void);             // mouse x in screen pixels
 VEX_IMPORT("my")   int my(void);             // mouse y in screen pixels
