@@ -251,7 +251,7 @@ m3ApiRawFunction(host_tri) {
     m3ApiGetArg(int32_t, color)
     // raylib keeps backface culling on, so a back-facing winding would be
     // dropped. Normalize to the front-facing order so any vertex order draws.
-    int32_t cross = (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+    int64_t cross = (int64_t)(x2 - x1) * (y3 - y1) - (int64_t)(y2 - y1) * (x3 - x1);
     if (cross > 0) {
         int32_t tx = x2, ty = y2;
         x2 = x3; y2 = y3;
@@ -284,6 +284,7 @@ m3ApiRawFunction(host_blit) {
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, key)
     if (w <= 0 || h <= 0) m3ApiSuccess();
+    if ((size_t)w > (size_t)-1 / (size_t)h) m3ApiSuccess();
     m3ApiCheckMem(data, (size_t)w * (size_t)h);
     for (int32_t row = 0; row < h; row++) {
         for (int32_t col = 0; col < w; col++) {
@@ -403,10 +404,11 @@ static void die(IM3Runtime rt, const char* what, M3Result err) {
 static uint8_t* read_file(const char* path, size_t* out_len) {
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
     long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    uint8_t* buf = malloc(n);
+    if (n <= 0) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    uint8_t* buf = malloc((size_t)n);
     if (!buf || fread(buf, 1, n, f) != (size_t)n) { free(buf); fclose(f); return NULL; }
     fclose(f);
     *out_len = (size_t)n;
@@ -432,6 +434,7 @@ static bool load_cart(IM3Environment env, const char* path, Cart* out) {
     if (!wasm) { fprintf(stderr, "vex: cannot read %s\n", path); return false; }
 
     IM3Runtime rt = m3_NewRuntime(env, 64 * 1024 /* stack */, NULL);
+    if (!rt) { fprintf(stderr, "vex: cannot create runtime\n"); free(wasm); return false; }
     IM3Module mod;
     M3Result err = m3_ParseModule(env, &mod, wasm, wasm_len);
     if (err) { fprintf(stderr, "vex: parse: %s\n", err); m3_FreeRuntime(rt); free(wasm); return false; }
@@ -509,7 +512,7 @@ int main(int argc, char** argv) {
     // ---- load the cart into a wasm3 interpreter --------------------------
     IM3Environment env = m3_NewEnvironment();
     Cart cart;
-    if (!load_cart(env, cart_path, &cart)) return 1;
+    if (!load_cart(env, cart_path, &cart)) { m3_FreeEnvironment(env); return 1; }
     M3Result err;
 
     // ---- raylib window + framebuffer -------------------------------------
@@ -599,16 +602,14 @@ int main(int argc, char** argv) {
             sw = GetRenderWidth()  / dpi.x;
             sh = GetRenderHeight() / dpi.y;
         }
-        float scale = (sw / VEX_W < sh / VEX_H) ? sw / VEX_W : sh / VEX_H;
+        float view_scale = (sw / VEX_W < sh / VEX_H) ? sw / VEX_W : sh / VEX_H;
         if (integer_scale) {
-            // Floor to a whole multiple so every source pixel maps to the same
-            // number of screen pixels (crisp, at the cost of more border).
-            int s = (int)scale;
-            scale = (float)(s < 1 ? 1 : s);
+            int s = (int)view_scale;
+            view_scale = (float)(s < 1 ? 1 : s);
         }
-        float dw = VEX_W * scale, dh = VEX_H * scale;
+        float dw = VEX_W * view_scale, dh = VEX_H * view_scale;
         float ox = (sw - dw) / 2.0f, oy = (sh - dh) / 2.0f;
-        g_view_scale = scale; g_view_ox = ox; g_view_oy = oy;
+        g_view_scale = view_scale; g_view_ox = ox; g_view_oy = oy;
 
         // Run the cart, drawing into the framebuffer.
         BeginTextureMode(screen);
@@ -647,6 +648,7 @@ int main(int argc, char** argv) {
 
     UnloadRenderTexture(screen);
     CloseWindow();
+    m3_FreeEnvironment(env);
     m3_FreeRuntime(cart.rt);
     free(cart.wasm);
     return 0;
