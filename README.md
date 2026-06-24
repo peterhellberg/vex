@@ -193,9 +193,9 @@ In C, include [`vex.h`](vex.h):
 #include "vex.h"
 
 VEX_EXPORT("update") void update(void) {
-    cls(8);                 // clear to dark blue
-    text("HELLO", 4, 4, 12); // white text
-    rect(60, 60, 8, 8, 6);  // green square
+  cls(8);                  // clear to dark blue
+  text("VEX C", 8, 8, 12); // white text
+  rect(60, 60, 8, 8, 6);   // green square
 }
 ```
 
@@ -213,8 +213,11 @@ Or in Zig — import the [`vex.zig`](vex.zig) SDK and `export` the entry points:
 const vex = @import("vex");
 
 export fn update() void {
-    vex.cls(8);                 // clear to dark blue
-    vex.text("HELLO", 4, 4, 12); // white text
+    // clear to dark blue
+    vex.cls(8);
+
+    // white text
+    vex.text("VEX ZIG", 8, 8, 12);
 }
 ```
 
@@ -224,6 +227,12 @@ zig build-exe -target wasm32-freestanding \
   -femit-bin=mycart.wasm --dep vex \
   -Mroot=mycart.zig -Mvex=vex.zig
 ```
+
+> [!Note]
+>  
+> I've prepared makefiles for [C](base/c/Makefile) and [Zig](base/zig/Makefile) 
+> respectively, they are meant to make it easier to 
+> build carts written by hand.
 
 ## API
 

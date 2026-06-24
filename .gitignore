@@ -4,3 +4,6 @@
 /zig-pkg/
 *.log
 mycart*
+base/*/*.wasm
+base/*/vex.zig
+base/*/vex.h
