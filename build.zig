@@ -113,6 +113,15 @@ pub fn build(b: *std.Build) void {
                 exe.root_module.addCSourceFiles(.{
                     .root = wasm3.path("source"),
                     .files = &wasm3_core,
+                    // By default wasm3 packs its slot/constant tables as u32
+                    // (d_m3Use32BitSlots) and then stores 64-bit constants into
+                    // them, producing unaligned 8-byte writes (PushConst ->
+                    // Compile_Const_i64). x86_64/arm64 tolerate that, but Zig's
+                    // UBSan traps it in Debug/ReleaseSafe and aborts on the first
+                    // update() of any cart with an i64 const. Widen the slots to
+                    // u64 so those writes are naturally aligned -- the supported
+                    // 64-bit-host configuration, correct in every build mode.
+                    .flags = &.{"-Dd_m3Use32BitSlots=0"},
                 });
                 exe.root_module.addIncludePath(wasm3.path("source"));
                 exe.root_module.linkLibrary(raylib); // brings in raylib headers + platform libs
