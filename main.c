@@ -177,6 +177,15 @@ static void cart_cstr(IM3Runtime rt, const void* mem, const char* s, char* buf, 
     buf[n] = '\0';
 }
 
+// Reject coordinates that are obviously absurd (millions of pixels off-screen)
+// so a malformed cart can't pin raylib in its line/circle/triangle rasterizer.
+// Carts are allowed to draw slightly off-screen, so the bound is generous.
+#define VEX_COORD_MAX (VEX_W * 16) // ~5120 px: ~16x overscan tolerance
+static inline bool coord_ok(int32_t v) {
+    return v >= -VEX_COORD_MAX && v <= VEX_COORD_MAX;
+}
+#define COORDS_OK(x, y) (coord_ok(x) && coord_ok(y))
+
 // ---- host API: functions the cart imports from module "env" --------------
 // These run inside BeginTextureMode(), so raylib draws into the framebuffer.
 
@@ -190,6 +199,7 @@ m3ApiRawFunction(host_pset) {
     m3ApiGetArg(int32_t, x)
     m3ApiGetArg(int32_t, y)
     m3ApiGetArg(int32_t, color)
+    if (!COORDS_OK(x, y)) m3ApiSuccess();
     DrawPixel(x, y, PAL(color));
     m3ApiSuccess();
 }
@@ -201,6 +211,10 @@ m3ApiRawFunction(host_rect) {
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
     if (w <= 0 || h <= 0) m3ApiSuccess();
+    // Clamp w and h to the framebuffer so a malformed cart can't ask raylib
+    // to fill an INT_MAX-wide rectangle (which it accepts and stalls on).
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
     DrawRectangle(x, y, w, h, PAL(color));
     m3ApiSuccess();
 }
@@ -212,6 +226,8 @@ m3ApiRawFunction(host_rectb) {
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
     if (w <= 0 || h <= 0) m3ApiSuccess();
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
     // A 1px outline drawn as four filled edges inside the w*h box, so corners
     // are solid and pixel-aligned (DrawRectangleLines leaves corner gaps).
     Color c = PAL(color);
@@ -228,6 +244,8 @@ m3ApiRawFunction(host_circ) {
     m3ApiGetArg(int32_t, r)
     m3ApiGetArg(int32_t, color)
     if (r < 0) r = 0;
+    if (r > VEX_COORD_MAX) r = VEX_COORD_MAX;
+    if (!COORDS_OK(x, y)) m3ApiSuccess();
     DrawCircle(x, y, (float)r, PAL(color));
     m3ApiSuccess();
 }
@@ -238,6 +256,8 @@ m3ApiRawFunction(host_circb) {
     m3ApiGetArg(int32_t, r)
     m3ApiGetArg(int32_t, color)
     if (r < 0) r = 0;
+    if (r > VEX_COORD_MAX) r = VEX_COORD_MAX;
+    if (!COORDS_OK(x, y)) m3ApiSuccess();
     DrawCircleLines(x, y, (float)r, PAL(color));
     m3ApiSuccess();
 }
@@ -248,6 +268,7 @@ m3ApiRawFunction(host_line) {
     m3ApiGetArg(int32_t, x1)
     m3ApiGetArg(int32_t, y1)
     m3ApiGetArg(int32_t, color)
+    if (!COORDS_OK(x0, y0) || !COORDS_OK(x1, y1)) m3ApiSuccess();
     DrawLine(x0, y0, x1, y1, PAL(color));
     m3ApiSuccess();
 }
@@ -260,6 +281,7 @@ m3ApiRawFunction(host_tri) {
     m3ApiGetArg(int32_t, x3)
     m3ApiGetArg(int32_t, y3)
     m3ApiGetArg(int32_t, color)
+    if (!COORDS_OK(x1, y1) || !COORDS_OK(x2, y2) || !COORDS_OK(x3, y3)) m3ApiSuccess();
     // raylib keeps backface culling on, so a back-facing winding would be
     // dropped. Normalize to the front-facing order so any vertex order draws.
     // Cast before subtraction to avoid int32_t overflow UB.
@@ -281,6 +303,7 @@ m3ApiRawFunction(host_trib) {
     m3ApiGetArg(int32_t, x3)
     m3ApiGetArg(int32_t, y3)
     m3ApiGetArg(int32_t, color)
+    if (!COORDS_OK(x1, y1) || !COORDS_OK(x2, y2) || !COORDS_OK(x3, y3)) m3ApiSuccess();
     // DrawTriangleLines isn't subject to backface culling, but normalize the
     // winding the same way host_tri does so filled and outlined versions of
     // the same triangle share an edge order and carts don't have to remember
@@ -649,6 +672,11 @@ int main(int argc, char** argv) {
             sw = GetRenderWidth()  / dpi.x;
             sh = GetRenderHeight() / dpi.y;
         }
+        // raylib can briefly report 0 from these if a monitor is unplugged
+        // between the fullscreen toggle and this read. Guard so view_scale
+        // and the viewport below never see a zero dimension.
+        if (sw < 1.0f) sw = 1.0f;
+        if (sh < 1.0f) sh = 1.0f;
         float view_scale = (sw / VEX_W < sh / VEX_H) ? sw / VEX_W : sh / VEX_H;
         if (integer_scale) {
             int s = (int)view_scale;
