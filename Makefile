@@ -24,6 +24,7 @@ CART ?= bin/cart.wasm
 all:
 	zig build --prefix .
 	go build -o bin/vex-web ./cmd/vex-web
+	go build -o bin/vex-run ./cmd/vex-run
 
 run:
 	zig build run
@@ -43,6 +44,7 @@ install: all
 	install -m 0755 bin/vex $(BINDIR)/vex
 	install -m 0755 bin/vex-init $(BINDIR)/vex-init
 	install -m 0755 bin/vex-web $(BINDIR)/vex-web
+	install -m 0755 bin/vex-run $(BINDIR)/vex-run
 
 uninstall:
 	rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web
