@@ -140,29 +140,45 @@ static const uint64_t FONT8[96] = {
     0x0000000000000000ULL  // 127 DEL
 };
 
-// Draw a string with the 8x8 font: one framebuffer pixel per set bit, advancing
+// Draw a string with the 8x8 font: one textured quad per glyph, advancing
 // 8 px per glyph (unsupported chars leave an 8 px gap) -- matching vex.js text().
+
+// Pre-rendered font atlas: 96 glyphs laid out left-to-right in one 768x8 RGBA
+// texture. Each "set" pixel is opaque white (1,1,1,255); each "clear" pixel is
+// fully transparent (0,0,0,0). draw_text() then emits one textured quad per
+// glyph (DrawTexturePro with the tint color) instead of N filled rectangles,
+// which cuts the per-call cost from ~10 raylib draws per glyph down to 1.
+static Texture2D g_font_atlas = {0};
+static void init_font_atlas(void) {
+    Image atlas = GenImageColor(96 * 8, 8, BLANK); // BLANK = (0,0,0,0)
+    for (int g = 0; g < 96; g++) {
+        uint64_t bits = FONT8[g];
+        for (int row = 0; row < 8; row++) {
+            unsigned byte = (unsigned)(bits >> ((7 - row) * 8)) & 0xFF;
+            for (int col = 0; col < 8; col++) {
+                if (byte & (1u << (7 - col))) {
+                    ImageDrawPixel(&atlas, g * 8 + col, row, WHITE);
+                }
+            }
+        }
+    }
+    g_font_atlas = LoadTextureFromImage(atlas);
+    SetTextureFilter(g_font_atlas, TEXTURE_FILTER_POINT);
+    UnloadImage(atlas);
+}
+
 static void draw_text(const char* s, int x, int y, Color c) {
     for (; *s; s++, x += 8) {
         int idx = (unsigned char)*s - VEX_FONT_FIRST;
         if (idx < 0 || idx >= 96) continue;
-
-        uint64_t glyph = FONT8[idx];
-        for (int row = 0; row < 8; row++) {
-            // Same row-run batching trick as host_blit: walk the 8 glyph bits
-            // and emit one DrawRectangle per run of set bits instead of one
-            // DrawPixel per set bit. Typical text glyphs (15-25% pixel density)
-            // go from ~16 DrawPixel per glyph down to ~10 DrawRectangle.
-            unsigned bits = (unsigned)(glyph >> ((7 - row) * 8)) & 0xFF;
-            int col = 0;
-            while (col < 8) {
-                while (col < 8 && !(bits & (1u << (7 - col)))) col++;
-                if (col >= 8) break;
-                int start = col;
-                while (col < 8 && (bits & (1u << (7 - col)))) col++;
-                DrawRectangle(x + start, y + row, col - start, 1, c);
-            }
-        }
+        // One textured quad per glyph instead of ~10 filled rectangles per
+        // glyph: the font atlas is pre-rendered at startup as one 768x8 RGBA
+        // texture with white pixels where the glyph is set and alpha=0
+        // elsewhere; tint=c and the default alpha blend discard the clear
+        // pixels and paint the rest with the cart's color.
+        Rectangle src = { (float)(idx * 8), 0.0f, 8.0f, 8.0f };
+        Rectangle dst = { (float)x, (float)y, 8.0f, 8.0f };
+        DrawTexturePro(g_font_atlas, src, dst, (Vector2){0, 0}, 0.0f, c);
     }
 }
 
@@ -633,6 +649,7 @@ int main(int argc, char** argv) {
 
     RenderTexture2D screen = LoadRenderTexture(VEX_W, VEX_H);
     SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
+    init_font_atlas();
 
     reset_palette();
 
@@ -779,6 +796,7 @@ int main(int argc, char** argv) {
     }
 
     UnloadRenderTexture(screen);
+    UnloadTexture(g_font_atlas);
     g_window_open = false;
     CloseWindow();
     m3_FreeRuntime(cart.rt);
