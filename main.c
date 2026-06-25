@@ -303,6 +303,11 @@ m3ApiRawFunction(host_blit) {
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, key)
     if (w <= 0 || h <= 0) m3ApiSuccess();
+    // Cap w and h to the framebuffer so a malformed cart can't make wasm3 walk
+    // a multi-gigabyte memory range inside m3ApiCheckMem (DoS via stalled
+    // validation) or stall the host drawing millions of pixels per frame.
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
     if ((size_t)w > (size_t)-1 / (size_t)h) m3ApiSuccess();
     m3ApiCheckMem(data, (size_t)w * (size_t)h);
     for (int32_t row = 0; row < h; row++) {
