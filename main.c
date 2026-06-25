@@ -236,6 +236,7 @@ m3ApiRawFunction(host_rect) {
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
     if (w <= 0 || h <= 0) m3ApiSuccess();
+    if (!COORDS_OK(x, y)) m3ApiSuccess();
     // Clamp w and h to the framebuffer so a malformed cart can't ask raylib
     // to fill an INT_MAX-wide rectangle (which it accepts and stalls on).
     if (w > VEX_W) w = VEX_W;
@@ -251,6 +252,7 @@ m3ApiRawFunction(host_rectb) {
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
     if (w <= 0 || h <= 0) m3ApiSuccess();
+    if (!COORDS_OK(x, y)) m3ApiSuccess();
     if (w > VEX_W) w = VEX_W;
     if (h > VEX_H) h = VEX_H;
     // A 1px outline drawn as four filled edges inside the w*h box, so corners
@@ -354,6 +356,7 @@ m3ApiRawFunction(host_blit) {
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, key)
     if (w <= 0 || h <= 0) m3ApiSuccess();
+    if (!COORDS_OK(x, y)) m3ApiSuccess();
     // Cap w and h to the framebuffer so a malformed cart can't make wasm3 walk
     // a multi-gigabyte memory range inside m3ApiCheckMem (DoS via stalled
     // validation) or stall the host drawing millions of pixels per frame.
@@ -558,8 +561,23 @@ static bool load_cart(IM3Environment env, const char* path, Cart* out) {
     // (e.g. an API that was removed/renamed, or is newer than this build).
     // Distinguish that from a cart that genuinely lacks an update() export, so
     // the message points at the real cause instead of blaming the export.
+    // boot() is optional: missing export is fine, but a missing-import-style
+    // error (which can happen for a malformed cart) is reported the same way as
+    // for update() -- silently zeroing f_boot there would mask real bugs.
     IM3Function f_boot = NULL, f_update = NULL;
-    m3_FindFunction(&f_boot, rt, "boot");                 // optional
+    err = m3_FindFunction(&f_boot, rt, "boot");
+    if (err && err != m3Err_functionLookupFailed) {
+        if (err == m3Err_functionImportMissing) {
+            M3ErrorInfo info;
+            m3_GetErrorInfo(rt, &info);
+            fprintf(stderr, "vex: cart needs a host function this vex doesn't provide%s%s\n",
+                    (info.message && info.message[0]) ? ": " : "",
+                    (info.message && info.message[0]) ? info.message : "");
+        } else {
+            fprintf(stderr, "vex: cannot load cart: %s\n", err);
+        }
+        m3_FreeRuntime(rt); free(wasm); return false;
+    }
     err = m3_FindFunction(&f_update, rt, "update");
     if (err == m3Err_functionImportMissing) {
         M3ErrorInfo info;
