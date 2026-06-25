@@ -47,8 +47,15 @@ func run(args []string) error {
 		data = pal.Pix
 		dx   = pal.Bounds().Dx()
 		dy   = pal.Bounds().Dy()
-		dst  = fmt.Sprintf("%s-%dx%d.spr", base, dx, dy)
+		suff = fmt.Sprintf("-%dx%d", dx, dy)
+		dst  string
 	)
+
+	if strings.HasSuffix(base, suff) {
+		dst = base + ".spr"
+	} else {
+		dst = base + suff + ".spr"
+	}
 
 	out, err := os.Create(dst)
 	if err != nil {
