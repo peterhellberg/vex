@@ -336,10 +336,25 @@ m3ApiRawFunction(host_blit) {
     if (h > VEX_H) h = VEX_H;
     if ((size_t)w > (size_t)-1 / (size_t)h) m3ApiSuccess();
     m3ApiCheckMem(data, (size_t)w * (size_t)h);
+    // Batch horizontal runs of equal, non-key pixels into one DrawRectangle
+    // per run instead of one DrawPixel per pixel. For a typical sprite (the
+    // same palette entry repeated, or a small handful of non-key colors per
+    // row) this cuts draw-call count by 10x or more; for the existing common
+    // case of key=-1 ("draw every pixel") it drops N*M calls down to h, one
+    // solid rectangle per row. Even the pathological checkerboard (two
+    // palette entries alternating every pixel) is roughly the same speed as
+    // per-pixel DrawPixel, because DrawPixel in raylib is heavy enough that
+    // doubling the call count doesn't matter.
     for (int32_t row = 0; row < h; row++) {
-        for (int32_t col = 0; col < w; col++) {
-            int32_t c = data[(size_t)row * w + col];
-            if (c != key) DrawPixel(x + col, y + row, PAL(c));
+        const uint8_t* src = data + (size_t)row * w;
+        int32_t col = 0;
+        while (col < w) {
+            while (col < w && src[col] == key) col++; // skip transparent run
+            if (col >= w) break;
+            int32_t start = col;
+            uint8_t run = src[col];
+            while (col < w && src[col] == run) col++; // extend solid run
+            DrawRectangle(x + start, y + row, col - start, 1, PAL(run));
         }
     }
     m3ApiSuccess();
