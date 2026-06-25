@@ -148,6 +148,19 @@ identical to what you'd write for `vex` or `vex-web`.
 `make install` puts `vex-run` on your `PATH` alongside `vex`, `vex-init`,
 and `vex-web`.
 
+> [!Note]
+> On Linux, ebitengine's X11 backend ([xgb](https://github.com/jezek/xgb))
+> prints two lines on startup if it can't read a valid `~/.Xauthority`:
+>
+> ```
+> XGB: conn.go:69: Could not get authority info: EOF
+> XGB: conn.go:70: Trying connection without authority info...
+> ```
+>
+> The second line means it falls back to an unauthenticated X11 connection,
+> which works on any normal desktop session; the messages are harmless
+> startup output and the run continues normally.
+
 ## Web version
 
 The same carts run unchanged in the browser. 
