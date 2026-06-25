@@ -278,6 +278,16 @@ m3ApiRawFunction(host_trib) {
     m3ApiGetArg(int32_t, x3)
     m3ApiGetArg(int32_t, y3)
     m3ApiGetArg(int32_t, color)
+    // DrawTriangleLines isn't subject to backface culling, but normalize the
+    // winding the same way host_tri does so filled and outlined versions of
+    // the same triangle share an edge order and carts don't have to remember
+    // which entry point normalizes.
+    int64_t cross = (int64_t)(x2 - x1) * (y3 - y1) - (int64_t)(y2 - y1) * (x3 - x1);
+    if (cross > 0) {
+        int32_t tx = x2, ty = y2;
+        x2 = x3; y2 = y3;
+        x3 = tx; y3 = ty;
+    }
     DrawTriangleLines((Vector2){x1, y1}, (Vector2){x2, y2}, (Vector2){x3, y3}, PAL(color));
     m3ApiSuccess();
 }
