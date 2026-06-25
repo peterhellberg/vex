@@ -1,2 +1,4 @@
 -I.
+-Izig-pkg/raylib-6.0.0-whq8uLXSLwWGU9sQmZVQm0RquGkb0vEediLE8EoK9IYn/src
+-Izig-pkg/N-V-__8AAPJTRwDyyZ7xBJrI5d3EG3JfvAPjPvNcdHLp0zqS/source
 -Wno-unknown-attributes
