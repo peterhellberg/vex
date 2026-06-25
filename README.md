@@ -100,7 +100,8 @@ system X11/GL libraries (present on any desktop) are needed at runtime.
 
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. 
 
-Arrow keys, `Z`, and `X` are passed to the cart via `btn()`.
+Arrow keys, `Z`, and `X` are passed to the cart via `btn()` _(held)_ and
+`btnp()` _(just pressed this frame)_.
 
 > [!Note]
 > These shortcuts apply to the C host `vex`. The Go host `vex-run` only
@@ -187,7 +188,7 @@ the cart **live-reloads** it in the browser, no refresh or restart needed.
 > go run ./cmd/vex-web zig-out/bin/zcart.wasm  # terminal 2: serve + auto-reload
 > ```
 
-Arrow keys, `Z`, and `X` map to `btn()`, and the mouse maps to
+Arrow keys, `Z`, and `X` map to `btn()` and `btnp()`, and the mouse maps to
 `mx()`/`my()`/`mbtn()`, just like the native host.
 
 > [!Tip]
@@ -299,6 +300,7 @@ zig build-exe -target wasm32-freestanding \
 | `text(s, x, y, color)` | draw a string |
 | `title(s)` | set the window title |
 | `btn(button) -> int` | `1` if a button is held, else `0` |
+| `btnp(button) -> int` | `1` if a button was just pressed this frame _(edge detection; same button numbers as `btn()`)_, else `0` |
 | `mx() -> int` / `my() -> int` | mouse position in framebuffer pixels (`0..319` / `0..179`) |
 | `mbtn(button) -> int` | `1` if a mouse button is held (0 left, 1 right, 2 middle) |
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
@@ -342,8 +344,9 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
 - **Color is a palette index** `0..15`, never a raw RGB value. Remap an entry at
   runtime with `pal(index, 0xRRGGBB)` and restore the defaults with `palreset()`.
 - **Input** — read the buttons with `btn(n)` _(the d-pad and A/B, mapped to the
-  arrow keys and `Z`/`X`)_ and the mouse with `mx()`/`my()`/`mbtn(n)`. See the
-  [API](#api) for the exact button numbers.
+  arrow keys and `Z`/`X`)_ for held state and `btnp(n)` for a one-shot on the
+  frame a button is first pressed. The mouse is read with `mx()`/`my()`/`mbtn(n)`.
+  See the [API](#api) for the exact button numbers.
 
 ### Components
 
