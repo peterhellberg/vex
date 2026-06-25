@@ -584,7 +584,12 @@ int main(int argc, char** argv) {
         bool want_reload = super && IsKeyPressed(KEY_R);
         if (watch && ++poll >= VEX_WATCH_FRAMES) {
             poll = 0;
-            if (GetFileModTime(cart_path) != last_mod) want_reload = true;
+            // GetFileModTime returns 0 when the file is missing (e.g. the user
+            // is in the middle of renaming or deleting it). Treat that as
+            // "nothing to reload" instead of attempting one every poll, which
+            // would spam "cannot read ..." to stderr twice a second.
+            long m = GetFileModTime(cart_path);
+            if (m != 0 && m != last_mod) want_reload = true;
         }
         if (want_reload && reload_cart(env, cart_path, &cart)) {
             last_mod = GetFileModTime(cart_path);
