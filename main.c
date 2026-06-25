@@ -447,6 +447,11 @@ static M3Result link_host(IM3Module mod) {
     return m3Err_none;
 }
 
+// Set after InitWindow() and cleared before CloseWindow(); read by die() so
+// raylib is only torn down when it was actually set up. Declared before die()
+// so the cleanup branch compiles.
+static bool g_window_open = false;
+
 static void die(IM3Runtime rt, const char* what, M3Result err) {
     if (rt) {
         M3ErrorInfo info;
@@ -454,6 +459,13 @@ static void die(IM3Runtime rt, const char* what, M3Result err) {
         fprintf(stderr, "vex: %s: %s (%s)\n", what, err, info.message ? info.message : "");
     } else {
         fprintf(stderr, "vex: %s: %s\n", what, err);
+    }
+    // Close raylib's window before exit so its GL teardown doesn't print a
+    // noisy "context still bound" warning. Guarded because die() may be called
+    // before InitWindow() (e.g. from a wasm load error in main).
+    if (g_window_open) {
+        g_window_open = false;
+        CloseWindow();
     }
     exit(1);
 }
@@ -537,14 +549,28 @@ static bool load_cart(IM3Environment env, const char* path, Cart* out) {
 static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     Cart fresh;
     if (!load_cart(env, path, &fresh)) return false;
+
+    // Try boot() on the fresh cart BEFORE swapping it in: if it traps, the
+    // old cart (which is still running) stays untouched. Doing it after the
+    // swap would force die() on any boot-time runtime error and bring down
+    // the host over a bad edit.
+    if (fresh.f_boot) {
+        M3Result err = m3_CallV(fresh.f_boot);
+        if (err) {
+            M3ErrorInfo info;
+            m3_GetErrorInfo(fresh.rt, &info);
+            fprintf(stderr, "vex: boot: %s (%s)\n", err,
+                    info.message ? info.message : "");
+            m3_FreeRuntime(fresh.rt);
+            free(fresh.wasm);
+            return false;
+        }
+    }
+
     m3_FreeRuntime(cart->rt);
     free(cart->wasm);
     *cart = fresh;
     reset_palette();
-    if (cart->f_boot) {
-        M3Result err = m3_CallV(cart->f_boot);
-        if (err) die(cart->rt, "boot", err);
-    }
     return true;
 }
 
@@ -578,6 +604,7 @@ int main(int argc, char** argv) {
     // ---- raylib window + framebuffer -------------------------------------
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(VEX_W * scale, VEX_H * scale, "vex");
+    g_window_open = true;
     SetTargetFPS(60);
 
     RenderTexture2D screen = LoadRenderTexture(VEX_W, VEX_H);
@@ -728,6 +755,7 @@ int main(int argc, char** argv) {
     }
 
     UnloadRenderTexture(screen);
+    g_window_open = false;
     CloseWindow();
     m3_FreeRuntime(cart.rt);
     m3_FreeEnvironment(env);
