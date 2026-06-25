@@ -590,6 +590,13 @@ static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     Cart fresh;
     if (!load_cart(env, path, &fresh)) return false;
 
+    // Match the initial start order: reset the palette to defaults BEFORE the
+    // new boot() runs, so boot()'s pal()/title() calls land on a known
+    // baseline. Doing reset_palette() *after* boot() would erase any palette
+    // overrides the cart's boot() made (e.g. vex.pal(0, ...)) -- which is the
+    // original bug this comment now documents.
+    reset_palette();
+
     // Try boot() on the fresh cart BEFORE swapping it in: if it traps, the
     // old cart (which is still running) stays untouched. Doing it after the
     // swap would force die() on any boot-time runtime error and bring down
@@ -610,7 +617,6 @@ static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     m3_FreeRuntime(cart->rt);
     free(cart->wasm);
     *cart = fresh;
-    reset_palette();
     return true;
 }
 
@@ -657,6 +663,15 @@ int main(int argc, char** argv) {
         err = m3_CallV(cart.f_boot);
         if (err) die(cart.rt, "boot", err);
     }
+
+    // Prime the framebuffer with a clean clear before the main loop runs, so
+    // the very first visible frame isn't uninitialized GPU memory. Carts that
+    // call cls() in their first update() will overwrite this on the first
+    // iteration; carts that skip cls() start from a known-dark-blue state
+    // (palette[0] after boot()'s pal() overrides) instead of GPU garbage.
+    BeginTextureMode(screen);
+        ClearBackground(PAL(0));
+    EndTextureMode();
 
     bool integer_scale = false; // crisp integer scale vs. fractional fill;
                                 // enabled automatically on entering fullscreen
