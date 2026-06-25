@@ -17,7 +17,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("Usage: vex-png-to-spr image.png # Creates image.spr")
+		return fmt.Errorf("Usage: vex-png-to-spr image.png # Creates image-WxH.spr")
 	}
 
 	src := args[1]
