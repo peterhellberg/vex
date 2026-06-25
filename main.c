@@ -149,9 +149,18 @@ static void draw_text(const char* s, int x, int y, Color c) {
 
         uint64_t glyph = FONT8[idx];
         for (int row = 0; row < 8; row++) {
+            // Same row-run batching trick as host_blit: walk the 8 glyph bits
+            // and emit one DrawRectangle per run of set bits instead of one
+            // DrawPixel per set bit. Typical text glyphs (15-25% pixel density)
+            // go from ~16 DrawPixel per glyph down to ~10 DrawRectangle.
             unsigned bits = (unsigned)(glyph >> ((7 - row) * 8)) & 0xFF;
-            for (int col = 0; col < 8; col++) {
-                if (bits & (1u << (7 - col))) DrawPixel(x + col, y + row, c);
+            int col = 0;
+            while (col < 8) {
+                while (col < 8 && !(bits & (1u << (7 - col)))) col++;
+                if (col >= 8) break;
+                int start = col;
+                while (col < 8 && (bits & (1u << (7 - col)))) col++;
+                DrawRectangle(x + start, y + row, col - start, 1, c);
             }
         }
     }
