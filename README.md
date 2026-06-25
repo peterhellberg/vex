@@ -1,15 +1,17 @@
 # vex
 
-A minimal WASM-based fantasy console in a single [`main.c`](main.c)
+A minimal WASM-based fantasy console.
 
-The console is the **host**:
+A *cart* is any `wasm32` module that exports `update()` and imports a tiny
+drawing/input API from the host. The host opens a window, runs the cart at
+**60 fps**, and blits the fixed **320×180**, **16-color** framebuffer to the
+screen.
 
- - it opens a window, 
- - loads a `.wasm` *cart*
- - links a tiny drawing/input API the cart imports 
- - calls the cart's exported `update()` once per frame _(60 fps)_ 
+There are three interchangeable hosts:
 
-_Carts draw into a fixed **320×180**, **16-color** framebuffer._
+ - [`vex`](main.c) — the reference native host, in C _(raylib + wasm3)_
+ - [`vex-run`](cmd/vex-run/main.go) — a native host in Go _(ebitengine + wazero)_
+ - [`vex-web`](cmd/vex-web/main.go) — a browser host _(a `<canvas>` in a small Go server)_
 
 For the specs and internals, see [How vex works](#how-vex-works).
 
@@ -40,13 +42,14 @@ zig build --prefix . -Dhost=false   # only the carts + SDK (skip the raylib host
 they need no prefix.
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`,
-passing `--prefix .` for you so all binaries — including the Go `vex-web` — land
-in `./bin`. 
+passing `--prefix .` for you so all binaries — including the Go `vex-web` and
+`vex-run` — land in `./bin`. 
 
-`make install` copies `vex`, `vex-init`, and `vex-web` from there to
+`make install` copies `vex`, `vex-init`, `vex-web`, and `vex-run` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
 
-`vex` is invoked as `vex [-s scale] [-w] <cart.wasm>`. 
+`vex` is invoked as `vex [-s scale] [-w] <cart.wasm>`. For a dependency-free
+alternative written in Go, see [Native Go version](#native-go-version). 
 
 The window is the 320×180 framebuffer times `scale` 
 _(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it. 
@@ -98,6 +101,51 @@ system X11/GL libraries (present on any desktop) are needed at runtime.
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. 
 
 Arrow keys, `Z`, and `X` are passed to the cart via `btn()`.
+
+> [!Note]
+> These shortcuts apply to the C host `vex`. The Go host `vex-run` only
+> supports `Esc` (quit) and `Cmd`+`Enter` (fullscreen); the C host's
+> `Super`+`I`/`Super`+`R` reload and integer-scale toggles are not
+> implemented there. The web host has no global shortcuts — see the
+> [Web version](#web-version) section.
+
+## Native Go version
+
+The same carts also run on a native host written entirely in Go —
+[`vex-run`](cmd/vex-run/main.go) uses [wazero](https://wazero.io/) to run the
+cart and [ebitengine](https://ebitengine.org/) to draw into a window, so it
+ships as a single statically-linked binary with **no system packages to
+install** _(no `libgl1-mesa-dev`, no X11, no Zig toolchain)_.
+
+The CLI matches the C host:
+
+```sh
+# straight from GitHub, no checkout needed:
+go run github.com/peterhellberg/vex/cmd/vex-run@latest mycart.wasm
+
+# or from a checkout of this repo:
+make                                            # builds bin/vex-run via `go build`
+go run ./cmd/vex-run -s 5 mycart.wasm           # -s/--scale and -w/--watch work too
+go run ./cmd/vex-run -w mycart.wasm             # auto-reload on cart changes
+```
+
+`-s`/`--scale` sets the window scale (default 3, i.e. **960×540**) and
+`-w`/`--watch` polls the cart file and reloads it whenever it changes —
+the same live-reload workflow as `vex` and `vex-web`.
+
+> [!Tip]
+> **No system dependencies** is the headline reason to prefer `vex-run`
+> on Linux: a fresh `apt install golang-go && go run .../vex-run mycart.wasm`
+> is enough — none of the `libgl1-mesa-dev` / `libx11-dev` packages that the
+> C host needs.
+
+The cart is loaded by `wazero`, and the same console API _(framebuffer,
+SWEETIE-16 palette, drawing, input, **8×8 bitmap font**)_ is reimplemented in
+Go and linked into the cart's `env` imports — so the cart source is
+identical to what you'd write for `vex` or `vex-web`.
+
+`make install` puts `vex-run` on your `PATH` alongside `vex`, `vex-init`,
+and `vex-web`.
 
 ## Web version
 
@@ -299,15 +347,33 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
 
 ### Components
 
-- **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest embeddable
-  WASM interpreter _(pure C, MIT)_; only its core files are compiled.
-- **Graphics/input:** [raylib](https://www.raylib.com/).
-- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the host, the
-  `vex-init` scaffolder, and both example carts.
+There are three interchangeable hosts — see the [Native Go
+version](#native-go-version) and [Web version](#web-version) sections for the
+Go and browser alternatives:
 
-Both dependencies are pulled in via [`build.zig.zon`](build.zig.zon) and built
-from source. They're lazy: only the host needs them, so a cart-only build
-(`-Dhost=false`) fetches neither and needs no system packages on any platform.
+- **C host (`vex`)** — the reference implementation in [`main.c`](main.c).
+  - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
+    embeddable WASM interpreter _(pure C, MIT)_; only its core files are
+    compiled.
+  - **Graphics/input:** [raylib](https://www.raylib.com/).
+- **Go host (`vex-run`)** — [`cmd/vex-run/main.go`](cmd/vex-run/main.go).
+  - **Runtime:** [wazero](https://wazero.io/) — a pure-Go WASM runtime
+    _(no cgo)_.
+  - **Graphics/input:** [ebitengine](https://ebitengine.org/) — a pure-Go
+    2D game engine; brings its own OpenGL/DirectX/Metal backends, so no
+    X11/GL system packages are needed at runtime.
+- **Web host (`vex-web`)** — a `<canvas>` reimplemented in
+  [`vex.js`](cmd/vex-web/assets/vex.js), served by a small Go HTTP server.
+- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the C host,
+  the `vex-init` scaffolder, and both example carts; `make` also builds
+  `vex-run` and `vex-web` with `go build`.
 
-On macOS and Windows the only requirement is `zig`; on Linux the host also links
-the system X11/OpenGL libraries _(see [Linux prerequisites](#linux-prerequisites))_.
+The C host's dependencies are pulled in via [`build.zig.zon`](build.zig.zon)
+and built from source. They're lazy: only the host needs them, so a
+cart-only build (`-Dhost=false`) fetches neither and needs no system packages
+on any platform. The Go hosts only need a recent Go toolchain.
+
+On macOS and Windows the only requirement is `zig`; on Linux the C host also
+links the system X11/OpenGL libraries _(see [Linux
+prerequisites](#linux-prerequisites))_. The Go hosts need nothing beyond
+Go itself on any platform.
