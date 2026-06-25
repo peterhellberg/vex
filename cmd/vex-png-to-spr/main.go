@@ -10,13 +10,14 @@ import (
 
 func main() {
 	if err := run(os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
 	if len(args) < 2 {
-		fmt.Println("Usage: vex-png-to-spr image.png # Creates image.spr")
+		return fmt.Errorf("Usage: vex-png-to-spr image.png # Creates image.spr")
 	}
 
 	src := args[1]
