@@ -20,6 +20,9 @@
 #define VEX_W      320   // logical screen width  (keep in sync with vex.h)
 #define VEX_H      180   // logical screen height (keep in sync with vex.h)
 #define VEX_SCALE    3   // default window pixels per logical pixel (override with -s)
+#define VEX_SCALE_MAX 20 // -s/--scale: upper clamp. A too-large scale can drive
+                         // the window beyond the metal device's max texture
+                         // size and trip MTLTextureDescriptorValidation.
 #define VEX_WATCH_FRAMES 30 // -w/--watch: poll the cart's mtime every ~0.5s (at 60fps)
 
 // Default SWEETIE-16 palette: 16 colors, indexed 0..15. Carts can override
@@ -541,6 +544,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (scale < 1) scale = 1;
+    if (scale > VEX_SCALE_MAX) scale = VEX_SCALE_MAX;
 
     // ---- load the cart into a wasm3 interpreter --------------------------
     IM3Environment env = m3_NewEnvironment();
