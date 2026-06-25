@@ -5,6 +5,7 @@
 // the reusable vex.zig SDK.
 
 const vex = @import("vex");
+const spr = @import("spr");
 
 const W = vex.WIDTH;
 const H = vex.HEIGHT;
@@ -38,6 +39,9 @@ const FACE = [_]u8{
     0,  0,  4,  4,  4,  4,  0,  0,
 };
 // zig fmt: on
+
+// Sprites can also be loaded from a paletted PNG at compile time:
+const z = spr.fromPNG(@embedFile("z-16x16.png"), 256);
 
 export fn boot() void {
     vex.title("vex - Zig cart");
@@ -80,9 +84,7 @@ inline fn draw(s: *State) void {
     vex.line(s.px + P / 2, s.py + P / 2, W / 2, H - 1, 15);
 
     vex.text("VEX ZIG", 6, 6, 12); // white
-    vex.text("ARROWS + Z", 6, 18, 13); // muted blue-grey
-
-    vex.circb(60, 44, 9, 13); // outlined moon
+    vex.text("ARROWS +", 6, 18, 13); // muted blue-grey
 
     // Player: filled square (red while A held, otherwise green) with a border.
     const fill: i32 = if (vex.down(vex.A)) 2 else 5;
@@ -93,6 +95,9 @@ inline fn draw(s: *State) void {
     // Sprite: the 8x8 face blitted onto the player, centered. Index 0 is the
     // transparent key, so the player's fill shows through the corners.
     vex.blit(&FACE, s.px + (P - 8) / 2, s.py + (P - 8) / 2, 8, 8, 0);
+
+    // Sprite loaded from a paletted PNG via @embedFile + spr.fromPNG.
+    vex.blit(&z.data, 72, 13, 16, 16, 0);
 
     const cfill: i32 = if (vex.mdown(vex.MOUSE_LEFT)) 2 else 12;
 

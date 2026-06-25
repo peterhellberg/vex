@@ -34,6 +34,9 @@ pub fn build(b: *std.Build) void {
     // `@import("vex")`. Cheap to expose -- it pulls in no other dependencies.
     const vex_mod = b.addModule("vex", .{ .root_source_file = b.path("vex.zig") });
 
+    // comptime PNG→spr decoder, imported as `const spr = @import("spr");`.
+    const spr_mod = b.addModule("spr", .{ .root_source_file = b.path("spr.zig") });
+
     // --- carts: wasm32-freestanding modules ---------------------------------
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -60,7 +63,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("examples/zcart/main.zig"),
             .target = wasm_target,
             .optimize = .ReleaseSmall,
-            .imports = &.{.{ .name = "vex", .module = vex_mod }},
+            .imports = &.{
+                .{ .name = "vex", .module = vex_mod },
+                .{ .name = "spr", .module = spr_mod },
+            },
         }),
     });
     cart_zig.entry = .disabled;
