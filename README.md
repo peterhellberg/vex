@@ -115,8 +115,8 @@ Arrow keys, `Z`, and `X` are passed to the cart via `btn()` _(held)_ and
 The same carts also run on a native host written entirely in Go —
 [`vex-run`](cmd/vex-run/main.go) uses [wazero](https://wazero.io/) to run the
 cart and [ebitengine](https://ebitengine.org/) to draw into a window, so it
-ships as a single statically-linked binary with **no system packages to
-install** _(no `libgl1-mesa-dev`, no X11, no Zig toolchain)_.
+ships as a single self-contained binary with **fewer system dependencies**
+than the C host — no `libgl1-mesa-dev`, no Zig toolchain, and no `pkg-config`.
 
 The CLI matches the C host:
 
@@ -135,10 +135,11 @@ go run ./cmd/vex-run -w mycart.wasm             # auto-reload on cart changes
 the same live-reload workflow as `vex` and `vex-web`.
 
 > [!Tip]
-> **No system dependencies** is the headline reason to prefer `vex-run`
-> on Linux: a fresh `apt install golang-go && go run .../vex-run mycart.wasm`
-> is enough — none of the `libgl1-mesa-dev` / `libx11-dev` packages that the
-> C host needs.
+> On Linux, `vex-run` still needs the X11 development headers at build time
+> (ebitengine's vendored GLFW links against them), but neither `libgl1-mesa-dev`
+> nor `pkg-config` are required. You also need **Go ≥ 1.25.0** — a tarball from
+> [go.dev](https://go.dev/dl/) works on any release; check your
+> distro's `golang-go` before relying on `apt install` alone.
 
 The cart is loaded by `wazero`, and the same console API _(framebuffer,
 SWEETIE-16 palette, drawing, input, **8×8 bitmap font**)_ is reimplemented in
