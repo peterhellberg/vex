@@ -155,10 +155,10 @@ const build_zig_tmpl =
     \\        .os_tag = .freestanding,
     \\    }});
     \\
-    \\    // The vex SDK provides the `vex` module (the host API bindings).
-    \\    // `.host = false` keeps raylib/wasm3 from being fetched -- a cart only
-    \\    // needs the module, not the console host.
-    \\    const vex = b.dependency("vex", .{{ .host = false }});
+    \\    // The vex SDK provides the `vex` module (the host API bindings). The
+    \\    // SDK has no external dependencies, so a cart build never fetches
+    \\    // anything heavy (raylib/wasm3 live in a separate cmd/vex package).
+    \\    const vex = b.dependency("vex", .{{}});
     \\
     \\    const cart = b.addExecutable(.{{
     \\        .name = "{s}",
