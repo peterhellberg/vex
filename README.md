@@ -9,7 +9,7 @@ screen.
 
 There are three interchangeable hosts:
 
- - [`vex`](main.c) — the reference native host, in C _(raylib + wasm3)_
+ - [`vex`](cmd/vex/main.c) — the reference native host, in C _(raylib + wasm3)_
  - [`vex-run`](cmd/vex-run/main.go) — a native host in Go _(ebitengine + wazero)_
  - [`vex-web`](cmd/vex-web/main.go) — a browser host _(a `<canvas>` in a small Go server)_
 
@@ -30,20 +30,25 @@ Dependencies are fetched on first build.
 > `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.305+bdfbf432d.tar.xz`.
 
 ```sh
-zig build --prefix .    # build vex + vex-init + cart.wasm + zcart.wasm into ./bin
+zig build --prefix .    # build vex-init + cart.wasm + zcart.wasm into ./bin
+cd cmd/vex && zig build --prefix ../..   # build the ./vex host into ../bin
 zig build run           # build, then run the C example cart
 zig build runz          # build, then run the Zig example cart
 zig build run -- -s 5   # forward flags to vex (here: window scale 5)
-zig build --prefix . -Dhost=false   # only the carts + SDK (skip the raylib host)
 ```
 
 `--prefix .` installs into `./bin`; a plain `zig build` uses Zig's default
-`zig-out/`. The `run`/`runz` steps execute straight from the build cache, so
-they need no prefix.
+`zig-out/`.
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, `make web`,
 `make test-web`, and `make clean`, passing `--prefix .` for you so all
 binaries — including the Go `vex-web` and `vex-run` — land in `./bin`.
+Plain `make` builds both the SDK package and the `cmd/vex` host package.
+
+The build is split across two Zig packages on purpose: only `cmd/vex/`
+(the host) declares `raylib` + `wasm3` as dependencies. The SDK package
+itself has no external dependencies, so a cart that just imports `vex`
+fetches nothing heavy.
 
 `make install` copies `vex`, `vex-init`, `vex-web`, and `vex-run` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
@@ -257,8 +262,9 @@ vex zig-out/bin/mygame.wasm
 `vex-init` fetches the vex dependency for you (`zig fetch --save`); 
 if that step can't run it prints the command to finish manually. 
 
-The generated `build.zig` depends on `vex` with `.{ .host = false }`, 
-so only the [`vex.zig`](vex.zig) SDK module is pulled in — not the raylib/wasm3 host.
+The generated `build.zig` depends only on the [`vex`](vex.zig) SDK module,
+which has no external dependencies — raylib and wasm3 live in a separate
+`cmd/vex/` package that the cart build doesn't touch.
 
 ### Writing a cart by hand
 
@@ -403,14 +409,17 @@ Go and browser alternatives:
     X11/GL system packages are needed at runtime.
 - **Web host (`vex-web`)** — a `<canvas>` reimplemented in
   [`vex.js`](cmd/vex-web/assets/vex.js), served by a small Go HTTP server.
-- **Build:** the Zig toolchain. [`build.zig`](build.zig) builds the C host,
-  the `vex-init` scaffolder, and both example carts; `make` also builds
-  `vex-run` and `vex-web` with `go build`.
+- **Build:** the Zig toolchain. The build is split across two packages:
+  the root [`build.zig`](build.zig) builds the `vex-init` scaffolder and
+  the example carts, while [`cmd/vex/build.zig`](cmd/vex/build.zig) builds
+  the `./vex` C host. `make` builds both plus `vex-run` and `vex-web` with
+  `go build`.
 
-The C host's dependencies are pulled in via [`build.zig.zon`](build.zig.zon)
-and built from source. They're lazy: only the host needs them, so a
-cart-only build (`-Dhost=false`) fetches neither and needs no system packages
-on any platform. The Go hosts only need a recent Go toolchain.
+The C host's dependencies are pulled in via
+[`cmd/vex/build.zig.zon`](cmd/vex/build.zig.zon) and built from source.
+They live in a separate package on purpose: a cart that depends only on
+the [`vex`](vex.zig) SDK fetches no external packages and needs no system
+packages on any platform. The Go hosts only need a recent Go toolchain.
 
 On macOS and Windows the only requirement is `zig`; on Linux the C host also
 links the system X11/OpenGL libraries _(see [Linux
