@@ -316,7 +316,6 @@ func writeBundle(cart string, stdout io.Writer) error {
 
 	files := []bundleFile{
 		{"index.html", bundleIndexHTML(cartFile)},
-		{"vex.js", vexJS},
 		{cartFile, wasm},
 	}
 
@@ -363,32 +362,39 @@ func bundleIndexHTML(cartFile string) []byte {
 	}
 	j += i + len(endTag)
 
-	// Keep the gamepad bootstrap (orientation detection + setupGamepad()),
-	// but drop the EventSource live-reload — there's no server in a static
-	// bundle, so the SSE endpoint it pointed at doesn't exist.
-	// Bundle version of the inline script. Mirrors the one in
-	// cmd/vex-web/assets/index.html, with two differences: no
-	// `async`/await on the load handler (top-level await isn't supported
-	// by every older WebKit build), and no SSE live-reload (there's no
-	// server in a static bundle, so the /reload endpoint it points at
-	// doesn't exist).
-	script := startTag + "\n" +
-		`  import { start, setupGamepad } from "./vex.js";` + "\n\n" +
-		`  function updateOrientation() {` + "\n" +
-		`    // Same threshold as the dev page: the viewport must be at` + "\n" +
-		`    // least 5:6 (≈1.2× taller than wide) before the gamepad` + "\n" +
-		`    // appears. Showing it in any portrait window (1:1 line)` + "\n" +
-		`    // leads to overlapping buttons on near-square viewports.` + "\n" +
-		`    const ratio = window.innerWidth / window.innerHeight;` + "\n" +
-		`    document.body.classList.toggle("portrait", ratio < 5 / 6);` + "\n" +
-		`  }` + "\n\n" +
+	// Bundle version of the inline script: contains a full copy of vex.js
+	// followed by the bootstrap code (orientation detection, gamepad setup,
+	// cart loader). Everything is in one self-contained module script — no
+	// separate import from "./vex.js" that can fail when the static file
+	// server serves vex.js with the wrong MIME type (Safari rejects ES
+	// module imports whose MIME type isn't application/javascript).
+	//
+	// vex.js already runs at module scope (it creates the canvas, registers
+	// drag-and-drop handlers, etc.), so it fits naturally as part of this
+	// inline module. Its exports (start, setupGamepad, startBytes) are
+	// available directly in the bootstrap code below.
+	script := startTag + "\n" + string(vexJS) + "\n\n" +
+		`function updateOrientation() {` + "\n" +
+		`  const ratio = window.innerWidth / window.innerHeight;` + "\n" +
+		`  document.body.classList.toggle("portrait", ratio < 5 / 6);` + "\n" +
+		`}` + "\n" +
+		`function showError(err) {` + "\n" +
+		`  console.error(err);` + "\n" +
+		`  const pre = document.createElement("pre");` + "\n" +
+		`  pre.style.cssText = "position:fixed;inset:0;margin:0;padding:16px;background:#400;color:#fee;font:13px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow:auto;z-index:9999";` + "\n" +
+		`  pre.textContent = "vex: failed to load cart\n\n" + (err && err.stack || err);` + "\n" +
+		`  document.body.appendChild(pre);` + "\n" +
+		`}` + "\n" +
+		`window.addEventListener("error", e => showError(e.error || e.message));` + "\n" +
+		`try {` + "\n" +
 		`  window.addEventListener("resize", updateOrientation);` + "\n" +
 		`  window.addEventListener("orientationchange", updateOrientation);` + "\n" +
-		`  updateOrientation();` + "\n\n" +
-		`  setupGamepad();` + "\n\n" +
-		`  window.addEventListener("load", () => {` + "\n" +
-		`    start(` + strconv.Quote(cartFile) + ");\n" +
-		`  });` + "\n" +
+		`  updateOrientation();` + "\n" +
+		`  setupGamepad();` + "\n" +
+		`} catch (e) { showError(e); }` + "\n" +
+		`window.addEventListener("load", () => {` + "\n" +
+		`  start(` + strconv.Quote(cartFile) + `).catch(showError);` + "\n" +
+		`});` + "\n" +
 		endTag
 
 	return []byte(html[:i] + script + html[j:])

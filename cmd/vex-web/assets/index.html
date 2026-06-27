@@ -261,6 +261,16 @@ body.portrait #gamepad {
 
   setupGamepad();
 
+  function showError(err) {
+    console.error(err);
+    const pre = document.createElement("pre");
+    pre.style.cssText = "position:fixed;inset:0;margin:0;padding:16px;background:#400;color:#fee;font:13px/1.4 ui-monospace,Menlo,monospace;white-space:pre-wrap;overflow:auto;z-index:9999";
+    pre.textContent = "vex: failed to load cart\n\n" + (err && err.stack || err);
+    document.body.appendChild(pre);
+  }
+
+  window.addEventListener("error", e => showError(e.error || e.message));
+
   window.addEventListener("load", async () => {
     await start("cart.wasm");
 

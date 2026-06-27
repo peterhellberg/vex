@@ -896,7 +896,15 @@ async function loadCart(url)
     if (!res.ok)
         throw new Error(`failed to load cart (HTTP ${res.status})`);
 
-    await instantiateCart(await res.arrayBuffer());
+    // Safari tracks whether an ArrayBuffer originated from a fetch
+    // response and rejects WebAssembly.instantiate() if the source
+    // Content-Type wasn't application/wasm — even though the spec
+    // says the BufferSource overload shouldn't check MIME type.
+    // Copying the bytes into a fresh buffer breaks that tracking.
+    const src = new Uint8Array(await res.arrayBuffer());
+    const bytes = new Uint8Array(src.length);
+    bytes.set(src);
+    await instantiateCart(bytes.buffer);
 }
 
 function present()
