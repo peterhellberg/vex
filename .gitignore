@@ -2,6 +2,9 @@
 /zig-out/
 /.zig-cache/
 /zig-pkg/
+/cmd/vex/zig-out/
+/cmd/vex/.zig-cache/
+/cmd/vex/zig-pkg/
 /cmd/vex-web/test/node_modules/
 /bundle/
 *.log

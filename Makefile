@@ -1,14 +1,19 @@
 # vex - minimal WASM fantasy console.
 #
-# The build is defined in build.zig; this Makefile is just a convenience
-# wrapper around `zig build`.
+# The build is split across two Zig packages:
+#   - the SDK (root build.zig): vex-init, the example carts, the SDK modules
+#   - the host (cmd/vex/build.zig): the ./vex C binary, which is the only
+#     package that depends on raylib + wasm3.
+#
+# `make` runs both, installing everything into ./bin so the binaries live
+# together rather than scattered across zig-out/bin.
 #
 #   make          build vex + vex-init + vex-web + cart.wasm + zcart.wasm into ./bin
-#   make run      run the C example cart
-#   make runz     run the Zig example cart
+#   make run      build, then run the C example cart
+#   make runz     build, then run the Zig example cart
 #   make web      serve the browser build (override the cart with CART=...)
 #   make test-web run Playwright tests against the browser build (override the cart with CART=...)
-#   make install  install the vex + vex-init + vex-web binaries to ~/.local/bin
+#   make install  install the vex + vex-init + vex-web + vex-run binaries to ~/.local/bin
 #   make clean    remove build artifacts
 
 PREFIX ?= $(HOME)/.local
@@ -23,22 +28,23 @@ TEST_DIR := cmd/vex-web/test
 
 .PHONY: all run runz web test-web install uninstall clean test-deps docs
 
-# Build every binary into ./bin. `--prefix .` makes Zig install into ./bin (its
-# exe dir under the prefix); vex-web (Go) is built into the same ./bin so all
-# binaries live together rather than scattered across zig-out/bin.
+# Build every binary into ./bin. `--prefix .` makes Zig install into ./bin
+# (its exe dir under the prefix). The host package is built from cmd/vex/
+# with `--prefix ../..` so it lands in the same ./bin.
 all:
 	zig build --prefix .
+	cd cmd/vex && zig build --prefix ../..
 	go build -o bin/vex-web ./cmd/vex-web
 	go build -o bin/vex-run ./cmd/vex-run
 
-run:
-	zig build run
+run: all
+	cd cmd/vex && zig build run
 
-runz:
-	zig build runz
+runz: all
+	cd cmd/vex && zig build runz
 
 web:
-	zig build --prefix . -Dhost=false
+	zig build --prefix .
 	go run ./cmd/vex-web $(CART)
 
 # Build the bundled cart so the test always exercises the embedded assets
@@ -51,6 +57,7 @@ web:
 # below is a belt-and-suspenders safety net in case the script is
 # killed before its finally{} runs.
 test-web: $(TEST_DIR)/node_modules/.package-lock.json
+	zig build --prefix .
 	cd $(TEST_DIR) && node test_gamepad.js $(CURDIR)/$(CART)
 	rm -rf $(CURDIR)/bundle
 
@@ -78,5 +85,5 @@ uninstall:
 	rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web
 
 clean:
-	rm -rf bin zig-out .zig-cache
+	rm -rf bin zig-out .zig-cache cmd/vex/zig-out cmd/vex/.zig-cache cmd/vex/zig-pkg
 	rm -rf $(TEST_DIR)/node_modules
