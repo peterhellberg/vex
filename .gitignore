@@ -2,6 +2,8 @@
 /zig-out/
 /.zig-cache/
 /zig-pkg/
+/cmd/vex-web/test/node_modules/
+/bundle/
 *.log
 mycart*
 base/*/*.wasm

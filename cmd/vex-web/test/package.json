@@ -1,0 +1,11 @@
+{
+  "name": "vex-web-tests",
+  "private": true,
+  "description": "Browser-side tests for vex-web (drives the bundled cart with Playwright).",
+  "scripts": {
+    "test": "node test_gamepad.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.0"
+  }
+}

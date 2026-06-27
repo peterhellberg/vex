@@ -41,9 +41,9 @@ zig build --prefix . -Dhost=false   # only the carts + SDK (skip the raylib host
 `zig-out/`. The `run`/`runz` steps execute straight from the build cache, so
 they need no prefix.
 
-A `Makefile` wraps these as `make`, `make run`, `make runz`, and `make clean`,
-passing `--prefix .` for you so all binaries — including the Go `vex-web` and
-`vex-run` — land in `./bin`. 
+A `Makefile` wraps these as `make`, `make run`, `make runz`, `make web`,
+`make test-web`, and `make clean`, passing `--prefix .` for you so all
+binaries — including the Go `vex-web` and `vex-run` — land in `./bin`.
 
 `make install` copies `vex`, `vex-init`, `vex-web`, and `vex-run` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
@@ -210,14 +210,26 @@ Arrow keys, `Z`, and `X` map to `btn()` and `btnp()`, and the mouse maps to
 > default cart — handy for trying a build without restarting the server.
 
 > [!Tip]
-> **Virtual gamepad in portrait.** When the viewport is taller than it is
-> wide _(e.g. a phone held upright)_, the page adds a touch-friendly gamepad
-> below the canvas: an inverted-T d-pad _(left/right on top, up/down
-> stacked below in the centre column)_ on the left, and round `Z`/`X`
-> buttons on the right. The on-screen buttons fire the same keys as the
-> keyboard, so the cart sees identical input from either source. Multiple
-> d-pad buttons can be held at once for diagonals; keys pressed on a
-> physical keyboard also highlight the matching on-screen button.
+> **Virtual gamepad in portrait.** When the viewport is meaningfully
+> taller than it is wide _(roughly 5:6 or narrower, e.g. a phone held
+> upright)_, the page adds a touch-friendly gamepad below the canvas.
+> All six buttons sit inside one square 3×3 grid: the d-pad arrows
+> _(up/left/right/down)_ on the cross arms, `Z` in the centre, and `X`
+> in the bottom-right corner. Every cell is the same size, so the six
+> buttons are identical squares — comfortable to hit with a thumb.
+> Multi-touch works (you can hold, say, left + up for a diagonal),
+> the gamepad disables the browser's pinch-zoom gesture so two-finger
+> input doesn't move the page, and keys pressed on a physical keyboard
+> also highlight the matching on-screen button.
+
+> [!Tip]
+> **Browser tests:** `make test-web` runs the Playwright-driven test
+> suite under [`cmd/vex-web/test/`](cmd/vex-web/test/) — it rebuilds the
+> cart bundle, spins up a tiny static server, and drives the page at
+> several viewport sizes (iPhone SE / 12 / Pro Max, plus near-square
+> and landscape to verify the gamepad hides). On first run it downloads
+> Chromium and the `playwright` npm package; subsequent runs reuse the
+> install. Override the cart with `make test-web CART=path/to/cart.wasm`.
 
 `make install` puts `vex-web` on your `PATH` alongside `vex` and `vex-init`.
 
