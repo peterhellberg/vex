@@ -2,12 +2,18 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>vex</title>
 
 <style>
 html, body {
     margin: 0;
-    height: 100%;
+    /* Use the dynamic viewport height on browsers that support it
+     * (iOS Safari 15.4+, modern Chrome/Edge/Firefox) — `100vh` on iOS
+     * includes the URL bar height and makes the page overflow when the
+     * bar is showing. Fall back to `100vh` everywhere else. */
+    height: 100dvh;
+    height: 100vh;
 }
 
 body {
@@ -28,6 +34,11 @@ body.portrait {
     flex-direction: column;
     justify-content: space-between;
     align-items: stretch;
+    /* With `viewport-fit=cover` (needed to opt into env() insets at all),
+     * the page is allowed to extend behind the iPhone notch and status
+     * bar. Pad the top of the body so the canvas sits below them rather
+     * than under. 0px on devices without a notch. */
+    padding-top: env(safe-area-inset-top, 0px);
 }
 
 canvas {
@@ -50,6 +61,23 @@ canvas {
     display: none;
     flex: 0 0 auto;
     padding: 16px;
+    /* Add the iPhone home-indicator inset at the bottom so the gamepad
+     * sits above the gesture bar instead of under it. The dvh/viewport-
+     * fit=cover combo otherwise lets the page extend behind the system
+     * chrome, which on a notched iPhone means the bottom row of the
+     * d-pad (DOWN and X) ends up under the home indicator and is
+     * partially un-tappable. Older iOS that doesn't know about the env()
+     * function gets no padding from it, but the 16px is plenty on those.
+     *
+     * iOS Safari with the URL bar at the bottom (the iPhone default
+     * since iOS 15) doesn't expose the URL bar height as a safe-area
+     * inset — env(safe-area-inset-bottom) only covers the home
+     * indicator. The URL bar is ~44px tall, so we pad by 56px
+     * unconditionally to keep the gamepad clear of it. The extra
+     * padding is wasted on devices without a bottom URL bar (iPad,
+     * desktop, Android), but a touch of extra bottom margin is harmless
+     * there. */
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px) + 56px);
     box-sizing: border-box;
     /* Disable pinch-zoom and other browser touch gestures inside the
      * gamepad. The buttons handle their own presses via pointer events,
@@ -80,11 +108,12 @@ body.portrait #gamepad {
 .dpad {
     /* aspect-ratio: 1 keeps the cluster square: width = height, so the
      * cross is a tidy square no matter how wide the viewport is. Capped
-     * at 92% of the available width so the gamepad never overflows the
-     * viewport on narrow phones. */
+     * at 90% of the dynamic viewport height so the gamepad never
+     * overflows on short phones. */
     flex: 0 1 auto;
     display: grid;
     aspect-ratio: 1 / 1;
+    width: min(100%, calc(100dvh * 0.9));
     width: min(100%, calc(100vh * 0.9));
     gap: clamp(6px, 1.6vmin, 14px);
 

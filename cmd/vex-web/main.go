@@ -366,17 +366,29 @@ func bundleIndexHTML(cartFile string) []byte {
 	// Keep the gamepad bootstrap (orientation detection + setupGamepad()),
 	// but drop the EventSource live-reload — there's no server in a static
 	// bundle, so the SSE endpoint it pointed at doesn't exist.
+	// Bundle version of the inline script. Mirrors the one in
+	// cmd/vex-web/assets/index.html, with two differences: no
+	// `async`/await on the load handler (top-level await isn't supported
+	// by every older WebKit build), and no SSE live-reload (there's no
+	// server in a static bundle, so the /reload endpoint it points at
+	// doesn't exist).
 	script := startTag + "\n" +
 		`  import { start, setupGamepad } from "./vex.js";` + "\n\n" +
 		`  function updateOrientation() {` + "\n" +
-		`    document.body.classList.toggle("portrait",` + "\n" +
-		`        window.innerHeight > window.innerWidth);` + "\n" +
+		`    // Same threshold as the dev page: the viewport must be at` + "\n" +
+		`    // least 5:6 (≈1.2× taller than wide) before the gamepad` + "\n" +
+		`    // appears. Showing it in any portrait window (1:1 line)` + "\n" +
+		`    // leads to overlapping buttons on near-square viewports.` + "\n" +
+		`    const ratio = window.innerWidth / window.innerHeight;` + "\n" +
+		`    document.body.classList.toggle("portrait", ratio < 5 / 6);` + "\n" +
 		`  }` + "\n\n" +
 		`  window.addEventListener("resize", updateOrientation);` + "\n" +
 		`  window.addEventListener("orientationchange", updateOrientation);` + "\n" +
 		`  updateOrientation();` + "\n\n" +
 		`  setupGamepad();` + "\n\n" +
-		`  window.addEventListener("load", () => start(` + strconv.Quote(cartFile) + "));\n" +
+		`  window.addEventListener("load", () => {` + "\n" +
+		`    start(` + strconv.Quote(cartFile) + ");\n" +
+		`  });` + "\n" +
 		endTag
 
 	return []byte(html[:i] + script + html[j:])
