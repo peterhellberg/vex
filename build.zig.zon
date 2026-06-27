@@ -1,30 +1,17 @@
 .{
     .name = .vex,
-    .version = "0.1.1",
+    .version = "0.1.2",
     // Globally unique package id, generated once by the Zig toolchain.
     .fingerprint = 0xe969ab1c398dc67c, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0-dev.305+bdfbf432d",
-    // wasm3 and raylib are only needed to build the console host, so they are
-    // lazy: a cart that just depends on vex for the `vex` module (via
-    // `.{ .host = false }`) never fetches them.
-    .dependencies = .{
-        .wasm3 = .{
-            .url = "https://github.com/wasm3/wasm3/archive/refs/tags/v0.5.0.tar.gz",
-            .hash = "N-V-__8AAPJTRwDyyZ7xBJrI5d3EG3JfvAPjPvNcdHLp0zqS",
-            .lazy = true,
-        },
-        // Pinned to a raylib master commit (6.0.0-dev): the 5.5 release's
-        // build.zig.zon predates the enum-literal package name format.
-        .raylib = .{
-            .url = "https://github.com/raysan5/raylib/archive/aaacda6e147031f2af0cfb6c1fd7e64d761ddb1f.tar.gz",
-            .hash = "raylib-6.0.0-whq8uLXSLwWGU9sQmZVQm0RquGkb0vEediLE8EoK9IYn",
-            .lazy = true,
-        },
-    },
+    // This package has no external dependencies: a cart that depends on
+    // `vex` fetches nothing heavy (no raylib, no wasm3). The console host
+    // `./vex` lives in a separate package, `cmd/vex`, which is the only one
+    // that pulls in raylib + wasm3.
+    .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "main.c",
         "vex.h",
         "vex.zig",
         "spr.zig",
