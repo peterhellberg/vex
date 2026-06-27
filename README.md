@@ -209,6 +209,16 @@ Arrow keys, `Z`, and `X` map to `btn()` and `btnp()`, and the mouse maps to
 > **Drag and drop** any `.wasm` onto the page to load it in place of the
 > default cart — handy for trying a build without restarting the server.
 
+> [!Tip]
+> **Virtual gamepad in portrait.** When the viewport is taller than it is
+> wide _(e.g. a phone held upright)_, the page adds a touch-friendly gamepad
+> below the canvas: an inverted-T d-pad _(left/right on top, up/down
+> stacked below in the centre column)_ on the left, and round `Z`/`X`
+> buttons on the right. The on-screen buttons fire the same keys as the
+> keyboard, so the cart sees identical input from either source. Multiple
+> d-pad buttons can be held at once for diagonals; keys pressed on a
+> physical keyboard also highlight the matching on-screen button.
+
 `make install` puts `vex-web` on your `PATH` alongside `vex` and `vex-init`.
 
 ## Creating a cart

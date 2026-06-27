@@ -18,20 +18,257 @@ body {
     align-items: center;
 }
 
+/*
+ * In portrait mode (taller than wide), stack the canvas on top of a
+ * touch-friendly virtual gamepad below it. Landscape keeps the canvas
+ * centred full-bleed — the gamepad is hidden because there's no room for
+ * it and a keyboard is usually easier to use on desktop anyway.
+ */
+body.portrait {
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: stretch;
+}
+
 canvas {
     /* Largest 16:9 box that fits the viewport, centred by the flex body. */
     width: min(100vw, calc(100vh * 16 / 9));
     aspect-ratio: 16 / 9;
     image-rendering: pixelated;
+    align-self: center;
 }
+
+/*
+ * Virtual gamepad — hidden by default, shown only in portrait. Sits at
+ * the bottom of the viewport with a fixed-ish height rather than
+ * stretching all the way up to the canvas: the canvas above is the main
+ * focus, the gamepad is just a thumb-friendly input row below it. On a
+ * tall phone this leaves comfortable space between the two, on a short
+ * phone the gamepad still has plenty of room for big buttons.
+ */
+#gamepad {
+    display: none;
+    flex: 0 0 auto;
+    padding: 16px;
+    box-sizing: border-box;
+    /* Disable pinch-zoom and other browser touch gestures inside the
+     * gamepad. The buttons handle their own presses via pointer events,
+     * so the browser should stay out of the way — otherwise pressing
+     * two d-pad buttons with two fingers triggers a pinch that moves
+     * the page and makes multi-touch awkward. */
+    touch-action: none;
+}
+
+body.portrait #gamepad {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: clamp(16px, 6vw, 64px);
+}
+
+/*
+ * D-pad and X-button cluster: two siblings of #gamepad splitting the
+ * available width in a 2:1 ratio — the d-pad takes the left 2/3 of the
+ * gamepad, X the right 1/3.
+ *
+ * The d-pad is a 3x3 cross: UP / LEFT-Z-RIGHT / DOWN, with Z in the
+ * centre and the four corners left empty as gap spacers. Each cell of
+ * the cross is the same size, so the arms stay balanced.
+ *
+ * The X cluster mirrors the d-pad's 3-row grid but only puts the X
+ * button in the middle row — so X ends up exactly the same size as the
+ * Z button (one cell tall, the cluster's full width). That gives X a
+ * generous, easy-to-hit target while keeping it visually in step with
+ * the rest of the cross, and it leaves comfortable padding above and
+ * below the button so a thumb doesn't have to aim precisely.
+ */
+.dpad {
+    /* Take 2/3 of the row (flex basis 2 vs X's 1). aspect-ratio: 1 keeps
+     * the whole cluster square: width = height, so the cross is a tidy
+     * square no matter how wide the viewport is. */
+    flex: 2 1 0;
+    display: grid;
+    aspect-ratio: 1 / 1;
+    /* Padding inside the cross so the four arms don't sit flush against
+     * the cluster edge — matches the gap between cells. */
+    gap: clamp(6px, 1.6vmin, 14px);
+
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: 1fr 1fr 1fr;
+}
+
+.x-cluster {
+    /* Take the remaining 1/3 of the row. The cluster's height matches
+     * the d-pad's (same flex row, equal cross-axis size), and a 3-row
+     * grid with X in the middle row makes the X button exactly the
+     * same height as the Z button in the d-pad. */
+    flex: 1 1 0;
+    display: grid;
+    gap: clamp(6px, 1.6vmin, 14px);
+
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr 1fr;
+}
+
+.dpad button,
+.x-cluster button {
+    margin: 0;
+    padding: 0;
+    background: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #555;
+    font: inherit;
+    text-align: center;
+    cursor: pointer;
+
+    /* Fill the grid cell so the button is always the full intended size,
+     * not just big enough to wrap its label. */
+    width: 100%;
+    height: 100%;
+
+    /* Prevent the browser from highlighting taps, selecting text, or
+     * showing the long-press context menu on the buttons. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+.dpad button {
+    border-radius: 18px;
+}
+
+/* Z in the middle of the cross, X in the middle of its own column —
+ * both one cell tall, so they're the same height. Drawn as outlined
+ * SVG glyphs (Z and X) that scale crisply at any button size. */
+.dpad-z,
+.x-cluster .btn-x {
+    border-radius: 24px;
+    font-weight: bold;
+}
+
+/* Inline glyphs in the d-pad buttons (arrows) and the Z/X action
+ * buttons. Drawn as SVG paths so they render the same everywhere —
+ * some platforms turn Unicode triangles into colourful emoji, and
+ * the action-button labels were too small to read at typical button
+ * sizes. Each svg is sized relative to its button, so the arrow
+ * glyphs in the d-pad arms and the letter glyphs in Z and X all
+ * centre cleanly at the same scale. */
+.dpad button svg,
+.x-cluster button svg {
+    width: 45%;
+    height: 45%;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+}
+
+/* Highlight colour — used both for an active touch and for a key held
+ * down on a physical keyboard. Matches the SWEETIE-16 palette green
+ * (#38b764) the rest of vex uses for emphasis, and the drag-and-drop
+ * outline below. A discrete outline (not a fill change) so the button
+ * shape stays the same when pressed. */
+.dpad button.active,
+.dpad button:active,
+.x-cluster button.active,
+.x-cluster button:active {
+    outline: 3px solid #38b764;
+    outline-offset: 2px;
+    background: #2a2a2a;
+    color: #38b764;
+    border-color: #38b764;
+}
+
+/*
+ * Place the d-pad cells inside the 3x3 grid. The four corners stay empty
+ * (they're just gap spacers), Z takes the centre, and UP/DOWN/LEFT/RIGHT
+ * fill the four arms.
+ */
+.dpad .dpad-up    { grid-area: 1 / 2; }
+.dpad .dpad-left  { grid-area: 2 / 1; }
+.dpad .dpad-z     { grid-area: 2 / 2; }
+.dpad .dpad-right { grid-area: 2 / 3; }
+.dpad .dpad-down  { grid-area: 3 / 2; }
+
+/* X in the middle row of its 3-row grid — the same height as Z. */
+.x-cluster .btn-x { grid-area: 2 / 1; }
 </style>
 </head>
 <body>
 
 <canvas id="screen"></canvas>
 
+<div id="gamepad" aria-label="virtual gamepad">
+  <div class="dpad" aria-label="directional pad">
+    <button class="dpad-up"    type="button" aria-label="up">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 15 L12 7 L20 15"/>
+      </svg>
+    </button>
+    <button class="dpad-left"  type="button" aria-label="left">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M15 4 L7 12 L15 20"/>
+      </svg>
+    </button>
+    <button class="dpad-z"     type="button" aria-label="Z">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <!-- Stylised Z: top bar, diagonal stroke, bottom bar. -->
+        <path d="M5 6 L19 6 L5 18 L19 18"/>
+      </svg>
+    </button>
+    <button class="dpad-right" type="button" aria-label="right">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9 4 L17 12 L9 20"/>
+      </svg>
+    </button>
+    <button class="dpad-down"  type="button" aria-label="down">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 9 L12 17 L20 9"/>
+      </svg>
+    </button>
+  </div>
+  <div class="x-cluster" aria-label="action buttons">
+    <button class="btn-x" type="button" aria-label="X">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <!-- Stylised X: two crossing diagonals. -->
+        <path d="M5 5 L19 19 M19 5 L5 19"/>
+      </svg>
+    </button>
+  </div>
+</div>
+
 <script type="module">
-  import { start } from "./vex.js";
+  import { start, setupGamepad } from "./vex.js";
+
+  /*
+   * Show the virtual gamepad only on viewports where it actually fits.
+   *
+   * "Portrait" alone isn't a strong enough signal — a near-square window
+   * (e.g. a small desktop window resized to 700x720) would trigger the
+   * gamepad even though there's barely room for the d-pad cells, leaving
+   * the buttons overlapping or pathologically small. The gamepad wants
+   * the viewport to be meaningfully taller than wide so the canvas above
+   * keeps a usable 16:9 frame and the buttons below still have room for
+   * a thumb-sized hit target. We require at least 5:6 (height:width),
+   * i.e. the viewport is at least 20% taller than wide — well above
+   * the 1:1 line where the gamepad starts cramping.
+   */
+  function updateOrientation()
+  {
+      const ratio = window.innerWidth / window.innerHeight;
+      // max-aspect-ratio CSS means width/height; 5/6 ≈ 0.833 means we want
+      // height ≥ 1.2 × width before the gamepad shows up.
+      document.body.classList.toggle("portrait", ratio < 5 / 6);
+  }
+
+  window.addEventListener("resize", updateOrientation);
+  window.addEventListener("orientationchange", updateOrientation);
+  updateOrientation();
+
+  setupGamepad();
 
   window.addEventListener("load", async () => {
     await start("cart.wasm");

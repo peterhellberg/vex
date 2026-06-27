@@ -86,6 +86,8 @@ window.addEventListener("keydown", e => {
 
     if (GAME_KEYS.has(e.code))
         e.preventDefault();
+
+    syncPadButtonFromKey(e.code);
 });
 
 window.addEventListener("keyup", e => {
@@ -93,6 +95,8 @@ window.addEventListener("keyup", e => {
 
     if (GAME_KEYS.has(e.code))
         e.preventDefault();
+
+    syncPadButtonFromKey(e.code);
 });
 
 function btn(button)
@@ -143,6 +147,121 @@ canvas.addEventListener("mousedown", e => {
 canvas.addEventListener("mouseup", e => {
     mouseButtons[e.button] = false;
 });
+
+//// Part 3b: Virtual gamepad (portrait mode)
+
+/*
+ * In portrait mode the page renders a touch-friendly virtual gamepad below
+ * the canvas: a d-pad (left/right/up/down -> cart buttons 0..3) and two
+ * action buttons (Z and X -> cart buttons 4 and 5). Pressing a gamepad
+ * button flips the same `keys` entry the keyboard would, so btn()/btnp()
+ * work unchanged.
+ *
+ * Each button stays "active" (highlighted) as long as EITHER the user is
+ * touching it OR the corresponding key is held on a physical keyboard,
+ * so the highlight matches what the cart sees regardless of input source.
+ *
+ * Pointer events handle both touch and mouse uniformly. Multi-touch works
+ * because each button tracks its own touch state — pressing two buttons
+ * at once fires two independent pointerdown handlers. setPointerCapture
+ * keeps each individual press alive even when the finger slides off the
+ * button before lifting; pointercancel covers OS-interrupted touches.
+ */
+const PAD_BINDINGS = [
+    [".dpad-up",    "ArrowUp"],
+    [".dpad-down",  "ArrowDown"],
+    [".dpad-left",  "ArrowLeft"],
+    [".dpad-right", "ArrowRight"],
+    [".dpad-z",     "KeyZ"],   // Z in the centre of the d-pad -> cart button 4
+    [".btn-x",      "KeyX"]    // X on the right              -> cart button 5
+];
+
+// Maps a keyboard code (e.g. "ArrowUp") to its on-screen gamepad button, so
+// the global keydown/keyup handlers can highlight the matching button.
+// Populated by setupGamepad().
+const padButtonByCode = new Map();
+
+function bindPadButton(button, code)
+{
+    // Per-button input state. Either source (touch or keyboard) being true
+    // is enough to mark the button active; we OR them on every change.
+    let touchHeld = false;
+    let keyHeld = false;
+
+    const sync = () => {
+        const active = touchHeld || keyHeld;
+        button.classList.toggle("active", active);
+        keys[code] = active ? true : false;
+    };
+
+    button.addEventListener("pointerdown", e => {
+        // Prevent the synthetic mouse events that follow a touch from
+        // also triggering drags / focus shifts on the page.
+        e.preventDefault();
+        touchHeld = true;
+        // Track the press so pointerup outside the button still releases it.
+        try { button.setPointerCapture(e.pointerId); } catch (_) {}
+        sync();
+    });
+
+    const releaseTouch = () => {
+        if (touchHeld)
+        {
+            touchHeld = false;
+            sync();
+        }
+    };
+
+    button.addEventListener("pointerup",     releaseTouch);
+    button.addEventListener("pointercancel", releaseTouch);
+    // pointerleave also releases when the finger slides off without lifting
+    // (setPointerCapture normally handles this, but some browsers don't
+    // dispatch pointerup for cancelled captures).
+    button.addEventListener("pointerleave",  releaseTouch);
+
+    // Keyboard accessibility: Space/Enter on a focused button should also
+    // act as a press so the gamepad works on devices without touch.
+    button.addEventListener("keydown", e => {
+        if (e.code === "Space" || e.code === "Enter")
+        {
+            e.preventDefault();
+            touchHeld = true;
+            sync();
+        }
+    });
+
+    button.addEventListener("keyup", e => {
+        if (e.code === "Space" || e.code === "Enter")
+        {
+            releaseTouch();
+        }
+    });
+
+    // Expose so the global keydown/keyup handlers (which see all keys, not
+    // just ones typed into a focused button) can update the highlight when
+    // the matching physical key goes down or up.
+    padButtonByCode.set(code, { setKeyHeld(v) { keyHeld = v; sync(); } });
+}
+export function setupGamepad()
+{
+    for (const [selector, code] of PAD_BINDINGS)
+    {
+        const button = document.querySelector(`#gamepad ${selector}`);
+
+        if (button)
+            bindPadButton(button, code);
+    }
+}
+
+function syncPadButtonFromKey(code)
+{
+    // Called from the global keydown/keyup handlers so the on-screen button
+    // highlights when the user presses a physical key (arrow / Z / X).
+    const entry = padButtonByCode.get(code);
+
+    if (entry)
+        entry.setKeyHeld(!!keys[code]);
+}
 
 function mx()
 {
@@ -849,7 +968,7 @@ function setDropCue(on)
 {
     if (on)
     {
-        canvas.style.outline = "4px dashed #41A6F6";
+        canvas.style.outline = "4px dashed #38b764";
         canvas.style.outlineOffset = "4px";
         canvas.style.opacity = "0.6";
     }

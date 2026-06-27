@@ -363,8 +363,19 @@ func bundleIndexHTML(cartFile string) []byte {
 	}
 	j += i + len(endTag)
 
+	// Keep the gamepad bootstrap (orientation detection + setupGamepad()),
+	// but drop the EventSource live-reload — there's no server in a static
+	// bundle, so the SSE endpoint it pointed at doesn't exist.
 	script := startTag + "\n" +
-		`  import { start } from "./vex.js";` + "\n\n" +
+		`  import { start, setupGamepad } from "./vex.js";` + "\n\n" +
+		`  function updateOrientation() {` + "\n" +
+		`    document.body.classList.toggle("portrait",` + "\n" +
+		`        window.innerHeight > window.innerWidth);` + "\n" +
+		`  }` + "\n\n" +
+		`  window.addEventListener("resize", updateOrientation);` + "\n" +
+		`  window.addEventListener("orientationchange", updateOrientation);` + "\n" +
+		`  updateOrientation();` + "\n\n" +
+		`  setupGamepad();` + "\n\n" +
 		`  window.addEventListener("load", () => start(` + strconv.Quote(cartFile) + "));\n" +
 		endTag
 
