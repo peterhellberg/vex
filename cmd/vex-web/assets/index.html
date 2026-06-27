@@ -62,56 +62,37 @@ canvas {
 body.portrait #gamepad {
     display: flex;
     align-items: center;
-    justify-content: space-around;
-    gap: clamp(16px, 6vw, 64px);
+    justify-content: center;
 }
 
 /*
- * D-pad and X-button cluster: two siblings of #gamepad splitting the
- * available width in a 2:1 ratio — the d-pad takes the left 2/3 of the
- * gamepad, X the right 1/3.
+ * D-pad, Z and X are all part of one 3x3 grid: the four direction
+ * buttons (UP / LEFT / RIGHT / DOWN) sit on the cross arms, Z takes
+ * the centre, X sits in the bottom-right corner, and the remaining
+ * two corners (top-left, top-right, bottom-left) are empty gap
+ * spacers. Six buttons total — the same six keys the cart reads
+ * through btn()/btnp().
  *
- * The d-pad is a 3x3 cross: UP / LEFT-Z-RIGHT / DOWN, with Z in the
- * centre and the four corners left empty as gap spacers. Each cell of
- * the cross is the same size, so the arms stay balanced.
- *
- * The X cluster mirrors the d-pad's 3-row grid but only puts the X
- * button in the middle row — so X ends up exactly the same size as the
- * Z button (one cell tall, the cluster's full width). That gives X a
- * generous, easy-to-hit target while keeping it visually in step with
- * the rest of the cross, and it leaves comfortable padding above and
- * below the button so a thumb doesn't have to aim precisely.
+ * The whole grid is square (aspect-ratio: 1) so the cross stays
+ * balanced no matter how wide the viewport is, and every cell is the
+ * same size so all six buttons are identical in shape and size.
  */
 .dpad {
-    /* Take 2/3 of the row (flex basis 2 vs X's 1). aspect-ratio: 1 keeps
-     * the whole cluster square: width = height, so the cross is a tidy
-     * square no matter how wide the viewport is. */
-    flex: 2 1 0;
+    /* aspect-ratio: 1 keeps the cluster square: width = height, so the
+     * cross is a tidy square no matter how wide the viewport is. Capped
+     * at 92% of the available width so the gamepad never overflows the
+     * viewport on narrow phones. */
+    flex: 0 1 auto;
     display: grid;
     aspect-ratio: 1 / 1;
-    /* Padding inside the cross so the four arms don't sit flush against
-     * the cluster edge — matches the gap between cells. */
+    width: min(100%, calc(100vh * 0.9));
     gap: clamp(6px, 1.6vmin, 14px);
 
     grid-template-columns: 1fr 1fr 1fr;
     grid-template-rows: 1fr 1fr 1fr;
 }
 
-.x-cluster {
-    /* Take the remaining 1/3 of the row. The cluster's height matches
-     * the d-pad's (same flex row, equal cross-axis size), and a 3-row
-     * grid with X in the middle row makes the X button exactly the
-     * same height as the Z button in the d-pad. */
-    flex: 1 1 0;
-    display: grid;
-    gap: clamp(6px, 1.6vmin, 14px);
-
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr 1fr 1fr;
-}
-
-.dpad button,
-.x-cluster button {
+.dpad button {
     margin: 0;
     padding: 0;
     background: #2a2a2a;
@@ -126,6 +107,10 @@ body.portrait #gamepad {
     width: 100%;
     height: 100%;
 
+    /* Same shape on every button — a rounded square that's comfortable
+     * to tap with a thumb and visually consistent across the whole grid. */
+    border-radius: 20%;
+
     /* Prevent the browser from highlighting taps, selecting text, or
      * showing the long-press context menu on the buttons. */
     user-select: none;
@@ -134,28 +119,11 @@ body.portrait #gamepad {
     touch-action: manipulation;
 }
 
-.dpad button {
-    border-radius: 18px;
-}
-
-/* Z in the middle of the cross, X in the middle of its own column —
- * both one cell tall, so they're the same height. Drawn as outlined
- * SVG glyphs (Z and X) that scale crisply at any button size. */
-.dpad-z,
-.x-cluster .btn-x {
-    border-radius: 24px;
-    font-weight: bold;
-}
-
-/* Inline glyphs in the d-pad buttons (arrows) and the Z/X action
- * buttons. Drawn as SVG paths so they render the same everywhere —
- * some platforms turn Unicode triangles into colourful emoji, and
- * the action-button labels were too small to read at typical button
- * sizes. Each svg is sized relative to its button, so the arrow
- * glyphs in the d-pad arms and the letter glyphs in Z and X all
- * centre cleanly at the same scale. */
-.dpad button svg,
-.x-cluster button svg {
+/* Inline glyphs in every button. Drawn as SVG paths so they render the
+ * same everywhere — some platforms turn Unicode triangles into
+ * colourful emoji, and the action-button labels were too small to read
+ * at typical button sizes. */
+.dpad button svg {
     width: 45%;
     height: 45%;
     fill: none;
@@ -172,9 +140,7 @@ body.portrait #gamepad {
  * outline below. A discrete outline (not a fill change) so the button
  * shape stays the same when pressed. */
 .dpad button.active,
-.dpad button:active,
-.x-cluster button.active,
-.x-cluster button:active {
+.dpad button:active {
     outline: 3px solid #38b764;
     outline-offset: 2px;
     background: #2a2a2a;
@@ -183,18 +149,16 @@ body.portrait #gamepad {
 }
 
 /*
- * Place the d-pad cells inside the 3x3 grid. The four corners stay empty
- * (they're just gap spacers), Z takes the centre, and UP/DOWN/LEFT/RIGHT
- * fill the four arms.
+ * Place the six buttons inside the 3x3 grid. The cross sits in the
+ * middle row and middle column; X takes the bottom-right corner so it
+ * falls naturally under the right thumb.
  */
 .dpad .dpad-up    { grid-area: 1 / 2; }
 .dpad .dpad-left  { grid-area: 2 / 1; }
 .dpad .dpad-z     { grid-area: 2 / 2; }
 .dpad .dpad-right { grid-area: 2 / 3; }
 .dpad .dpad-down  { grid-area: 3 / 2; }
-
-/* X in the middle row of its 3-row grid — the same height as Z. */
-.x-cluster .btn-x { grid-area: 2 / 1; }
+.dpad .btn-x      { grid-area: 3 / 3; }
 </style>
 </head>
 <body>
@@ -202,7 +166,7 @@ body.portrait #gamepad {
 <canvas id="screen"></canvas>
 
 <div id="gamepad" aria-label="virtual gamepad">
-  <div class="dpad" aria-label="directional pad">
+  <div class="dpad" aria-label="directional pad and action buttons">
     <button class="dpad-up"    type="button" aria-label="up">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 15 L12 7 L20 15"/>
@@ -229,9 +193,7 @@ body.portrait #gamepad {
         <path d="M4 9 L12 17 L20 9"/>
       </svg>
     </button>
-  </div>
-  <div class="x-cluster" aria-label="action buttons">
-    <button class="btn-x" type="button" aria-label="X">
+    <button class="btn-x"      type="button" aria-label="X">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <!-- Stylised X: two crossing diagonals. -->
         <path d="M5 5 L19 19 M19 5 L5 19"/>

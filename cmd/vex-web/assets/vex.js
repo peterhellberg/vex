@@ -173,7 +173,7 @@ const PAD_BINDINGS = [
     [".dpad-left",  "ArrowLeft"],
     [".dpad-right", "ArrowRight"],
     [".dpad-z",     "KeyZ"],   // Z in the centre of the d-pad -> cart button 4
-    [".btn-x",      "KeyX"]    // X on the right              -> cart button 5
+    [".btn-x",      "KeyX"]    // X in the bottom-right corner -> cart button 5
 ];
 
 // Maps a keyboard code (e.g. "ArrowUp") to its on-screen gamepad button, so
