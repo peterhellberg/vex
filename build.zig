@@ -61,6 +61,24 @@ pub fn build(b: *std.Build) void {
     cart_zig.rdynamic = true; // export the `export fn`s
     b.installArtifact(cart_zig);
 
+    // --- test carts: wasm32-freestanding stress-test modules ------------------
+    const test_carts = [_][]const u8{
+        "test_coords", "test_blit", "test_arith", "test_palette", "test_api",
+    };
+    inline for (test_carts) |name| {
+        const t = b.addExecutable(.{
+            .name = name,
+            .root_module = b.createModule(.{
+                .target = wasm_target,
+                .optimize = .ReleaseSmall,
+            }),
+        });
+        t.root_module.addCSourceFile(.{ .file = b.path("examples/test-carts/" ++ name ++ ".c") });
+        t.root_module.addIncludePath(b.path("."));
+        t.entry = .disabled;
+        b.installArtifact(t);
+    }
+
     // --- vex-init: scaffold a new cart project ------------------------------
     const init_exe = b.addExecutable(.{
         .name = "vex-init",
