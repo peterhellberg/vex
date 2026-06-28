@@ -139,8 +139,13 @@ const cart_zig_tmpl =
     \\}}
     \\
     \\export fn update() void {{
+    \\    const x = vex.mx();
+    \\    const y = vex.my();
+    \\    const c: i32 = if (vex.down(vex.A)) 4 else 5;
+    \\
     \\    vex.cls(0);
     \\    vex.text("{s}", 8, 8, 12);
+    \\    vex.circ(x, y, 5, c);
     \\}}
     \\
 ;
