@@ -335,7 +335,7 @@ m3ApiRawFunction(host_trib) {
     // winding the same way host_tri does so filled and outlined versions of
     // the same triangle share an edge order and carts don't have to remember
     // which entry point normalizes.
-    int64_t cross = (int64_t)(x2 - x1) * (y3 - y1) - (int64_t)(y2 - y1) * (x3 - x1);
+    int64_t cross = ((int64_t)x2 - x1) * ((int64_t)y3 - y1) - ((int64_t)y2 - y1) * ((int64_t)x3 - x1);
     if (cross > 0) {
         int32_t tx = x2, ty = y2;
         x2 = x3; y2 = y3;
@@ -613,6 +613,8 @@ static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     // baseline. Doing reset_palette() *after* boot() would erase any palette
     // overrides the cart's boot() made (e.g. vex.pal(0, ...)) -- which is the
     // original bug this comment now documents.
+    Color old_pal[16];
+    memcpy(old_pal, palette, sizeof(palette));
     reset_palette();
 
     // Try boot() on the fresh cart BEFORE swapping it in: if it traps, the
@@ -622,6 +624,7 @@ static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     if (fresh.f_boot) {
         M3Result err = m3_CallV(fresh.f_boot);
         if (err) {
+            memcpy(palette, old_pal, sizeof(palette));
             M3ErrorInfo info;
             m3_GetErrorInfo(fresh.rt, &info);
             fprintf(stderr, "vex: boot: %s (%s)\n", err,
