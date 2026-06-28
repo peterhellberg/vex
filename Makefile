@@ -33,8 +33,8 @@ TEST_DIR := cmd/vex-web/test
 # (its exe dir under the prefix). The host package is built from cmd/vex/
 # with `--prefix ../..` so it lands in the same ./bin.
 all:
-	zig build --prefix .
-	cd cmd/vex && zig build --prefix ../..
+	zig build --prefix . --release=fast
+	cd cmd/vex && zig build --prefix ../.. --release=fast
 	go build -o bin/vex-web ./cmd/vex-web
 	go build -o bin/vex-run ./cmd/vex-run
 
