@@ -1,6 +1,6 @@
 .{
     .name = .vex,
-    .version = "0.2.3",
+    .version = "0.2.4",
     // Globally unique package id, generated once by the Zig toolchain.
     .fingerprint = 0xe969ab1c398dc67c, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0-dev.387+31f157d80",
