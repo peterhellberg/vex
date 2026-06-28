@@ -17,7 +17,7 @@ For the specs and internals, see [How vex works](#how-vex-works).
 
 ## Build & run
 
-Needs the pinned `zig` (`0.17.0-dev.305+bdfbf432d`, see [`build.zig.zon`](build.zig.zon)).
+Needs the pinned `zig` (`0.17.0-dev.387+31f157d80`, see [`build.zig.zon`](build.zig.zon)).
 
 Dependencies are fetched on first build.
 
@@ -27,7 +27,7 @@ Dependencies are fetched on first build.
 > *and* raylib's `build.zig` (e.g. `no field named 'args' in struct 'Build'`).
 > Download the exact build from a
 > [community mirror](https://ziglang.org/download/community-mirrors.txt), e.g.
-> `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.305+bdfbf432d.tar.xz`.
+> `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.387+31f157d80.tar.xz`.
 
 ```sh
 zig build --prefix .    # build vex-init + cart.wasm + zcart.wasm into ./bin
@@ -320,10 +320,8 @@ zig build-exe -target wasm32-freestanding \
 ```
 
 > [!Note]
->  
-> I've prepared makefiles for [C](base/c/Makefile) and [Zig](base/zig/Makefile) 
-> respectively, they are meant to make it easier to 
-> build carts written by hand.
+> The [C](base/c/Makefile) and [Zig](base/zig/Makefile) makefiles in `base/`
+> download the SDK and build the cart — handy for one-off projects.
 
 ## API
 
