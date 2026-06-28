@@ -314,8 +314,10 @@ func writeBundle(cart string, stdout io.Writer) error {
 	cartFile := filepath.Base(cart)
 	name := strings.TrimSuffix(cartFile, filepath.Ext(cartFile))
 
+	cacheBuster := strconv.FormatInt(time.Now().UnixMilli(), 10)
+
 	files := []bundleFile{
-		{"index.html", bundleIndexHTML(cartFile)},
+		{"index.html", bundleIndexHTML(cartFile, cacheBuster)},
 		{cartFile, wasm},
 	}
 
@@ -342,8 +344,10 @@ func writeBundle(cart string, stdout io.Writer) error {
 
 // bundleIndexHTML returns a static copy of the embedded index.html that loads
 // cartFile directly, with the dev-only live-reload (SSE) script replaced so the
-// page works straight from the filesystem with no server behind it.
-func bundleIndexHTML(cartFile string) []byte {
+// page works straight from the filesystem with no server behind it. cacheBuster
+// is appended as a query parameter to the cart URL so each bundle forces a fresh
+// download (avoids stale wasm from HTTP caches after redeployment).
+func bundleIndexHTML(cartFile, cacheBuster string) []byte {
 	const (
 		startTag = `<script type="module">`
 		endTag   = "</script>"
@@ -393,7 +397,7 @@ func bundleIndexHTML(cartFile string) []byte {
 		`  setupGamepad();` + "\n" +
 		`} catch (e) { showError(e); }` + "\n" +
 		`window.addEventListener("load", () => {` + "\n" +
-		`  start(` + strconv.Quote(cartFile) + `).catch(showError);` + "\n" +
+		`  start(` + strconv.Quote(cartFile+"?v="+cacheBuster) + `).catch(showError);` + "\n" +
 		`});` + "\n" +
 		endTag
 
