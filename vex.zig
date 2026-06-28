@@ -69,7 +69,7 @@ pub extern "env" fn blit(data: [*]const u8, x: i32, y: i32, w: i32, h: i32, key:
 pub extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
 /// Set the console window title to the NUL-terminated string `s`.
 pub extern "env" fn title(s: [*:0]const u8) void;
-/// Return `1` while the button is held, else `0`. See `LEFT`…`B`.
+/// Return `1` while the button is held, else `0`. See `LEFT`…`X`.
 pub extern "env" fn btn(button: i32) i32;
 /// Return `1` if the button was just pressed this frame, else `0`.
 pub extern "env" fn btnp(button: i32) i32;
