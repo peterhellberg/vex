@@ -35,7 +35,7 @@ pub fn main(init: std.process.Init) !void {
     var dir = try cwd.openDir(io, dir_path, .{});
     defer dir.close(io);
 
-    const cart_zig = try std.fmt.allocPrint(a, cart_zig_tmpl, .{name});
+    const cart_zig = try std.fmt.allocPrint(a, cart_zig_tmpl, .{ name, name });
     const build_zig = try std.fmt.allocPrint(a, build_zig_tmpl, .{ name, name, name });
     const build_zon = try std.fmt.allocPrint(a, build_zon_tmpl, .{ pkg, fingerprint(pkg), VEX_URL });
 
@@ -139,8 +139,8 @@ const cart_zig_tmpl =
     \\}}
     \\
     \\export fn update() void {{
-    \\    vex.cls(0); // clear to dark
-    \\    vex.text("HELLO VEX", 8, 8, 12);
+    \\    vex.cls(0);
+    \\    vex.text("{s}", 8, 8, 12);
     \\}}
     \\
 ;
