@@ -1,17 +1,33 @@
-// Stress test: drawing functions with edge-case coordinates.
-// Exercises boundary conditions, off-screen draws, zero/negative dimensions,
-// and values that probe the VEX_COORD_MAX guard in the host.
 #include "vex.h"
 
 #define FRAMES_PER_CASE 18
 #define NUM_CASES 16
+
+static const char* CASE_NAMES[NUM_CASES] = {
+  "off-screen: negative coords",
+  "off-screen: beyond dimensions",
+  "zero dimensions",
+  "negative dimensions (clamped)",
+  "at VEX_COORD_MAX boundary",
+  "at -VEX_COORD_MAX boundary",
+  "full-screen fills",
+  "many overlapping small rects",
+  "triangles sharing edges (winding)",
+  "degenerate triangles (collinear)",
+  "circles at edges",
+  "lines at edges and diagonals",
+  "blit at boundaries",
+  "text at boundaries",
+  "line: single-pixel, off-screen, axis",
+  "circ: negative and huge radius",
+};
 
 static int frame;
 static int phase;
 
 static void draw_case(int c) {
   switch (c) {
-  case 0: // off-screen: negative coordinates
+  case 0:
     rect(-10, -10, 20, 20, 1);
     rectb(-5, -5, 15, 15, 2);
     circ(-5, -5, 10, 3);
@@ -20,14 +36,14 @@ static void draw_case(int c) {
     tri(-10, -10, -5, 0, 0, -5, 6);
     trib(-10, -10, -5, 0, 0, -5, 7);
     break;
-  case 1: // off-screen: beyond dimensions
+  case 1:
     rect(400, 0, 20, 20, 1);
     rectb(0, 250, 20, 20, 2);
     circ(400, 200, 10, 3);
     line(0, 300, 350, 0, 4);
     tri(0, 400, 300, 400, 150, 500, 5);
     break;
-  case 2: // zero dimensions
+  case 2:
     rect(100, 50, 0, 0, 2);
     rectb(100, 60, 0, 0, 3);
     circ(100, 70, 0, 4);
@@ -35,45 +51,45 @@ static void draw_case(int c) {
     rect(100, 90, 10, 0, 6);
     rect(100, 100, 0, 10, 7);
     break;
-  case 3: // negative dimensions (should be clamped by host)
+  case 3:
     rect(150, 50, -10, -10, 2);
     rectb(150, 60, -10, -10, 3);
     rect(150, 70, -10, 20, 4);
     rect(150, 80, 20, -10, 5);
     break;
-  case 4: // at VEX_COORD_MAX boundary (~5120)
+  case 4:
     rect(5110, 5110, 20, 20, 6);
     rectb(5000, 5000, 15, 15, 7);
     circ(5100, 5100, 10, 8);
     line(5000, 5000, 5100, 5100, 9);
     break;
-  case 5: // at -VEX_COORD_MAX boundary
+  case 5:
     rect(-5110, -5110, 20, 20, 6);
     rectb(-5000, -5000, 15, 15, 7);
     circ(-5100, -5100, 10, 8);
     break;
-  case 6: // full-screen fills
+  case 6:
     rect(0, 0, VEX_WIDTH, VEX_HEIGHT, 1);
     rect(4, 4, VEX_WIDTH - 8, VEX_HEIGHT - 8, 2);
     rect(8, 8, VEX_WIDTH - 16, VEX_HEIGHT - 16, 3);
     break;
-  case 7: // many overlapping small rects
+  case 7:
     for (int i = 0; i < 100; i++)
       rect(i * 3 % VEX_WIDTH, i * 2 % VEX_HEIGHT, 8, 8, i & 15);
     break;
-  case 8: // triangles sharing edges (the tri/trib winding normalization)
+  case 8:
     tri(20, 10, 80, 10, 50, 60, 5);
     trib(20, 10, 80, 10, 50, 60, 12);
     tri(100, 10, 160, 10, 130, 60, 7);
     trib(100, 10, 160, 10, 130, 60, 12);
     break;
-  case 9: // degenerate triangles (collinear points)
+  case 9:
     tri(50, 100, 80, 100, 120, 100, 8);
     trib(50, 100, 80, 100, 120, 100, 12);
     tri(50, 100, 50, 100, 80, 140, 9);
     trib(50, 100, 50, 100, 80, 140, 12);
     break;
-  case 10: // circles at edges
+  case 10:
     circ(0, 0, 20, 2);
     circb(0, 0, 25, 3);
     circ(VEX_WIDTH - 1, 0, 20, 4);
@@ -83,7 +99,7 @@ static void draw_case(int c) {
     circ(VEX_WIDTH - 1, VEX_HEIGHT - 1, 20, 8);
     circb(VEX_WIDTH - 1, VEX_HEIGHT - 1, 25, 9);
     break;
-  case 11: // lines at edges and diagonals
+  case 11:
     line(0, 0, VEX_WIDTH - 1, VEX_HEIGHT - 1, 2);
     line(VEX_WIDTH - 1, 0, 0, VEX_HEIGHT - 1, 3);
     line(0, 0, VEX_WIDTH - 1, 0, 4);
@@ -91,7 +107,7 @@ static void draw_case(int c) {
     line(VEX_WIDTH - 1, 0, VEX_WIDTH - 1, VEX_HEIGHT - 1, 6);
     line(0, VEX_HEIGHT - 1, VEX_WIDTH - 1, VEX_HEIGHT - 1, 7);
     break;
-  case 12: // blit with various positions and sizes
+  case 12:
     {
       unsigned char data[64];
       for (int i = 0; i < 64; i++)
@@ -103,7 +119,7 @@ static void draw_case(int c) {
       blit(data, 150, 80, 1, 1, 0);
     }
     break;
-  case 13: // text at boundaries
+  case 13:
     text("x", -5, 50, 2);
     text("x", VEX_WIDTH - 1, 50, 3);
     text("x", 50, -5, 4);
@@ -111,21 +127,31 @@ static void draw_case(int c) {
     text("x", VEX_WIDTH + 10, VEX_HEIGHT + 10, 6);
     text("x", -10, -10, 7);
     break;
-  case 14: // line: single-pixel (start == end)
+  case 14:
     line(50, 10, 50, 10, 12);
-    // line: nearly off-screen endpoints
     line(-5000, -5000, 6000, 6000, 6);
-    // line: axis-aligned extremes
     line(0, 0, VEX_WIDTH - 1, 0, 4);
     line(0, 0, 0, VEX_HEIGHT - 1, 5);
     break;
-  case 15: // circ with negative and huge radius
-    circ(100, 20, -5, 4);  // negative radius -> clamped to 0
+  case 15:
+    circ(100, 20, -5, 4);
     circb(100, 30, -10, 5);
-    circ(200, 20, 10000, 6);  // huge radius -> clamped to VEX_COORD_MAX
+    circ(200, 20, 10000, 6);
     circb(200, 30, 10000, 7);
     break;
   }
+}
+
+static void draw_header(void) {
+  rect(0, 0, VEX_WIDTH, 8, 1);
+  text("C", 2, 0, 12);
+  text("OORD", 10, 0, 12);
+  int dx = 6;
+  for (int i = 0; i < NUM_CASES; i++) {
+    int x = VEX_WIDTH - NUM_CASES * dx + i * dx;
+    rect(x, 1, 4, 6, i < phase ? 12 : (i == phase ? 14 : 5));
+  }
+  text(CASE_NAMES[phase], 2, 10, 14);
 }
 
 VEX_EXPORT("boot") void boot(void) {
@@ -137,12 +163,13 @@ VEX_EXPORT("boot") void boot(void) {
 VEX_EXPORT("update") void update(void) {
   if (phase >= NUM_CASES) {
     cls(0);
-    text("DONE", VEX_WIDTH / 2 - 12, VEX_HEIGHT / 2 - 4, 12);
+    text("DONE - test_coords", 80, VEX_HEIGHT / 2 - 4, 12);
     return;
   }
 
   if (frame == 0) {
     cls(0);
+    draw_header();
     draw_case(phase);
   }
 
