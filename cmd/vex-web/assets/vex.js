@@ -127,6 +127,10 @@ let mouseY = 0;
 
 const mouseButtons = new Array(8).fill(false);
 
+// DOM e.button: 0=left, 1=middle, 2=right.
+// vex convention: 0=left, 1=right, 2=middle (matches raylib, ebitengine).
+const DOM_TO_VEX = [0, 2, 1];
+
 canvas.addEventListener("mousemove", e => {
 
     const r = canvas.getBoundingClientRect();
@@ -141,12 +145,17 @@ canvas.addEventListener("mousemove", e => {
 });
 
 canvas.addEventListener("mousedown", e => {
-    mouseButtons[e.button] = true;
+    e.preventDefault();
+    mouseButtons[DOM_TO_VEX[e.button] ?? e.button] = true;
 });
 
 canvas.addEventListener("mouseup", e => {
-    mouseButtons[e.button] = false;
+    e.preventDefault();
+    mouseButtons[DOM_TO_VEX[e.button] ?? e.button] = false;
 });
+
+// Prevent the browser context menu so right-click reaches the cart.
+canvas.addEventListener("contextmenu", e => e.preventDefault());
 
 //// Part 3b: Virtual gamepad (portrait mode)
 
