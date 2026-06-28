@@ -36,7 +36,7 @@ pub fn main(init: std.process.Init) !void {
     defer dir.close(io);
 
     const cart_zig = try std.fmt.allocPrint(a, cart_zig_tmpl, .{name});
-    const build_zig = try std.fmt.allocPrint(a, build_zig_tmpl, .{name});
+    const build_zig = try std.fmt.allocPrint(a, build_zig_tmpl, .{ name, name, name });
     const build_zon = try std.fmt.allocPrint(a, build_zon_tmpl, .{ pkg, fingerprint(pkg), VEX_URL });
 
     try dir.createDirPath(io, "src");
@@ -214,6 +214,21 @@ const build_zig_tmpl =
     \\    bundle.addArg(wasm);
     \\    bundle.step.dependOn(b.getInstallStep());
     \\    b.step("bundle", "Build the cart and write a static bundle with vex-web").dependOn(&bundle.step);
+    \\
+    \\    // `zig build deploy` bundles, copies src/ into the bundle, then scp's
+    \\    // it to play.c7.se. Edit scp_target / public_url below to point at
+    \\    // your own hosting setup.
+    \\    const scp_target = "c7.se:/var/www/play.c7.se/vex/";
+    \\    const public_url = "https://play.c7.se/vex/" ++ "{s}" ++ "/";
+    \\
+    \\    const copy_src = b.addSystemCommand(&.{{ "cp", "-r", "src", "bundle/" ++ "{s}" ++ "/src" }});
+    \\    copy_src.step.dependOn(&bundle.step);
+    \\
+    \\    const deploy_cmd = "scp -r bundle/* " ++ scp_target ++
+    \\        " && echo '→ Uploaded to " ++ public_url ++ "'";
+    \\    const deploy = b.addSystemCommand(&.{{ "bash", "-c", deploy_cmd }});
+    \\    deploy.step.dependOn(&copy_src.step);
+    \\    b.step("deploy", "Bundle the cart and scp it to play.c7.se").dependOn(&deploy.step);
     \\}}
     \\
 ;
