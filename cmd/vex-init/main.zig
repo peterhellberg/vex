@@ -36,7 +36,7 @@ pub fn main(init: std.process.Init) !void {
     defer dir.close(io);
 
     const cart_zig = try std.fmt.allocPrint(a, cart_zig_tmpl, .{ name, name });
-    const build_zig = try std.fmt.allocPrint(a, build_zig_tmpl, .{ name, name, name });
+    const build_zig = try std.fmt.allocPrint(a, build_zig_tmpl, .{ name, name, name, name });
     const build_zon = try std.fmt.allocPrint(a, build_zon_tmpl, .{ pkg, fingerprint(pkg), VEX_URL });
 
     try dir.createDirPath(io, "src");
@@ -226,8 +226,11 @@ const build_zig_tmpl =
     \\    const scp_target = "c7.se:/var/www/play.c7.se/vex/";
     \\    const public_url = "https://play.c7.se/vex/" ++ "{s}" ++ "/";
     \\
-    \\    const copy_src = b.addSystemCommand(&.{{ "cp", "-r", "src", "bundle/" ++ "{s}" ++ "/src" }});
-    \\    copy_src.step.dependOn(&bundle.step);
+    \\    const rm_src = b.addSystemCommand(&.{{ "rm", "-rf", "bundle/" ++ "{s}" ++ "/src" }});
+    \\    rm_src.step.dependOn(&bundle.step);
+    \\
+    \\    const copy_src = b.addSystemCommand(&.{{ "cp", "-r", "src", "bundle/" ++ "{s}" ++ "/." }});
+    \\    copy_src.step.dependOn(&rm_src.step);
     \\
     \\    const deploy_cmd = "scp -r bundle/* " ++ scp_target ++
     \\        " && echo '→ Uploaded to " ++ public_url ++ "'";
