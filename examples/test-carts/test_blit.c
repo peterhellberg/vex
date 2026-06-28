@@ -3,7 +3,7 @@
 #include "vex.h"
 
 #define FRAMES_PER_CASE 15
-#define NUM_CASES 8
+#define NUM_CASES 12
 
 static int frame;
 static int phase;
@@ -78,6 +78,40 @@ static void draw_case(int c) {
       blit(d, 140, 100, 10, 0, 0);
       blit(d, 160, 100, 0, 10, 0);
       rect(100, 100, 80, 10, 4); // mark where tests ran
+    }
+    break;
+  case 8: // key = -1 (signed edge case: "draw all")
+    {
+      unsigned char d[25];
+      for (int i = 0; i < 25; i++) d[i] = i & 15;
+      blit(d, 0, 0, 5, 5, -1);    // key = -1 -> drawn as unsigned 255 -> no pixel matches
+      blit(d, 50, 0, 5, 5, 255);  // same test as above
+    }
+    break;
+  case 9: // key = INT32_MIN, INT32_MAX
+    {
+      unsigned char d[4] = {5, 6, 7, 8};
+      blit(d, 110, 0, 2, 2, -2147483648); // INT32_MIN cast to unsigned
+      blit(d, 130, 0, 2, 2, 2147483647);  // INT32_MAX
+    }
+    break;
+  case 10: // w/h exceeding VEX_W/VEX_H (clamping test)
+    {
+      fill_data(big_data, VEX_WIDTH, VEX_HEIGHT, 0);
+      // These should be clamped by the host to VEX_W/VEX_H
+      blit(big_data, 0, 40, 9999, 9999, 16);
+      blit(big_data, 0, 50, 9999, 5, 16);  // too wide
+      blit(big_data, 0, 60, 5, 9999, 16);  // too tall
+    }
+    break;
+  case 11: // rectangle data shapes: solid row, solid column
+    {
+      unsigned char row[320];
+      for (int i = 0; i < 320; i++) row[i] = (i / 20) & 15;
+      blit(row, 0, 80, 320, 1, 16);       // 1px tall, full width
+      unsigned char col[180];
+      for (int i = 0; i < 180; i++) col[i] = (i / 12) & 15;
+      blit(col, 310, 0, 1, 180, 16);      // 1px wide, full height
     }
     break;
   }

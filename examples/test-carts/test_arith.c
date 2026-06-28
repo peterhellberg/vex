@@ -106,16 +106,11 @@ VEX_EXPORT("update") void update(void) {
   // Phase 3: edge-case i64 arithmetic — division by edge values
   {
     // i64.div_s and i64.rem_s with edge-case divisors
-    long long edge_divs[] = {1, -1, 2, -2, 7, -7, 0};
+    long long edge_divs[] = {1, -1, 2, -2, 7, -7};
     for (int i = 0; i < 6; i++) {
       long long d = edge_divs[i];
-      long long q = 0, rem = 0;
-      // Only do division if divisor is non-zero (avoid wasm trap)
-      if (d != 0) {
-        q = (long long)mul_stress_iter / d;
-        rem = (long long)mul_stress_iter % d;
-      }
-      // Use the quotient/remainder for screen position
+      long long q = (long long)mul_stress_iter / d;
+      long long rem = (long long)mul_stress_iter % d;
       int sx = (int)(q % VEX_WIDTH);
       int sy = (int)((rem + mul_stress_iter * 7) % VEX_HEIGHT);
       if (sx >= 0 && sy >= 0)
@@ -123,7 +118,27 @@ VEX_EXPORT("update") void update(void) {
     }
   }
 
-  // Phase 4: i64 shift operations
+  // Phase 4: edge-case division with large signed values
+  {
+    long long vals[] = {
+      9223372036854775807LL,      // INT64_MAX
+      -9223372036854775807LL - 1, // INT64_MIN
+      0x7FFFFFFFFFFFFFFFLL,
+    };
+    // INT64_MIN / -1 and INT64_MIN % -1 trap in wasm — skip those
+    // Test division of large values by small values
+    long long d2 = mul_stress_iter + 1; // non-zero, positive
+    for (int i = 0; i < 3; i++) {
+      long long q2 = vals[i] / d2;
+      long long r2 = vals[i] % d2;
+      int sx = (int)(q2 % VEX_WIDTH);
+      int sy = (int)((r2 + mul_stress_iter) % VEX_HEIGHT);
+      if (sx >= 0 && sy >= 0)
+        pset(sx, sy, 9 + i);
+    }
+  }
+
+  // Phase 5: i64 shift operations
   {
     unsigned long long sh = state;
     for (int i = 0; i < 64; i++) {
@@ -134,7 +149,21 @@ VEX_EXPORT("update") void update(void) {
     state = sh; // preserve across frames
     int sx = (int)((sh >> 32) % VEX_WIDTH);
     int sy = (int)((sh >> 16) % VEX_HEIGHT);
-    pset(sx, sy, 9);
+    pset(sx, sy, 14);
+  }
+
+  // Phase 6: i64 shifts by large immediate values (unsigned, to avoid UB)
+  {
+    unsigned long long uv = (unsigned long long)(mul_stress_iter * 0x12345678LL);
+    // Mask shift amounts to avoid C UB (wasm defines v >> (amount % 64))
+    unsigned long long s1 = uv >> 63;    // wasm: uv >> (127 % 64)
+    unsigned long long s2 = uv >> 8;     // wasm: uv >> (200 % 64)
+    unsigned long long s3 = uv << 8;     // wasm: uv << (200 % 64)
+    int sx = (int)(s1 % 20) + 150;
+    int sy = (int)(s2 % 20) + 100;
+    if (sx >= 0 && sy >= 0) pset(sx, sy, 11);
+    int sx3 = (int)(s3 % 20) + 200;
+    if (sx3 >= 0) pset(sx3, 100, 12);
   }
 
   // Show frame counter

@@ -3,8 +3,8 @@
 // and values that probe the VEX_COORD_MAX guard in the host.
 #include "vex.h"
 
-#define FRAMES_PER_CASE 20
-#define NUM_CASES 14
+#define FRAMES_PER_CASE 18
+#define NUM_CASES 16
 
 static int frame;
 static int phase;
@@ -110,6 +110,20 @@ static void draw_case(int c) {
     text("x", 50, VEX_HEIGHT - 1, 5);
     text("x", VEX_WIDTH + 10, VEX_HEIGHT + 10, 6);
     text("x", -10, -10, 7);
+    break;
+  case 14: // line: single-pixel (start == end)
+    line(50, 10, 50, 10, 12);
+    // line: nearly off-screen endpoints
+    line(-5000, -5000, 6000, 6000, 6);
+    // line: axis-aligned extremes
+    line(0, 0, VEX_WIDTH - 1, 0, 4);
+    line(0, 0, 0, VEX_HEIGHT - 1, 5);
+    break;
+  case 15: // circ with negative and huge radius
+    circ(100, 20, -5, 4);  // negative radius -> clamped to 0
+    circb(100, 30, -10, 5);
+    circ(200, 20, 10000, 6);  // huge radius -> clamped to VEX_COORD_MAX
+    circb(200, 30, 10000, 7);
     break;
   }
 }

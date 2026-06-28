@@ -78,6 +78,10 @@ VEX_EXPORT("update") void update(void) {
     text("x", VEX_WIDTH - 8, 0, 2);
     text("x", 0, VEX_HEIGHT - 8, 3);
     text("x", VEX_WIDTH - 8, VEX_HEIGHT - 8, 4);
+    // Edge cases: empty string, control chars, DEL
+    text("", 50, 80, 12);          // empty string — should draw nothing
+    text("\x01\x02\x1F", 50, 90, 13); // low control chars (below VEX_FONT_FIRST=32)
+    text("\x7F\x80\xFF", 50, 100, 14); // DEL and high bytes (above ASCII 127)
     break;
 
   case 6: // tri/trib: triangles at various winding orders
@@ -112,24 +116,37 @@ VEX_EXPORT("update") void update(void) {
     break;
   }
 
+  // Interleave palette ops with drawing every few phases
+  if ((p & 1) == 0) {
+    for (int i = 0; i < 16; i++)
+      pal(i, (i * 0x112233 + p * 0x010101) & 0xFFFFFF);
+  } else {
+    palreset();
+  }
+
   // Test input functions every frame: call btn/btnp/mx/my/mbtn repeatedly
   // to ensure they don't corrupt state or crash.
-  for (int b = -1; b <= 7; b++) {
+  for (int b = -2; b <= 8; b++) {
     int h = btn(b);
-    int p = btnp(b);
+    int p2 = btnp(b);
   }
   int mxv = mx();
   int myv = my();
-  for (int mb = -1; mb <= 4; mb++) {
+  for (int mb = -2; mb <= 5; mb++) {
     int mbh = mbtn(mb);
   }
 
+  // Call title() every frame to test rapid string setting
+  title("vex - test_api");
+
+  // Draw a small indicator at the bottom with corrected palette
   text("P", 0, VEX_HEIGHT - 8, (phase & 1) ? 12 : 13);
 
   frame++;
   if (frame >= FRAMES_PER_PHASE) {
     frame = 0;
     phase++;
+    palreset(); // reset palette between phases so next phase starts clean
   }
 
   if (phase >= NUM_PHASES * 4) {
