@@ -20,8 +20,8 @@
 #define VEX_RIGHT 1
 #define VEX_UP    2
 #define VEX_DOWN  3
-#define VEX_A     4
-#define VEX_B     5
+#define VEX_Z     4
+#define VEX_X     5
 
 // Mouse buttons, as passed to mbtn().
 #define VEX_MOUSE_LEFT   0

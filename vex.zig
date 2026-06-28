@@ -31,10 +31,10 @@ pub const RIGHT = 1;
 pub const UP = 2;
 /// `btn()` index for the down arrow.
 pub const DOWN = 3;
-/// `btn()` index for the A button (the `Z` key).
-pub const A = 4;
-/// `btn()` index for the B button (the `X` key).
-pub const B = 5;
+/// `btn()` index for the Z button.
+pub const Z = 4;
+/// `btn()` index for the X button.
+pub const X = 5;
 
 /// `mbtn()` index for the left mouse button.
 pub const MOUSE_LEFT = 0;

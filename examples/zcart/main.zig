@@ -1,6 +1,6 @@
 // Example vex cart, written in Zig (0.17-dev) and compiled to wasm32.
 //
-// Move the player square with the arrow keys; press A (Z) to change its fill
+// Move the player square with the arrow keys; press Z to change its fill
 // color. A ball bounces around the screen. The console API is imported from
 // the reusable vex.zig SDK.
 
@@ -86,8 +86,8 @@ inline fn draw(s: *State) void {
     vex.text("VEX ZIG", 6, 6, 12); // white
     vex.text("ARROWS +", 6, 18, 13); // muted blue-grey
 
-    // Player: filled square (red while A held, otherwise green) with a border.
-    const fill: i32 = if (vex.down(vex.A)) 2 else 5;
+    // Player: filled square (red while Z held, otherwise green) with a border.
+    const fill: i32 = if (vex.down(vex.Z)) 2 else 5;
 
     vex.rect(s.px, s.py, P, P, fill);
     vex.rectb(s.px, s.py, P, P, 12); // white border

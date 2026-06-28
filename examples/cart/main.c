@@ -1,4 +1,4 @@
-// Example vex cart: move a player square with the arrow keys, press A (Z) to
+// Example vex cart: move a player square with the arrow keys, press Z to
 // change its fill color. Demonstrates the whole drawing/input API.
 #include "vex.h"
 
@@ -55,9 +55,9 @@ VEX_EXPORT("update") void update(void) {
   tri(150, VEX_HEIGHT - 1, 210, VEX_HEIGHT - 52, 270, VEX_HEIGHT - 1, 14);
   trib(248, VEX_HEIGHT - 1, 296, VEX_HEIGHT - 72, 319, VEX_HEIGHT - 1, 12);
 
-  // Player: a filled square (red while A held, otherwise green) with a white
+  // Player: a filled square (red while Z held, otherwise green) with a white
   // border drawn around the same square.
-  int fill = btn(VEX_A) ? 2 : 5;
+  int fill = btn(VEX_Z) ? 2 : 5;
   rect(px, py, PLAYER, PLAYER, fill);
   rectb(px, py, PLAYER, PLAYER, 12);
 

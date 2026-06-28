@@ -355,8 +355,8 @@ Buttons:
  - `1` right
  - `2` up
  - `3` down
- - `4` A (`Z` key)
- - `5` B (`X` key)
+ - `4` Z
+ - `5` X
 
 ## How vex works
 
@@ -385,9 +385,10 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
   leftovers from the previous frame.
 - **Color is a palette index** `0..15`, never a raw RGB value. Remap an entry at
   runtime with `pal(index, 0xRRGGBB)` and restore the defaults with `palreset()`.
-- **Input** — read the buttons with `btn(n)` _(the d-pad and A/B, mapped to the
-  arrow keys and `Z`/`X`)_ for held state and `btnp(n)` for a one-shot on the
-  frame a button is first pressed. The mouse is read with `mx()`/`my()`/`mbtn(n)`.
+- **Input** — read the buttons with `btn(n)` _(the d-pad and Z/X, mapped to
+  the arrow keys and `Z`/`X`)_ for held state and `btnp(n)` for a one-shot on
+  the frame a button is first pressed. The mouse is read with
+  `mx()`/`my()`/`mbtn(n)`.
   See the [API](#api) for the exact button numbers.
 
 ### Components

@@ -410,7 +410,7 @@ m3ApiRawFunction(host_title) {
     m3ApiSuccess();
 }
 
-// btn(button) -> held? Buttons: 0 left, 1 right, 2 up, 3 down, 4 A, 5 B.
+// btn(button) -> held? Buttons: 0 left, 1 right, 2 up, 3 down, 4 Z, 5 X.
 m3ApiRawFunction(host_btn) {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, button)
