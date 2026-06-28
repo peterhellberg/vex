@@ -8,7 +8,7 @@ const std = @import("std");
 // raylib/wasm3 deps aren't pulled in by everyone.
 //
 //   zig build           build ./vex-init + cart.wasm + zcart.wasm
-//   zig build --prefix .   install everything into ./bin
+//   zig build --prefix .   install vex-init into ./bin and carts into ./bin/carts
 //
 // The host is built separately, see cmd/vex/build.zig (or just run `make`,
 // which builds both).
@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
     cart_c.root_module.addCSourceFile(.{ .file = b.path("examples/cart/main.c") });
     cart_c.root_module.addIncludePath(b.path(".")); // for vex.h
     cart_c.entry = .disabled;
-    b.installArtifact(cart_c);
+    b.getInstallStep().dependOn(&b.addInstallArtifact(cart_c, .{ .dest_dir = .{ .override = .{ .custom = "bin/carts" } } }).step);
 
     // Zig cart. Imports the host API from the reusable vex.zig SDK.
     const cart_zig = b.addExecutable(.{
@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
     });
     cart_zig.entry = .disabled;
     cart_zig.rdynamic = true; // export the `export fn`s
-    b.installArtifact(cart_zig);
+    b.getInstallStep().dependOn(&b.addInstallArtifact(cart_zig, .{ .dest_dir = .{ .override = .{ .custom = "bin/carts" } } }).step);
 
     // --- test carts: wasm32-freestanding stress-test modules ------------------
     const test_carts = [_][]const u8{
@@ -77,7 +77,7 @@ pub fn build(b: *std.Build) void {
         t.root_module.addCSourceFile(.{ .file = b.path("examples/test-carts/" ++ name ++ ".c") });
         t.root_module.addIncludePath(b.path("."));
         t.entry = .disabled;
-        b.installArtifact(t);
+        b.getInstallStep().dependOn(&b.addInstallArtifact(t, .{ .dest_dir = .{ .override = .{ .custom = "bin/carts" } } }).step);
     }
 
     // --- vex-init: scaffold a new cart project ------------------------------

@@ -6,9 +6,10 @@
 #     package that depends on raylib + wasm3.
 #
 # `make` runs both, installing everything into ./bin so the binaries live
-# together rather than scattered across zig-out/bin.
+# together rather than scattered across zig-out/bin. Carts go under
+# ./bin/carts/.
 #
-#   make          build vex + vex-init + vex-web + cart.wasm + zcart.wasm into ./bin
+#   make          build vex + vex-init + vex-web + carts into ./bin
 #   make run      build, then run the C example cart
 #   make runz     build, then run the Zig example cart
 #   make web      serve the browser build (override the cart with CART=...)
@@ -20,8 +21,8 @@ PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 
 # Cart served by `make web` and tested by `make test-web`; override e.g.
-# `make web CART=bin/zcart.wasm`.
-CART ?= bin/cart.wasm
+# `make web CART=bin/carts/zcart.wasm`.
+CART ?= bin/carts/cart.wasm
 
 # Path to the bundled test directory (Playwright scripts).
 TEST_DIR := cmd/vex-web/test

@@ -79,8 +79,8 @@ pub fn build(b: *std.Build) void {
     // Expect the example carts to have been installed into ../bin by the
     // top-level build (see the project Makefile). Extra args after `--` are
     // forwarded to vex, e.g. `... -- -s 5`.
-    const cart_c = b.path("../bin/cart.wasm");
-    const cart_z = b.path("../bin/zcart.wasm");
+    const cart_c = b.path("../bin/carts/cart.wasm");
+    const cart_z = b.path("../bin/carts/zcart.wasm");
 
     const run_c = b.addRunArtifact(exe);
     run_c.addFileArg(cart_c);
