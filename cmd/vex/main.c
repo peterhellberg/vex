@@ -43,7 +43,7 @@ static Color palette[16];
 #define VEX_FONT_FIRST 32
 static const uint64_t FONT8[96] = {
     0x0000000000000000ULL, // 32  space
-    0x1010101010001000ULL, // 33  !
+    0x1818181818001800ULL, // 33  !
     0x2828000000000000ULL, // 34  "
     0x28287C287C282800ULL, // 35  #
     0x103C5038147C1000ULL, // 36  $
