@@ -69,7 +69,7 @@ pub fn build(b: *std.Build) void {
         // an i64 const. Widen the slots to u64 so those writes are naturally
         // aligned -- the supported 64-bit-host configuration, correct in
         // every build mode.
-        .flags = &.{"-Dd_m3Use32BitSlots=0"},
+        .flags = &.{ "-Dd_m3Use32BitSlots=0", "-fwrapv" },
     });
     exe.root_module.addIncludePath(wasm3.path("source"));
     exe.root_module.linkLibrary(raylib); // brings in raylib headers + platform libs
