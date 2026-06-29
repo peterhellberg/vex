@@ -1,7 +1,7 @@
 // vex.h - cart SDK. Include this in a cart and compile to wasm32:
 //
-//   zig cc --target=wasm32-freestanding -nostdlib -O2 \
-//          -Wl,--no-entry -I. -o cart.wasm examples/cart/main.c
+//   zig cc --target=wasm32-freestanding -nostdlib -Os \
+//          -Wl,--no-entry -I. -o cart.wasm main.c
 //
 // A cart must export update() (called every frame at 60fps) and may export
 // boot() (called once at start). It draws by calling the functions below.
