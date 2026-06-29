@@ -1,6 +1,7 @@
 /bin/
 /zig-out/
 /.zig-cache/
+/.docs-tmp/
 /zig-pkg/
 /cmd/vex/zig-out/
 /cmd/vex/.zig-cache/

@@ -73,7 +73,11 @@ $(TEST_DIR)/node_modules/.package-lock.json: $(TEST_DIR)/package.json
 test-deps: $(TEST_DIR)/node_modules/.package-lock.json
 
 docs:
-	zig build-lib -fno-emit-bin -femit-docs vex.zig
+	rm -rf docs .docs-tmp
+	mkdir -p .docs-tmp
+	cp vex.zig .docs-tmp/
+	cd .docs-tmp && zig build-lib -fno-emit-bin -femit-docs=../docs vex.zig
+	rm -rf .docs-tmp
 
 install: all
 	mkdir -p $(BINDIR)
