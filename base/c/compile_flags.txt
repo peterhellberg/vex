@@ -1,0 +1,2 @@
+-I.
+-Wno-unknown-attributes
