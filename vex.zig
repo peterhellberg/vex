@@ -11,6 +11,14 @@
 //! }
 //! ```
 //!
+//! Compilation without a build.zig is done like this:
+//!
+//! ```
+//! zig build-exe \
+//!     -target wasm32-freestanding \
+//!     -O ReleaseSmall -fno-entry -rdynamic --dep vex \
+//!     -femit-bin=cart.wasm -Mroot=cart.zig -Mvex=vex.zig
+//! ```
 //! A cart must export `update()` (called every frame at 60 fps) and may
 //! export `boot()` (called once at start). It draws by calling the functions
 //! below, which the console links from the `env` import module.
