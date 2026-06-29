@@ -656,6 +656,22 @@ func (g *Game) palreset() {
 	copy(g.palette[:], defaultPalette[:])
 }
 
+// initCart resets the palette, clears the framebuffer, and runs the cart's
+// boot() if it exports one. It does not touch g's module/function fields or
+// the bootCalled flag; the caller owns those and any rollback on error.
+func (g *Game) initCart(ctx context.Context, bootFn api.Function) error {
+	g.palreset()
+	g.cls(0)
+
+	if bootFn != nil {
+		if _, err := bootFn.Call(ctx); err != nil {
+			return fmt.Errorf("boot: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func (g *Game) Update() error {
 	if inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
 		return ebiten.Termination
@@ -697,14 +713,8 @@ func (g *Game) Update() error {
 
 	if !g.bootCalled {
 		g.bootCalled = true
-		g.palreset()
-		g.cls(0)
-
-		if g.bootFn != nil {
-			_, err := g.bootFn.Call(context.Background())
-			if err != nil {
-				return fmt.Errorf("boot: %w", err)
-			}
+		if err := g.initCart(context.Background(), g.bootFn); err != nil {
+			return err
 		}
 	}
 
@@ -754,19 +764,13 @@ func (g *Game) reloadCart(ctx context.Context) error {
 
 	bootFn := module.ExportedFunction("boot")
 
-	if bootFn != nil {
-		oldPalette := g.palette
-		g.palreset()
+	oldPalette := g.palette
+	if err := g.initCart(ctx, bootFn); err != nil {
+		g.palette = oldPalette
 
-		if _, err := bootFn.Call(ctx); err != nil {
-			g.palette = oldPalette
+		module.Close(ctx)
 
-			module.Close(ctx)
-
-			return fmt.Errorf("boot: %w", err)
-		}
-	} else {
-		g.palreset()
+		return err
 	}
 
 	g.module.Close(ctx)
@@ -774,7 +778,6 @@ func (g *Game) reloadCart(ctx context.Context) error {
 	g.updateFn = updateFn
 	g.bootFn = bootFn
 	g.bootCalled = true
-	g.cls(0)
 
 	return nil
 }
