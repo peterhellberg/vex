@@ -695,14 +695,16 @@ func (g *Game) Update() error {
 		}
 	}
 
-	if g.bootFn != nil && !g.bootCalled {
+	if !g.bootCalled {
 		g.bootCalled = true
 		g.palreset()
 		g.cls(0)
 
-		_, err := g.bootFn.Call(context.Background())
-		if err != nil {
-			return fmt.Errorf("boot: %w", err)
+		if g.bootFn != nil {
+			_, err := g.bootFn.Call(context.Background())
+			if err != nil {
+				return fmt.Errorf("boot: %w", err)
+			}
 		}
 	}
 
