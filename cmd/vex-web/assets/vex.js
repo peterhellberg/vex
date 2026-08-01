@@ -129,10 +129,15 @@ const mouseButtons = new Array(8).fill(false);
 
 // DOM e.button: 0=left, 1=middle, 2=right.
 // vex convention: 0=left, 1=right, 2=middle (matches raylib, ebitengine).
+// Touch bypasses this mapping — see setButton below.
 const DOM_TO_VEX = [0, 2, 1];
 
-canvas.addEventListener("mousemove", e => {
-
+// Pointer events handle mouse, touch and pen uniformly, so dragging a
+// finger across the canvas updates mouseX/mouseY just like moving a
+// mouse. touch-action: none (see index.html) stops the browser hijacking
+// the touch for scrolling or pinch-zoom.
+function setMouse(e)
+{
     const r = canvas.getBoundingClientRect();
 
     mouseX = Math.floor(
@@ -142,17 +147,113 @@ canvas.addEventListener("mousemove", e => {
     mouseY = Math.floor(
         (e.clientY - r.top) * VEX_H / r.height
     );
+}
+
+// Each vex button tracks the pointers holding it down, so releasing one
+// finger mid multi-touch doesn't lift a button another finger is still
+// holding.
+const heldPointers = new Map();
+
+// Touch pointers map onto vex buttons in order of activation: the first
+// finger only moves the pointer, the second presses the left button (0)
+// and the third the right button (1). Each pointer keeps its assignment
+// until it lifts. pointerId -> vex button index (or -1 for none).
+const touchButtons = new Map();
+
+function setButton(e, down)
+{
+    let button;
+
+    if (e.pointerType === "touch")
+    {
+        if (down)
+        {
+            // Fingers count from the number already down, so the index
+            // is the activation position: index 1 becomes the left
+            // button, index 2 the right. Extra fingers just move the
+            // pointer like the first.
+            const index = touchButtons.size;
+            touchButtons.set(e.pointerId, index - 1);
+        }
+
+        button = touchButtons.get(e.pointerId);
+
+        if (!down)
+            touchButtons.delete(e.pointerId);
+
+        // No vex button assigned to this finger (position only, or an
+        // ignored extra finger).
+        if (button < 0 || button > 1)
+            return;
+    }
+    else
+    {
+        button = DOM_TO_VEX[e.button] ?? e.button;
+    }
+
+    const pointers = heldPointers.get(button) ?? new Set();
+
+    if (down)
+    {
+        pointers.add(e.pointerId);
+        heldPointers.set(button, pointers);
+    }
+    else
+    {
+        pointers.delete(e.pointerId);
+        if (pointers.size === 0)
+            heldPointers.delete(button);
+    }
+
+    mouseButtons[button] = heldPointers.has(button);
+}
+
+// The pointer that owns the mouse position. Only the first finger to land
+// moves mouseX/mouseY; a second finger pressed while it is held down must
+// not jump the cursor to itself. Mouse and pen always update the position,
+// so this only gates touch moves.
+let positionPointer = null;
+
+canvas.addEventListener("pointerdown", e => {
+    e.preventDefault();
+
+    if (e.pointerType !== "touch" || positionPointer === null)
+    {
+        positionPointer = e.pointerId;
+        setMouse(e);
+    }
+
+    setButton(e, true);
+    // Keep receiving pointermove/pointerup even when the finger or pen
+    // slides off the canvas mid-drag.
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
 });
 
-canvas.addEventListener("mousedown", e => {
-    e.preventDefault();
-    mouseButtons[DOM_TO_VEX[e.button] ?? e.button] = true;
+canvas.addEventListener("pointermove", e => {
+    if (e.pointerType !== "touch" || e.pointerId === positionPointer)
+        setMouse(e);
 });
 
-canvas.addEventListener("mouseup", e => {
-    e.preventDefault();
-    mouseButtons[DOM_TO_VEX[e.button] ?? e.button] = false;
-});
+function releasePointer(e)
+{
+    setButton(e, false);
+
+    // Hand the mouse position to the next active touch pointer when the
+    // owning finger lifts.
+    if (e.pointerId === positionPointer)
+    {
+        positionPointer = null;
+
+        for (const id of touchButtons.keys())
+        {
+            positionPointer = id;
+            break;
+        }
+    }
+}
+
+canvas.addEventListener("pointerup", releasePointer);
+canvas.addEventListener("pointercancel", releasePointer);
 
 // Prevent the browser context menu so right-click reaches the cart.
 canvas.addEventListener("contextmenu", e => e.preventDefault());
