@@ -1022,7 +1022,9 @@ function present()
     ctx.putImageData(image, 0, 0);
 }
 
-function frame()
+let frameGen = 0;
+
+function frame(gen)
 {
     // run cart logic
     instance.exports.update();
@@ -1036,7 +1038,8 @@ function frame()
     for (let i = 0; i < 6; i++)
         if (btn(i)) prevButtons |= (1 << i);
 
-    rafId = requestAnimationFrame(frame);
+    if (frameGen === gen)
+        rafId = requestAnimationFrame(() => frame(gen));
 }
 
 function clear()
@@ -1048,12 +1051,14 @@ function clear()
 // already running so reloads don't stack.
 function run()
 {
+    const gen = ++frameGen;
+
     if (rafId !== null)
         cancelAnimationFrame(rafId);
 
     // palette + framebuffer were already reset before boot() in
     // instantiateCart(); resetting here would clobber boot()'s pal() overrides.
-    rafId = requestAnimationFrame(frame);
+    rafId = requestAnimationFrame(() => frame(gen));
 }
 
 export async function start(cartPath)
