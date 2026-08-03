@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -213,8 +214,15 @@ func run(args []string) error {
 }
 
 type Game struct {
-	pixels   []byte
-	palette  [16][4]uint8
+	pixels []byte
+	frame  []uint32
+	// palette holds the 16 palette colors packed as RGBA into a uint32
+	// (little-endian: R is the low byte). It mirrors defaultPalette and is
+	// written by pal()/palreset(). The drawing primitives write packed colors
+	// straight into frame (a uint32 view over pixels) instead of four
+	// separate byte stores.
+	palette [16]uint32
+
 	prevBtns uint8
 
 	updateFn   api.Function
@@ -228,48 +236,49 @@ type Game struct {
 	lastMod  time.Time
 	pollTick int
 	instSeq  int
+
+	// Reusable scanline buffers for tri(), avoiding a map + per-row heap
+	// allocation on every filled triangle.
+	triL []int32
+	triR []int32
 }
 
 func NewGame() *Game {
-	return &Game{
-		pixels: make([]byte, VEX_W*VEX_H*4),
+	pixels := make([]byte, VEX_W*VEX_H*4)
+	g := &Game{
+		pixels: pixels,
+		frame:  unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
 	}
+	g.palreset()
+	return g
 }
 
 func (g *Game) coordOK(v int32) bool {
 	return v >= -VEX_COORD_MAX && v <= VEX_COORD_MAX
 }
 
-func (g *Game) palColor(index uint32) (uint8, uint8, uint8, uint8) {
-	c := g.palette[index&15]
-	return c[0], c[1], c[2], c[3]
-}
-
 func (g *Game) pset(x, y int32, color uint32) {
-	if x < 0 || x >= VEX_W || y < 0 || y >= VEX_H {
+	if uint32(x) >= VEX_W || uint32(y) >= VEX_H {
 		return
 	}
-
-	r, g_, b, a := g.palColor(color)
-	i := (int(y)*VEX_W + int(x)) * 4
-	g.pixels[i] = r
-	g.pixels[i+1] = g_
-	g.pixels[i+2] = b
-	g.pixels[i+3] = a
+	g.frame[int(y)*VEX_W+int(x)] = g.palette[color&15]
 }
 
 func (g *Game) cls(color uint32) {
-	r, g_, b, a := g.palColor(color)
-	for i := 0; i < len(g.pixels); i += 4 {
-		g.pixels[i] = r
-		g.pixels[i+1] = g_
-		g.pixels[i+2] = b
-		g.pixels[i+3] = a
+	v := g.palette[color&15]
+	frame := g.frame
+	frame[0] = v
+	for n := 1; n < len(frame); {
+		c := copy(frame[n:], frame[:n])
+		if c < n {
+			break
+		}
+		n += c
 	}
 }
 
 func (g *Game) hline(y, x0, x1 int32, color uint32) {
-	if y < 0 || y >= VEX_H {
+	if uint32(y) >= VEX_H {
 		return
 	}
 
@@ -289,15 +298,12 @@ func (g *Game) hline(y, x0, x1 int32, color uint32) {
 		x1 = VEX_W - 1
 	}
 
-	r, g_, b, a := g.palColor(color)
-
-	base := int(y)*VEX_W*4 + int(x0)*4
-	for x := x0; x <= x1; x++ {
-		i := base + int(x-x0)*4
-		g.pixels[i] = r
-		g.pixels[i+1] = g_
-		g.pixels[i+2] = b
-		g.pixels[i+3] = a
+	v := g.palette[color&15]
+	frame := g.frame
+	start := int(y)*VEX_W + int(x0)
+	end := int(y)*VEX_W + int(x1) + 1
+	for i := start; i < end; i++ {
+		frame[i] = v
 	}
 }
 
@@ -365,16 +371,14 @@ func (g *Game) rect(x, y, w, h int32, color uint32) {
 	y0 := max(y, 0)
 	x1 := min(x+w, VEX_W)
 	y1 := min(y+h, VEX_H)
-	r, g_, b, a := g.palColor(color)
+	v := g.palette[color&15]
+	frame := g.frame
 
 	for yy := y0; yy < y1; yy++ {
-		base := (int(yy)*VEX_W + int(x0)) * 4
-		for xx := x0; xx < x1; xx++ {
-			i := base + int(xx-x0)*4
-			g.pixels[i] = r
-			g.pixels[i+1] = g_
-			g.pixels[i+2] = b
-			g.pixels[i+3] = a
+		start := int(yy)*VEX_W + int(x0)
+		end := start + int(x1-x0)
+		for i := start; i < end; i++ {
+			frame[i] = v
 		}
 	}
 }
@@ -468,9 +472,30 @@ func (g *Game) circb(cx, cy, r int32, color uint32) {
 }
 
 func (g *Game) tri(x1, y1, x2, y2, x3, y3 int32, color uint32) {
-	type span struct{ l, r int32 }
+	ymin := min(y1, min(y2, y3))
+	ymax := max(y1, max(y2, y3))
 
-	rows := make(map[int32]*span)
+	n := int(ymax - ymin + 1)
+	// Guard the scanline buffer size: the C host rejects any vertex beyond
+	// +-VEX_COORD_MAX, so a triangle spanning more rows than that is hostile
+	// (a huge y range would otherwise allocate enormous buffers here).
+	const maxRows = 2*VEX_COORD_MAX + 1
+	if n <= 0 || n > maxRows {
+		return
+	}
+
+	if n > len(g.triL) {
+		g.triL = make([]int32, n)
+		g.triR = make([]int32, n)
+	}
+	l := g.triL[:n]
+	r := g.triR[:n]
+
+	const inf = int32(1) << 30
+	for i := range l {
+		l[i] = inf
+		r[i] = -inf
+	}
 
 	addEdge := func(ax, ay, bx, by int32) {
 		if ay == by {
@@ -492,17 +517,13 @@ func (g *Game) tri(x1, y1, x2, y2, x3, y3 int32, color uint32) {
 				xi--
 			}
 
-			s, ok := rows[y]
-			if !ok {
-				rows[y] = &span{l: xi, r: xi}
-			} else {
-				if xi < s.l {
-					s.l = xi
-				}
+			i := int(y - ymin)
+			if xi < l[i] {
+				l[i] = xi
+			}
 
-				if xi > s.r {
-					s.r = xi
-				}
+			if xi > r[i] {
+				r[i] = xi
 			}
 		}
 	}
@@ -511,8 +532,10 @@ func (g *Game) tri(x1, y1, x2, y2, x3, y3 int32, color uint32) {
 	addEdge(x2, y2, x3, y3)
 	addEdge(x3, y3, x1, y1)
 
-	for y, s := range rows {
-		g.hline(y, s.l, s.r, color)
+	for i := 0; i < n; i++ {
+		if l[i] <= r[i] {
+			g.hline(ymin+int32(i), l[i], r[i], color)
+		}
 	}
 }
 
@@ -547,7 +570,14 @@ func (g *Game) blit(m api.Module, ptr uint32, x, y, w, h int32, key uint32) {
 	}
 
 	for row := int32(0); row < h; row++ {
+		yy := y + row
+		if yy < 0 || yy >= VEX_H {
+			continue
+		}
+
 		src := data[row*w : (row+1)*w]
+		frame := g.frame
+		rowStart := int(yy) * VEX_W
 
 		col := int32(0)
 		for col < w {
@@ -566,26 +596,73 @@ func (g *Game) blit(m api.Module, ptr uint32, x, y, w, h int32, key uint32) {
 				col++
 			}
 
-			g.rect(x+start, y+row, col-start, 1, uint32(run))
+			x0 := x + start
+			x1 := x + col - 1
+			if x0 < 0 {
+				x0 = 0
+			}
+
+			if x1 >= VEX_W {
+				x1 = VEX_W - 1
+			}
+
+			if x0 <= x1 {
+				v := g.palette[uint32(run)&15]
+				start := rowStart + int(x0)
+				end := rowStart + int(x1) + 1
+				for i := start; i < end; i++ {
+					frame[i] = v
+				}
+			}
 		}
 	}
 }
 
 func (g *Game) text(m api.Module, ptr uint32, x, y int32, color uint32) {
+	mem := m.Memory()
+	size := mem.Size()
+	if ptr >= size {
+		return
+	}
+
+	// One read (a zero-copy view, not a copy) of the rest of linear memory;
+	// carts keep their strings short and NUL-terminated.
+	data, ok := mem.Read(ptr, size-ptr)
+	if !ok {
+		return
+	}
+
+	end := 0
+	for end < len(data) && data[end] != 0 {
+		end++
+	}
+
+	v := g.palette[color&15]
+	frame := g.frame
 	curX := x
 
-	for _, ch := range []byte(readCString(m, ptr)) {
+	for _, ch := range data[:end] {
 		idx := int(ch) - VEX_FONT_FIRST
 		if idx < 0 || idx >= len(font8) {
 			curX += 8
 			continue
 		}
 
-		for yy := range int32(8) {
+		for yy := int32(0); yy < 8; yy++ {
+			py := y + yy
+			if py < 0 || py >= VEX_H {
+				continue
+			}
+
 			rowBits := fontRows[idx*8+int(yy)]
-			for xx := range int32(8) {
+			rowStart := int(py) * VEX_W
+
+			for xx := int32(0); xx < 8; xx++ {
 				if rowBits&(1<<(7-xx)) != 0 {
-					g.pset(curX+xx, y+yy, color)
+					px := curX + xx
+					if px >= 0 && px < VEX_W {
+						frame[rowStart+int(px)] = v
+					}
 				}
 			}
 		}
@@ -644,16 +721,14 @@ func (g *Game) mbtn(button uint32) uint32 {
 }
 
 func (g *Game) pal(index, rgb uint32) {
-	g.palette[index&15] = [4]uint8{
-		uint8((rgb >> 16) & 0xFF),
-		uint8((rgb >> 8) & 0xFF),
-		uint8(rgb & 0xFF),
-		0xFF,
-	}
+	i := index & 15
+	g.palette[i] = (rgb>>16&0xFF)<<0 | (rgb>>8&0xFF)<<8 | (rgb&0xFF)<<16 | 0xFF<<24
 }
 
 func (g *Game) palreset() {
-	copy(g.palette[:], defaultPalette[:])
+	for i, c := range defaultPalette {
+		g.palette[i] = uint32(c[0]) | uint32(c[1])<<8 | uint32(c[2])<<16 | uint32(c[3])<<24
+	}
 }
 
 // initCart resets the palette, clears the framebuffer, and runs the cart's
