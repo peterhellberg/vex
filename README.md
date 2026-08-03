@@ -156,16 +156,17 @@ and `vex-web`.
 
 > [!Note]
 > On Linux, ebitengine's X11 backend ([xgb](https://github.com/jezek/xgb))
-> prints two lines on startup if it can't read a valid `~/.Xauthority`:
+> normally prints two lines on startup if it can't read a valid `~/.Xauthority`
+> (common under Wayland/Xwayland or remote X):
 >
 > ```
 > XGB: conn.go:69: Could not get authority info: EOF
 > XGB: conn.go:70: Trying connection without authority info...
 > ```
 >
-> The second line means it falls back to an unauthenticated X11 connection,
-> which works on any normal desktop session; the messages are harmless
-> startup output and the run continues normally.
+> The fallback to an unauthenticated X11 connection works on any normal
+> desktop session, so `vex-run` filters out those two harmless lines. Any
+> other xgb diagnostics still reach stderr.
 
 ## Web version
 

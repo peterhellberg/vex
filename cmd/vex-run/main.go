@@ -1,6 +1,11 @@
 package main
 
 import (
+	// Must precede the ebitengine import: ebitengine opens an X11 connection
+	// from a package init() that runs before this package's init()s, so the
+	// xgb logger override has to be installed by an earlier package init.
+	_ "github.com/peterhellberg/vex/cmd/vex-run/xgbquiet"
+
 	"bufio"
 	"context"
 	"flag"
