@@ -30,7 +30,7 @@ Dependencies are fetched on first build.
 > `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.387+31f157d80.tar.xz`.
 
 ```sh
-zig build --prefix .    # build vex-init + cart.wasm + zcart.wasm into ./bin
+zig build --prefix .    # build vex-init into ./bin + cart.wasm and zcart.wasm into ./bin/carts
 cd cmd/vex && zig build --prefix ../..   # build the ./vex host into ../bin
 zig build run           # build, then run the C example cart
 zig build runz          # build, then run the Zig example cart
@@ -142,7 +142,7 @@ the same live-reload workflow as `vex` and `vex-web`.
 > [!Tip]
 > On Linux, `vex-run` still needs the X11 development headers at build time
 > (ebitengine's vendored GLFW links against them), but neither `libgl1-mesa-dev`
-> nor `pkg-config` are required. You also need **Go ≥ 1.25.0** — a tarball from
+> nor `pkg-config` are required. You also need **Go ≥ 1.26.4** — a tarball from
 > [go.dev](https://go.dev/dl/) works on any release; check your
 > distro's `golang-go` before relying on `apt install` alone.
 
@@ -187,7 +187,7 @@ go run github.com/peterhellberg/vex/cmd/vex-web@latest mycart.wasm
 
 # or from a checkout of this repo:
 make web                          # build, then serve cart.wasm on :8383
-make web CART=bin/zcart.wasm      # serve a different cart
+make web CART=bin/carts/zcart.wasm   # serve a different cart
 go run ./cmd/vex-web mycart.wasm  # run the server directly
 ```
 
@@ -251,7 +251,7 @@ SDK which is published at <https://github.com/peterhellberg/vex>.
 With the binaries installed (`make install`, so `vex` and `vex-init` are on your `PATH`):
 
 ```sh
-vex-init mygame      # creates mygame/ (src/cart.zig, build.zig, build.zig.zon)
+vex-init mygame      # creates mygame/ (src/cart.zig, build.zig, build.zig.zon, .gitignore)
                      # and runs `zig fetch --save` to pin the vex dependency
 cd mygame
 zig build            # builds zig-out/bin/mygame.wasm
