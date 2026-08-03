@@ -263,6 +263,7 @@ const build_zon_tmpl =
 
 const gitignore =
     \\/zig-out/
+    \\/zig-pkg/
     \\/.zig-cache/
     \\/bundle/
     \\
