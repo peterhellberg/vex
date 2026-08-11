@@ -464,6 +464,72 @@ m3ApiRawFunction(host_palreset) {
     m3ApiSuccess();
 }
 
+// ---- audio (beep) ---------------------------------------------------------
+// Small pool of live beep Sounds. raylib copies the wave data when a Sound is
+// loaded (and again when it is played into a pool channel), so a freshly
+// generated wave can be dropped right after LoadSoundFromWave(). Finished
+// sounds are unloaded lazily on the next beep, keeping the pool bounded.
+#define VEX_BEEP_POOL 8
+static Sound g_beeps[VEX_BEEP_POOL];
+static int g_beep_count = 0;
+static bool g_audio_ready = false;
+
+static void beep_reap(void) {
+    for (int i = 0; i < g_beep_count; i++) {
+        if (!IsSoundPlaying(g_beeps[i])) {
+            UnloadSound(g_beeps[i]);
+            for (int j = i; j < g_beep_count - 1; j++) g_beeps[j] = g_beeps[j + 1];
+            g_beep_count--;
+            i--;
+        }
+    }
+}
+
+static void beep_cleanup(void) {
+    for (int i = 0; i < g_beep_count; i++) UnloadSound(g_beeps[i]);
+    g_beep_count = 0;
+    if (g_audio_ready) {
+        g_audio_ready = false;
+        CloseAudioDevice();
+    }
+}
+
+// beep(freq): play a ~100ms square-wave blip at freq Hz (16-bit mono, 22050 Hz).
+m3ApiRawFunction(host_beep) {
+    m3ApiGetArg(int32_t, freq)
+    if (!g_audio_ready) m3ApiSuccess();
+    beep_reap();
+    if (freq < 1) freq = 1;
+    if (freq > 20000) freq = 20000;
+
+    // 2205 samples == 100ms at 22050 Hz; one static buffer reused every call.
+    static int16_t samples[2205];
+    const int rate = 22050;
+    const int half = rate / (2 * freq); // samples per square-wave half-period
+    int sign = 1;
+    for (int i = 0; i < (int)(sizeof(samples) / sizeof(samples[0])); i++) {
+        if (half > 0 && i > 0 && i % half == 0) sign = -sign; // toggle after sample 0, +8000 first
+        samples[i] = (int16_t)(sign * 8000);
+    }
+
+    Wave wave = {
+        .frameCount = (unsigned int)(sizeof(samples) / sizeof(samples[0])),
+        .sampleRate = rate,
+        .sampleSize = 16,
+        .channels = 1,
+        .data = samples,
+    };
+
+    Sound s = LoadSoundFromWave(wave);
+    if (g_beep_count < VEX_BEEP_POOL) {
+        g_beeps[g_beep_count++] = s;
+        PlaySound(s);
+    } else {
+        UnloadSound(s); // pool full: drop the new one rather than reorder
+    }
+    m3ApiSuccess();
+}
+
 static M3Result link_host(IM3Module mod) {
     const char* m = "env";
     // Linking a function the cart doesn't import returns functionLookupFailed,
@@ -487,6 +553,7 @@ static M3Result link_host(IM3Module mod) {
     m3_LinkRawFunction(mod, m, "mbtn",     "i(i)",     &host_mbtn);
     m3_LinkRawFunction(mod, m, "pal",      "v(ii)",    &host_pal);
     m3_LinkRawFunction(mod, m, "palreset", "v()",      &host_palreset);
+    m3_LinkRawFunction(mod, m, "beep",     "v(i)",     &host_beep);
     return m3Err_none;
 }
 
@@ -508,6 +575,7 @@ static void die(IM3Runtime rt, const char* what, M3Result err) {
     // before InitWindow() (e.g. from a wasm load error in main).
     if (g_window_open) {
         g_window_open = false;
+        beep_cleanup();
         CloseWindow();
     }
     exit(1);
@@ -678,6 +746,11 @@ int main(int argc, char** argv) {
     SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
     init_font_atlas();
 
+    // Audio for beep(). InitAudioDevice() is safe to call when no audio
+    // device exists (headless/CI) -- it just fails and beep() stays silent.
+    InitAudioDevice();
+    g_audio_ready = IsAudioDeviceReady();
+
     reset_palette();
 
     if (cart.f_boot) {
@@ -834,6 +907,7 @@ int main(int argc, char** argv) {
     UnloadRenderTexture(screen);
     UnloadTexture(g_font_atlas);
     g_window_open = false;
+    beep_cleanup();
     CloseWindow();
     m3_FreeRuntime(cart.rt);
     m3_FreeEnvironment(env);

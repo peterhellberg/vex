@@ -92,6 +92,8 @@ pub extern "env" fn mbtn(button: i32) i32;
 pub extern "env" fn pal(index: i32, rgb: i32) void;
 /// Restore the default SWEETIE-16 palette.
 pub extern "env" fn palreset() void;
+/// Play a short blip at `freq` Hz.
+pub extern "env" fn beep(freq: i32) void;
 
 /// `true` while the button is held — shorthand for `btn(button) != 0`.
 pub fn down(button: i32) bool {

@@ -388,6 +388,92 @@ function mbtn(button)
     return mouseButtons[button] ? 1 : 0;
 }
 
+//// Part 3c: Audio (beep)
+
+// A single shared AudioContext, created inside the first user gesture by
+// unlockAudio() below. Browsers start a lazily-created context suspended, and
+// iOS only ever starts a context that is created (not just resumed) inside a
+// user-gesture handler -- creating it from the game loop left it suspended and
+// the first tap's resume() was ignored, so audio only came up on the second
+// tap. Until the first gesture the context doesn't exist, and beeps are
+// dropped (like the C host's lost opening note) rather than scheduled into a
+// frozen timeline where they would all fire together as one garbled burst when
+// the context started.
+let audioCtx = null;
+
+// End of the last scheduled blip, in audioCtx time. Each beep is anchored to
+// this (like the Go engine's stream-positioned events) so consecutive blips
+// chain 100ms apart instead of piling up on one timestamp while the context
+// clock is still settling after resume().
+let lastBeepEnd = 0;
+
+function unlockAudio()
+{
+    if (
+        typeof AudioContext === "undefined" &&
+        typeof webkitAudioContext === "undefined"
+    )
+        return;
+
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Play a one-sample silent buffer within the gesture so iOS starts the
+        // audio pipeline for real; otherwise it can defer actual rendering, and
+        // the first blips scheduled right after resume() land on a nearly-frozen
+        // clock and fire together.
+        const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioCtx.destination);
+        src.start(0);
+    }
+
+    if (audioCtx.state === "suspended")
+        audioCtx.resume();
+}
+
+// touchstart/pointerdown/mousedown/keydown cover every unlock gesture across
+// iOS Safari (older iOS only honoured touch events) and desktop browsers.
+// resume() on a running context is a no-op, so leaving the listeners attached
+// also recovers from a later re-suspend (e.g. the browser suspending the
+// context while the tab is hidden).
+window.addEventListener("touchstart", unlockAudio);
+window.addEventListener("pointerdown", unlockAudio);
+window.addEventListener("mousedown", unlockAudio);
+window.addEventListener("keydown", unlockAudio);
+
+function beep(freq)
+{
+    if (!audioCtx || audioCtx.state !== "running")
+        return; // not unlocked yet: dropping matches the C host's lost first note
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = "square";
+
+    // Clamp to the audible range so a bogus cart value can't drive the
+    // oscillator into NaN territory.
+    osc.frequency.value = Math.max(1, Math.min(20000, freq));
+
+    const start = Math.max(audioCtx.currentTime, lastBeepEnd);
+    lastBeepEnd = start + 0.1;
+
+    // A full-amplitude 100ms square, matching the C host's ±8000 wave
+    // (8000/32768 ≈ 0.24 of full scale). No decay envelope: the C host
+    // hard-cuts the blip at 100ms too, and a fresh oscillator starts at
+    // phase 0 (+1) just like a freshly loaded sound wave, so overlapping
+    // retriggers mix in phase like the C host's pooled sounds.
+    gain.gain.value = 8000 / 32768;
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start(start);
+    osc.stop(start + 0.1);
+}
+
 //// Part 4: WASM state and string helpers (C string reader)
 
 let instance = null;
@@ -971,7 +1057,9 @@ const env =
     mbtn,
 
     pal,
-    palreset
+    palreset,
+
+    beep
 };
 
 let rafId = null;
@@ -1024,7 +1112,8 @@ function present()
 
 let frameGen = 0;
 
-function frame(gen)
+// One cart tick: run logic, present, capture button state for btnp().
+function tick(gen)
 {
     // run cart logic
     instance.exports.update();
@@ -1037,9 +1126,38 @@ function frame(gen)
 
     for (let i = 0; i < 6; i++)
         if (btn(i)) prevButtons |= (1 << i);
+}
+
+// The cart runs at a fixed 60 TPS driven by the wall clock rather than one
+// tick per rAF. Browsers pause/throttle rAF in hidden tabs and can deliver a
+// catch-up burst of callbacks when the tab becomes visible again; with the
+// naive per-rAF loop a frame-counted cart fast-forwards through that, running
+// "much faster" after a tab switch (and at display refresh on 60Hz+ monitors,
+// where the C host and the ebiten port both lock to 60fps). A fixed-timestep
+// accumulator with a hidden-gap clamp keeps the cart at 60 TPS regardless.
+const TICK_MS = 1000 / 60;
+let lastFrame = null;
+let acc = 0;
+
+function frame(gen, now)
+{
+    if (lastFrame !== null) {
+        let elapsed = now - lastFrame;
+        if (elapsed > 250) elapsed = 0; // hidden tab gap: don't fast-forward
+        acc += elapsed;
+    }
+    lastFrame = now;
+
+    // Slow frames must not trigger a catch-up burst of ticks.
+    if (acc > 5 * TICK_MS) acc = 5 * TICK_MS;
+
+    while (acc >= TICK_MS) {
+        tick(gen);
+        acc -= TICK_MS;
+    }
 
     if (frameGen === gen)
-        rafId = requestAnimationFrame(() => frame(gen));
+        rafId = requestAnimationFrame(t => frame(gen, t));
 }
 
 function clear()
@@ -1058,7 +1176,9 @@ function run()
 
     // palette + framebuffer were already reset before boot() in
     // instantiateCart(); resetting here would clobber boot()'s pal() overrides.
-    rafId = requestAnimationFrame(() => frame(gen));
+    lastFrame = null;
+    acc = 0;
+    rafId = requestAnimationFrame(t => frame(gen, t));
 }
 
 export async function start(cartPath)

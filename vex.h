@@ -50,4 +50,6 @@ VEX_IMPORT("mbtn") int mbtn(int button);     // 1 if mouse button held
 VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
 VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 
+VEX_IMPORT("beep") void beep(int freq);              // play a short blip at freq Hz
+
 #endif // VEX_H
