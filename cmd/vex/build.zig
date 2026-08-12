@@ -37,6 +37,15 @@ pub fn build(b: *std.Build) void {
         "m3_info.c", "m3_module.c", "m3_optimize.c", "m3_parse.c",
     };
 
+    // macOS framework stubs (AppKit, IOKit, ...) for cross-compiling to
+    // macOS from a non-macOS host. raylib links these frameworks but only
+    // adds the -F search paths itself if its own xcode_frameworks dependency
+    // resolves, so add the paths here explicitly for the macOS target.
+    const xcode_frameworks = if (target.result.os.tag == .macos)
+        b.lazyDependency("xcode_frameworks", .{})
+    else
+        null;
+
     const raylib_dep = b.lazyDependency("raylib", .{
         .target = target,
         .optimize = optimize,
@@ -45,6 +54,10 @@ pub fn build(b: *std.Build) void {
     const wasm3 = b.lazyDependency("wasm3", .{}) orelse return;
 
     const raylib = raylib_dep.artifact("raylib");
+
+    if (xcode_frameworks) |fws| {
+        raylib.root_module.addSystemIncludePath(fws.path("include"));
+    }
 
     const exe = b.addExecutable(.{
         .name = "vex",
@@ -73,6 +86,10 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addIncludePath(wasm3.path("source"));
     exe.root_module.linkLibrary(raylib); // brings in raylib headers + platform libs
+    if (xcode_frameworks) |fws| {
+        exe.root_module.addSystemFrameworkPath(fws.path("Frameworks"));
+        exe.root_module.addLibraryPath(fws.path("lib"));
+    }
     b.installArtifact(exe);
 
     // --- run steps ---------------------------------------------------------

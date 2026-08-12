@@ -14,7 +14,7 @@ pub fn main(init: std.process.Init) !void {
     const a = init.arena.allocator();
     const io = init.io;
 
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(a);
     defer args.deinit();
     _ = args.next(); // skip the program name
     const dir_path = args.next() orelse usage();

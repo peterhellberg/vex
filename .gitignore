@@ -8,6 +8,7 @@
 /cmd/vex/zig-pkg/
 /cmd/vex-web/test/node_modules/
 /bundle/
+/release/
 *.log
 mycart*
 base/*/*.wasm
