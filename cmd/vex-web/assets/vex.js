@@ -55,23 +55,12 @@ function palreset()
     palette = [...DEFAULT_PALETTE];
 }
 
-function unpackColor(index)
-{
-    const c = palette[index & 15];
-
-    return [
-        (c >> 16) & 255,
-        (c >> 8) & 255,
-        c & 255
-    ];
-}
-
 //// Part 3: Input
 
 const keys = {};
 
-// Keys the cart consumes via btn(); we swallow their default actions so the
-// arrows don't scroll the page (and Z/X don't trigger browser shortcuts).
+// Keys btn() reads; swallow their default actions so the arrows don't scroll
+// the page and Z/X don't trigger browser shortcuts.
 const GAME_KEYS = new Set([
     "ArrowLeft",
     "ArrowRight",
@@ -129,13 +118,10 @@ const mouseButtons = new Array(8).fill(false);
 
 // DOM e.button: 0=left, 1=middle, 2=right.
 // vex convention: 0=left, 1=right, 2=middle (matches raylib, ebitengine).
-// Touch bypasses this mapping — see setButton below.
 const DOM_TO_VEX = [0, 2, 1];
 
-// Pointer events handle mouse, touch and pen uniformly, so dragging a
-// finger across the canvas updates mouseX/mouseY just like moving a
-// mouse. touch-action: none (see index.html) stops the browser hijacking
-// the touch for scrolling or pinch-zoom.
+// Pointer events handle mouse, touch and pen uniformly; touch-action: none
+// (see index.html) stops the browser hijacking touch for scroll/pinch.
 function setMouse(e)
 {
     const r = canvas.getBoundingClientRect();
@@ -149,15 +135,13 @@ function setMouse(e)
     );
 }
 
-// Each vex button tracks the pointers holding it down, so releasing one
-// finger mid multi-touch doesn't lift a button another finger is still
-// holding.
+// Each button tracks the pointers holding it, so lifting one finger mid
+// multi-touch doesn't release a button another finger still holds.
 const heldPointers = new Map();
 
-// Touch pointers map onto vex buttons in order of activation: the first
-// finger only moves the pointer, the second presses the left button (0)
-// and the third the right button (1). Each pointer keeps its assignment
-// until it lifts. pointerId -> vex button index (or -1 for none).
+// Touch maps onto buttons by activation order: finger 1 moves the pointer,
+// finger 2 presses left (0), finger 3 right (1); each keeps its assignment
+// until it lifts. pointerId -> button index (or -1 for none).
 const touchButtons = new Map();
 
 function setButton(e, down)
@@ -168,10 +152,8 @@ function setButton(e, down)
     {
         if (down)
         {
-            // Fingers count from the number already down, so the index
-            // is the activation position: index 1 becomes the left
-            // button, index 2 the right. Extra fingers just move the
-            // pointer like the first.
+            // index counts from those already down, so finger 2 -> left (0),
+            // finger 3 -> right (1); extra fingers just move the pointer.
             const index = touchButtons.size;
             touchButtons.set(e.pointerId, index - 1);
         }
@@ -181,8 +163,7 @@ function setButton(e, down)
         if (!down)
             touchButtons.delete(e.pointerId);
 
-        // No vex button assigned to this finger (position only, or an
-        // ignored extra finger).
+        // No button assigned: position-only or extra finger.
         if (button < 0 || button > 1)
             return;
     }
@@ -208,10 +189,9 @@ function setButton(e, down)
     mouseButtons[button] = heldPointers.has(button);
 }
 
-// The pointer that owns the mouse position. Only the first finger to land
-// moves mouseX/mouseY; a second finger pressed while it is held down must
-// not jump the cursor to itself. Mouse and pen always update the position,
-// so this only gates touch moves.
+// Only the first finger to land moves mouseX/mouseY; a second finger must
+// not jump the cursor to itself. Mouse/pen always update the position, so
+// this only gates touch moves.
 let positionPointer = null;
 
 canvas.addEventListener("pointerdown", e => {
@@ -261,21 +241,13 @@ canvas.addEventListener("contextmenu", e => e.preventDefault());
 //// Part 3b: Virtual gamepad (portrait mode)
 
 /*
- * In portrait mode the page renders a touch-friendly virtual gamepad below
- * the canvas: a d-pad (left/right/up/down -> cart buttons 0..3) and two
- * action buttons (Z and X -> cart buttons 4 and 5). Pressing a gamepad
- * button flips the same `keys` entry the keyboard would, so btn()/btnp()
- * work unchanged.
- *
- * Each button stays "active" (highlighted) as long as EITHER the user is
- * touching it OR the corresponding key is held on a physical keyboard,
- * so the highlight matches what the cart sees regardless of input source.
- *
- * Pointer events handle both touch and mouse uniformly. Multi-touch works
- * because each button tracks its own touch state — pressing two buttons
- * at once fires two independent pointerdown handlers. setPointerCapture
- * keeps each individual press alive even when the finger slides off the
- * button before lifting; pointercancel covers OS-interrupted touches.
+ * Portrait mode renders a touch gamepad below the canvas: a d-pad (cart
+ * buttons 0..3) plus Z and X (buttons 4, 5). Presses flip the same `keys`
+ * entries the keyboard would, so btn()/btnp() work unchanged. A button
+ * stays active while touched OR the matching physical key is held. Each
+ * button tracks its own touch state, so multi-touch works; setPointerCapture
+ * keeps a press alive when the finger slides off, and pointercancel covers
+ * OS-interrupted touches.
  */
 const PAD_BINDINGS = [
     [".dpad-up",    "ArrowUp"],
@@ -286,15 +258,14 @@ const PAD_BINDINGS = [
     [".btn-x",      "KeyX"]    // X in the bottom-right corner -> cart button 5
 ];
 
-// Maps a keyboard code (e.g. "ArrowUp") to its on-screen gamepad button, so
-// the global keydown/keyup handlers can highlight the matching button.
-// Populated by setupGamepad().
+// Keyboard code -> gamepad button, so the global keydown/keyup handlers can
+// highlight the matching button. Populated by setupGamepad().
 const padButtonByCode = new Map();
 
 function bindPadButton(button, code)
 {
-    // Per-button input state. Either source (touch or keyboard) being true
-    // is enough to mark the button active; we OR them on every change.
+    // Either source (touch or key) being true marks the button active; OR
+    // them on every change.
     let touchHeld = false;
     let keyHeld = false;
 
@@ -324,13 +295,12 @@ function bindPadButton(button, code)
 
     button.addEventListener("pointerup",     releaseTouch);
     button.addEventListener("pointercancel", releaseTouch);
-    // pointerleave also releases when the finger slides off without lifting
+    // pointerleave releases when the finger slides off without lifting
     // (setPointerCapture normally handles this, but some browsers don't
     // dispatch pointerup for cancelled captures).
     button.addEventListener("pointerleave",  releaseTouch);
 
-    // Keyboard accessibility: Space/Enter on a focused button should also
-    // act as a press so the gamepad works on devices without touch.
+    // Accessibility: Space/Enter on a focused button also acts as a press.
     button.addEventListener("keydown", e => {
         if (e.code === "Space" || e.code === "Enter")
         {
@@ -347,9 +317,8 @@ function bindPadButton(button, code)
         }
     });
 
-    // Expose so the global keydown/keyup handlers (which see all keys, not
-    // just ones typed into a focused button) can update the highlight when
-    // the matching physical key goes down or up.
+    // Let the global keydown/keyup handlers highlight the button for the
+    // matching physical key.
     padButtonByCode.set(code, { setKeyHeld(v) { keyHeld = v; sync(); } });
 }
 export function setupGamepad()
@@ -390,21 +359,17 @@ function mbtn(button)
 
 //// Part 3c: Audio (beep)
 
-// A single shared AudioContext, created inside the first user gesture by
-// unlockAudio() below. Browsers start a lazily-created context suspended, and
-// iOS only ever starts a context that is created (not just resumed) inside a
-// user-gesture handler -- creating it from the game loop left it suspended and
-// the first tap's resume() was ignored, so audio only came up on the second
-// tap. Until the first gesture the context doesn't exist, and beeps are
-// dropped (like the C host's lost opening note) rather than scheduled into a
-// frozen timeline where they would all fire together as one garbled burst when
-// the context started.
+// One shared AudioContext, created inside the first user gesture: browsers
+// start a lazily-created context suspended, and iOS only starts one created
+// (not just resumed) inside a gesture handler -- creating it from the game
+// loop left it suspended and audio only came up on the second tap. Until the
+// first gesture beeps are dropped (like the C host's lost opening note)
+// rather than queued on a frozen timeline where they would fire together.
 let audioCtx = null;
 
-// End of the last scheduled blip, in audioCtx time. Each beep is anchored to
-// this (like the Go engine's stream-positioned events) so consecutive blips
-// chain 100ms apart instead of piling up on one timestamp while the context
-// clock is still settling after resume().
+// End of the last scheduled blip, in audioCtx time. Each beep anchors to
+// this so consecutive blips chain 100ms apart instead of piling onto one
+// timestamp while the clock settles after resume().
 let lastBeepEnd = 0;
 
 function unlockAudio()
@@ -418,10 +383,9 @@ function unlockAudio()
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // Play a one-sample silent buffer within the gesture so iOS starts the
-        // audio pipeline for real; otherwise it can defer actual rendering, and
-        // the first blips scheduled right after resume() land on a nearly-frozen
-        // clock and fire together.
+        // A one-sample silent buffer within the gesture makes iOS start the
+        // audio pipeline for real; otherwise it can defer actual rendering,
+        // and the first blips scheduled after resume() fire together.
         const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
         const src = audioCtx.createBufferSource();
         src.buffer = buf;
@@ -435,9 +399,8 @@ function unlockAudio()
 
 // touchstart/pointerdown/mousedown/keydown cover every unlock gesture across
 // iOS Safari (older iOS only honoured touch events) and desktop browsers.
-// resume() on a running context is a no-op, so leaving the listeners attached
-// also recovers from a later re-suspend (e.g. the browser suspending the
-// context while the tab is hidden).
+// resume() on a running context is a no-op, so keeping the listeners
+// attached also recovers from a later re-suspend.
 window.addEventListener("touchstart", unlockAudio);
 window.addEventListener("pointerdown", unlockAudio);
 window.addEventListener("mousedown", unlockAudio);
@@ -453,18 +416,17 @@ function beep(freq)
 
     osc.type = "square";
 
-    // Clamp to the audible range so a bogus cart value can't drive the
-    // oscillator into NaN territory.
+    // Clamp so a bogus cart value can't drive the oscillator into NaN territory.
     osc.frequency.value = Math.max(1, Math.min(20000, freq));
 
     const start = Math.max(audioCtx.currentTime, lastBeepEnd);
     lastBeepEnd = start + 0.1;
 
-    // A full-amplitude 100ms square, matching the C host's ±8000 wave
+    // Full-amplitude 100ms square, matching the C host's ±8000 wave
     // (8000/32768 ≈ 0.24 of full scale). No decay envelope: the C host
-    // hard-cuts the blip at 100ms too, and a fresh oscillator starts at
-    // phase 0 (+1) just like a freshly loaded sound wave, so overlapping
-    // retriggers mix in phase like the C host's pooled sounds.
+    // hard-cuts at 100ms too, and a fresh oscillator starts at phase 0
+    // (+1) like a freshly loaded sound wave, so overlapping retriggers
+    // mix in phase like the C host's pooled sounds.
     gain.gain.value = 8000 / 32768;
 
     osc.connect(gain);
@@ -514,6 +476,16 @@ function title(ptr)
 
 //// Part 5: Core pixel routines
 
+// Write a framebuffer pixel at byte index i (4 bytes per pixel) from a
+// palette color.
+function fillPixel(i, c)
+{
+    pixels[i + 0] = (c >> 16) & 255;
+    pixels[i + 1] = (c >> 8) & 255;
+    pixels[i + 2] = c & 255;
+    pixels[i + 3] = 255;
+}
+
 function pset(x, y, color)
 {
     if (
@@ -524,30 +496,27 @@ function pset(x, y, color)
     )
         return;
 
-    const c = palette[color & 15];
-
-    const i = (y * VEX_W + x) << 2;
-
-    pixels[i + 0] = (c >> 16) & 255;
-    pixels[i + 1] = (c >> 8) & 255;
-    pixels[i + 2] = c & 255;
-    pixels[i + 3] = 255;
+    fillPixel((y * VEX_W + x) << 2, palette[color & 15]);
 }
 
 function cls(color)
 {
     const c = palette[color & 15];
 
-    const r = (c >> 16) & 255;
-    const g = (c >> 8) & 255;
-    const b = c & 255;
+    // Seed one pixel, then double the filled prefix onto itself with native
+    // copyWithin (4 -> 8 -> 16 ... bytes) -- ~16 memcpys instead of one
+    // fillPixel call per pixel, matching the Go host's cls().
+    pixels[0] = (c >> 16) & 255;
+    pixels[1] = (c >> 8) & 255;
+    pixels[2] = c & 255;
+    pixels[3] = 255;
 
-    for (let i = 0; i < pixels.length; i += 4)
+    let n = 4;
+    while (n < pixels.length)
     {
-        pixels[i] = r;
-        pixels[i + 1] = g;
-        pixels[i + 2] = b;
-        pixels[i + 3] = 255;
+        const m = Math.min(n, pixels.length - n);
+        pixels.copyWithin(n, 0, m);
+        n += m;
     }
 }
 
@@ -612,21 +581,13 @@ function rect(x, y, w, h, color)
 
     const c = palette[color & 15];
 
-    const r = (c >> 16) & 255;
-    const g = (c >> 8) & 255;
-    const b = c & 255;
-
     for (let yy = y0; yy < y1; yy++)
     {
         let i = ((yy * VEX_W) + x0) << 2;
 
         for (let xx = x0; xx < x1; xx++)
         {
-            pixels[i] = r;
-            pixels[i + 1] = g;
-            pixels[i + 2] = b;
-            pixels[i + 3] = 255;
-
+            fillPixel(i, c);
             i += 4;
         }
     }
@@ -714,18 +675,11 @@ function hline(x0, x1, y, color)
 
     const c = palette[color & 15];
 
-    const r = (c >> 16) & 255;
-    const g = (c >> 8) & 255;
-    const b = c & 255;
-
     let i = (y * VEX_W + x0) << 2;
 
     for (let x = x0; x <= x1; x++)
     {
-        pixels[i] = r;
-        pixels[i + 1] = g;
-        pixels[i + 2] = b;
-        pixels[i + 3] = 255;
+        fillPixel(i, c);
         i += 4;
     }
 }
@@ -815,7 +769,7 @@ function tri(x1,y1,x2,y2,x3,y3,color)
 
     // For each scanline, track the leftmost and rightmost x where any edge
     // crosses it. A triangle is convex, so [min, max] is exactly the span to
-    // fill — independent of vertex order or winding.
+    // fill -- independent of vertex order or winding.
     const rows = new Map();
 
     function addEdge(ax, ay, bx, by)
@@ -972,10 +926,10 @@ const FONT8 = [
 0x0000000000000000n  // 127 DEL
 ];
 
-// FONT8 holds each 8x8 glyph as a 64-bit BigInt: the most-significant byte is
-// the top row, the most-significant bit of each byte is the left pixel. JS
-// numbers can't hold 64-bit ints exactly, so we unpack the table once into a
-// flat byte-per-row array and render from that with plain number math.
+// FONT8 packs each 8x8 glyph as a 64-bit BigInt (most-significant byte =
+// top row, most-significant bit of each byte = left pixel). JS numbers can't
+// hold 64-bit ints exactly, so we unpack the table once into a flat
+// byte-per-row array and render from that with plain number math.
 const FONT_FIRST = 32; // FONT8[0] is the glyph for char code 32 (space)
 
 const FONT_ROWS = new Uint8Array(FONT8.length * 8);
@@ -987,11 +941,6 @@ for (let i = 0; i < FONT8.length; i++)
     for (let row = 0; row < 8; row++)
         FONT_ROWS[i * 8 + row] =
             Number((glyph >> BigInt((7 - row) * 8)) & 0xFFn);
-}
-
-function fontPixel(x, y, color)
-{
-    pset(x, y, color);
 }
 
 function text(ptr, x, y, color)
@@ -1024,7 +973,7 @@ function text(ptr, x, y, color)
                 const bit = (rowBits >> (7 - xx)) & 1;
 
                 if (bit)
-                    fontPixel(x + xx, y + yy, color);
+                    pset(x + xx, y + yy, color);
             }
         }
 
@@ -1077,9 +1026,9 @@ async function instantiateCart(bytes)
 
     updateMemoryViews();
 
-    // Start each cart from a clean palette and framebuffer *before* boot(), so
-    // any pal() overrides boot() makes survive into the main loop (matches the
-    // native host order: reset_palette() then boot()).
+    // Reset palette + framebuffer *before* boot(), so any pal() overrides
+    // boot() makes survive into the main loop (matches the native host
+    // order: reset_palette() then boot()).
     palreset();
     clear();
 
@@ -1094,11 +1043,9 @@ async function loadCart(url)
     if (!res.ok)
         throw new Error(`failed to load cart (HTTP ${res.status})`);
 
-    // Safari tracks whether an ArrayBuffer originated from a fetch
-    // response and rejects WebAssembly.instantiate() if the source
-    // Content-Type wasn't application/wasm — even though the spec
-    // says the BufferSource overload shouldn't check MIME type.
-    // Copying the bytes into a fresh buffer breaks that tracking.
+    // Safari rejects WebAssembly.instantiate() with a fetched buffer whose
+    // Content-Type wasn't application/wasm (the spec says it shouldn't
+    // check). Copying into a fresh buffer breaks that tracking.
     const src = new Uint8Array(await res.arrayBuffer());
     const bytes = new Uint8Array(src.length);
     bytes.set(src);
@@ -1128,13 +1075,12 @@ function tick(gen)
         if (btn(i)) prevButtons |= (1 << i);
 }
 
-// The cart runs at a fixed 60 TPS driven by the wall clock rather than one
-// tick per rAF. Browsers pause/throttle rAF in hidden tabs and can deliver a
-// catch-up burst of callbacks when the tab becomes visible again; with the
-// naive per-rAF loop a frame-counted cart fast-forwards through that, running
-// "much faster" after a tab switch (and at display refresh on 60Hz+ monitors,
-// where the C host and the ebiten port both lock to 60fps). A fixed-timestep
-// accumulator with a hidden-gap clamp keeps the cart at 60 TPS regardless.
+// Fixed 60 TPS driven by the wall clock, not one tick per rAF: browsers
+// throttle rAF in hidden tabs and deliver a catch-up burst of callbacks when
+// the tab becomes visible again, which a naive per-rAF loop fast-forwards
+// through (and at display refresh on 60Hz+ monitors, where the C host and
+// the ebiten port both lock to 60fps). A fixed-timestep accumulator with a
+// hidden-gap clamp keeps the cart at 60 TPS regardless.
 const TICK_MS = 1000 / 60;
 let lastFrame = null;
 let acc = 0;
@@ -1174,7 +1120,7 @@ function run()
     if (rafId !== null)
         cancelAnimationFrame(rafId);
 
-    // palette + framebuffer were already reset before boot() in
+    // Palette + framebuffer were already reset before boot() in
     // instantiateCart(); resetting here would clobber boot()'s pal() overrides.
     lastFrame = null;
     acc = 0;
@@ -1205,8 +1151,8 @@ export async function startBytes(bytes)
 
 //// Part 13: Drag-and-drop cart loading
 
-// Highlight the canvas while a file is dragged over the page, so it reads as a
-// drop target.
+// Highlight the canvas while a file is dragged over the page, so it reads as
+// a drop target.
 function setDropCue(on)
 {
     if (on)
