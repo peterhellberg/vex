@@ -265,6 +265,20 @@ m3ApiRawFunction(host_rectb) {
     m3ApiSuccess();
 }
 
+// Draw a horizontal run of pixels on row y from x0..x1 inclusive, clipped to
+// the framebuffer -- the same hline() the Go and JS hosts use, so circ() and
+// circb() land on the identical pixels there. (raylib's DrawCircleLines and
+// DrawCircle instead rasterize 36-segment line/triangle fans, which collapse a
+// radius < ~4px into a blocky square.)
+static void host_hline(int32_t y, int32_t x0, int32_t x1, Color c) {
+    if (y < 0 || y >= VEX_H) return;
+    if (x0 > x1) { int32_t t = x0; x0 = x1; x1 = t; }
+    if (x1 < 0 || x0 >= VEX_W) return;
+    if (x0 < 0) x0 = 0;
+    if (x1 >= VEX_W) x1 = VEX_W - 1;
+    DrawRectangle(x0, y, x1 - x0 + 1, 1, c);
+}
+
 m3ApiRawFunction(host_circ) {
     m3ApiGetArg(int32_t, x)
     m3ApiGetArg(int32_t, y)
@@ -273,7 +287,24 @@ m3ApiRawFunction(host_circ) {
     if (r < 0) r = 0;
     if (r > VEX_COORD_MAX) r = VEX_COORD_MAX;
     if (!COORDS_OK(x, y)) m3ApiSuccess();
-    DrawCircle(x, y, (float)r, PAL(color));
+    // Midpoint circle algorithm, filled with horizontal spans -- byte-for-byte
+    // the circ() of the Go and JS hosts, which keep small radii round where
+    // raylib's DrawCircle degenerates into a square.
+    Color c = PAL(color);
+    int32_t rx = r, ry = 0, err = 0;
+    while (rx >= ry) {
+        host_hline(y + ry, x - rx, x + rx, c);
+        host_hline(y + rx, x - ry, x + ry, c);
+        host_hline(y - ry, x - rx, x + rx, c);
+        host_hline(y - rx, x - ry, x + ry, c);
+        ry++;
+        if (err <= 0) {
+            err += 2 * ry + 1;
+        } else {
+            rx--;
+            err += 2 * (ry - rx) + 1;
+        }
+    }
     m3ApiSuccess();
 }
 
@@ -285,7 +316,28 @@ m3ApiRawFunction(host_circb) {
     if (r < 0) r = 0;
     if (r > VEX_COORD_MAX) r = VEX_COORD_MAX;
     if (!COORDS_OK(x, y)) m3ApiSuccess();
-    DrawCircleLines(x, y, (float)r, PAL(color));
+    // Midpoint circle outline, 8-way symmetric single pixels -- matching the
+    // Go and JS hosts. DrawCircleLines has the same small-radius artifact as
+    // DrawCircle, so the shared algorithm keeps every radius identical.
+    Color c = PAL(color);
+    int32_t rx = r, ry = 0, err = 0;
+    while (rx >= ry) {
+        host_hline(y + ry, x + rx, x + rx, c);
+        host_hline(y + rx, x + ry, x + ry, c);
+        host_hline(y + rx, x - ry, x - ry, c);
+        host_hline(y + ry, x - rx, x - rx, c);
+        host_hline(y - ry, x - rx, x - rx, c);
+        host_hline(y - rx, x - ry, x - ry, c);
+        host_hline(y - rx, x + ry, x + ry, c);
+        host_hline(y - ry, x + rx, x + rx, c);
+        ry++;
+        if (err <= 0) {
+            err += 2 * ry + 1;
+        } else {
+            rx--;
+            err += 2 * (ry - rx) + 1;
+        }
+    }
     m3ApiSuccess();
 }
 
