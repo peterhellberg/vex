@@ -367,10 +367,15 @@ function mbtn(button)
 // rather than queued on a frozen timeline where they would fire together.
 let audioCtx = null;
 
-// End of the last scheduled blip, in audioCtx time. Each beep anchors to
-// this so consecutive blips chain 100ms apart instead of piling onto one
-// timestamp while the clock settles after resume().
-let lastBeepEnd = 0;
+// The currently-playing oscillator and its gain node, so a fresh beep() can
+// stop the previous one and start a new one at currentTime. Without this,
+// the Web Audio API happily lets multiple oscillators overlap and the cart
+// would stack blips on top of each other in amplitude; with it, beep() is
+// monophonic and matches the C and Go hosts. The pointer is cleared on
+// onended so a beep() that fires after the previous blip has already
+// finished doesn't try to stop an already-stopped oscillator.
+let activeOsc = null;
+let activeGain = null;
 
 function unlockAudio()
 {
@@ -411,6 +416,23 @@ function beep(freq)
     if (!audioCtx || audioCtx.state !== "running")
         return; // not unlocked yet: dropping matches the C host's lost first note
 
+    const start = audioCtx.currentTime;
+
+    // Cut the previous blip off, if any. start <= currentTime here, so the
+    // stop() takes effect immediately; if the oscillator already finished on
+    // its own, onended has nulled activeOsc and stop() is a no-op (but it
+    // would throw InvalidStateError on a node that's been disconnected, so
+    // the try/catch also covers the case where a stray stop() races with
+    // garbage collection of the previous node).
+    if (activeOsc) {
+        try { activeOsc.stop(start); } catch (e) { /* already stopped */ }
+        activeOsc = null;
+    }
+    if (activeGain) {
+        activeGain.disconnect();
+        activeGain = null;
+    }
+
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
 
@@ -419,14 +441,11 @@ function beep(freq)
     // Clamp so a bogus cart value can't drive the oscillator into NaN territory.
     osc.frequency.value = Math.max(1, Math.min(20000, freq));
 
-    const start = Math.max(audioCtx.currentTime, lastBeepEnd);
-    lastBeepEnd = start + 0.1;
-
-    // Full-amplitude 100ms square, matching the C host's ±8000 wave
-    // (8000/32768 ≈ 0.24 of full scale). No decay envelope: the C host
-    // hard-cuts at 100ms too, and a fresh oscillator starts at phase 0
-    // (+1) like a freshly loaded sound wave, so overlapping retriggers
-    // mix in phase like the C host's pooled sounds.
+    // Full-amplitude 100ms square, matching the C host's ±8000 f32 wave and
+    // the Go host's ±8000 s16 wave (8000/32768 ≈ 0.24 of full scale). No decay
+    // envelope: the other hosts hard-cut at 100ms too, and a fresh oscillator
+    // starts at phase 0 so a frequency change retriggers cleanly instead of
+    // clicking mid-cycle.
     gain.gain.value = 8000 / 32768;
 
     osc.connect(gain);
@@ -434,6 +453,18 @@ function beep(freq)
 
     osc.start(start);
     osc.stop(start + 0.1);
+
+    activeOsc = osc;
+    activeGain = gain;
+
+    // Once the blip has actually played out, drop the references so the next
+    // beep() doesn't carry a stale oscillator that would need a try/catch to
+    // stop safely. Comparing against the captured node keeps a freshly-scheduled
+    // beep from clobbering the next blip's cleanup.
+    osc.onended = () => {
+        if (activeOsc === osc) activeOsc = null;
+        if (activeGain === gain) activeGain = null;
+    };
 }
 
 //// Part 4: WASM state and string helpers (C string reader)

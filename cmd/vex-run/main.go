@@ -761,12 +761,6 @@ const (
 	beepRate   = 48000
 	beepFrames = beepRate / 10 // 100ms
 
-	// beepLead keeps the beep schedule ahead of the audio write head. Events
-	// are anchored to the previous blip's end, so the lead only matters for
-	// the first blip of a chain and for absorbing late retriggers: a beep
-	// arriving up to beepLead late still finds its boundary in the future.
-	beepLead = beepRate * 40 / 1000 // 40ms
-
 	// audioBufferSize bounds the persistent player's latency. oto's default
 	// buffer is 0.5s of audio, which would postpone every new beep; a short
 	// buffer keeps the device pulling the stream within a few milliseconds.
@@ -788,54 +782,35 @@ const (
 )
 
 // beepEngine synthesizes 100ms square-wave blips into one long-lived
-// audio.Player. Retriggering a note while the previous blip is still playing
-// extends that blip in place, so sustained notes are sample-contiguous; the
-// earlier per-beep-player design carried oto's per-player startup latency and
-// every retrigger left a ~100ms silent gap.
-//
-// Voices and events live in stream space: pos is the write head (total frames
-// produced) and each voice covers [start, end). Beeps are queued as events at
-// a stream position and applied by Read() as the write head reaches them, so
-// the schedule is independent of the 60Hz cart clock. Each blip is anchored
-// to the end of the previous one, which keeps retriggered notes
-// sample-contiguous no matter how the cart clock drifts against the 48kHz
-// stream clock.
-//
-// The earlier "aud" merge (extend a voice whose end had not been heard yet)
-// was racy: it was evaluated on the game thread against the audible playhead,
-// and when a retrigger arrived a pull-quantum too late the chunk between the
-// old voice's end and the new voice's start had already been produced as
-// silence, leaving an audible ~10ms dropout on a regular cadence. Anchoring
-// events to the previous voice's end removes that race: a late retrigger
-// still lands exactly on the boundary, because the boundary is still in the
-// future of the write head.
-type beepEvent struct {
-	at   int64  // first frame, in stream space
-	freq uint32
-}
-
+// audio.Player. beep(freq) is monophonic: if a previous blip is still playing,
+// it is cut off and the new one starts at the next sample (phase 0, matching
+// the C host's freshly loaded sound wave and the JS host's fresh oscillator).
+// This matches the typical "beep" semantics in retro consoles and keeps
+// rapid-fire beeps from chaining into the future or stacking on top of each
+// other. The earlier 16-voice pool design produced the latter: a cart that
+// calls beep() in a tight loop piled up multiple in-phase copies of the same
+// blip, hard-clipped, and dropped the 17th; a cart that called beep() across
+// frames instead anchored every blip to the previous one's end and silently
+// delayed the rest by 100ms each. Monophonic retrigger avoids both.
 type beepEngine struct {
 	mu      sync.Mutex
-	voices  []beepVoice
-	events  []beepEvent
-	pos     int64 // total frames produced (write head)
-	lastEnd int64 // end of the most recently scheduled voice chain
+	pos     int64      // total frames produced (write head)
+	voice   *beepVoice // nil = no active blip
+	pending *uint32    // pending freq from a beep() call, applied at next Read
 }
 
 type beepVoice struct {
-	start int64  // first frame, in stream space
-	end   int64  // exclusive last frame
-	freq  uint32 // only for matching retriggers
-	half  int    // samples per square half-period (beepRate / (2*freq))
-	phase int    // position within the current half-period
+	freq  uint32
+	half  int // samples per square half-period (beepRate / (2*freq))
+	phase int // position within the current half-period
+	end   int64 // exclusive last frame of the current blip
 }
 
-// beep schedules a 100ms blip at freq Hz, starting at phase 0 like the C
-// host's freshly loaded sound wave. The blip is anchored to the end of the
-// previously scheduled voice (or, at the start of a chain, beepLead ahead of
-// the write head), keeping consecutive blips sample-contiguous even when a
-// retrigger arrives late; the 40ms lead keeps the schedule ahead of the write
-// head so a late retrigger still finds the boundary in the future.
+// beep schedules a 100ms blip at freq Hz, starting at phase 0. The blip
+// replaces whatever is currently playing: a beep() arriving while a previous
+// blip is still active cuts the previous one off and starts a new one at the
+// next sample the audio device pulls. The cart-side call is non-blocking
+// (just sets a flag); the audio thread picks it up on its next Read.
 func (e *beepEngine) beep(freq uint32) {
 	if freq < 1 || freq > 20000 {
 		return
@@ -843,70 +818,48 @@ func (e *beepEngine) beep(freq uint32) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	at := e.pos + beepLead
-	if e.lastEnd > e.pos {
-		at = e.lastEnd
-	}
-	e.events = append(e.events, beepEvent{at: at, freq: freq})
-	e.lastEnd = at + beepFrames
+	f := freq
+	e.pending = &f
 }
 
 // Read implements io.Reader with 16-bit stereo interleaved PCM and never
-// returns io.EOF. Idle stream is silence; active voices are summed squares,
-// hard-clipped at the 16-bit range.
+// returns io.EOF. Idle stream is silence; the active voice (if any) is a
+// square wave starting at +8000, hard-clipped at the 16-bit range.
 func (e *beepEngine) Read(p []byte) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Apply the most recent pending freq as a retrigger: start a fresh blip
+	// or, if one is already playing, replace its frequency and reset its
+	// phase so the new note starts cleanly instead of clicking mid-cycle.
+	if e.pending != nil {
+		freq := *e.pending
+		e.pending = nil
+		half := beepRate / (2 * int(freq))
+		if e.voice == nil {
+			e.voice = &beepVoice{freq: freq, half: half, phase: 0, end: e.pos + beepFrames}
+		} else {
+			e.voice.freq = freq
+			e.voice.half = half
+			e.voice.phase = 0
+			e.voice.end = e.pos + beepFrames
+		}
+	}
+
 	n := 0
 	for n+4 <= len(p) {
-		// Drop voices that ended more than a full blip behind the write head;
-		// they are certainly played out and can no longer be extended.
-		limit := e.pos - beepFrames
-		for i := 0; i < len(e.voices); {
-			if e.voices[i].end <= limit {
-				e.voices[i] = e.voices[len(e.voices)-1]
-				e.voices = e.voices[:len(e.voices)-1]
-				continue
-			}
-			i++
-		}
-
-		// Apply beeps whose scheduled position has been reached, in order.
-		for len(e.events) > 0 && e.events[0].at <= e.pos {
-			ev := e.events[0]
-			e.events = e.events[1:]
-
-			// A still-active voice of the same frequency is extended in
-			// place; otherwise a fresh blip starts exactly at ev.at.
-			if !e.extend(ev) {
-				// Cap the voice count so a spamming cart can't grow the
-				// slice forever. Dropping the oldest blip is fine:
-				// overlapping blips of the same frequency are in phase and
-				// mix constructively, matching the C host.
-				if len(e.voices) < 16 {
-					e.voices = append(e.voices, beepVoice{
-						start: ev.at,
-						end:   ev.at + beepFrames,
-						freq:  ev.freq,
-						half:  beepRate / (2 * int(ev.freq)),
-					})
-				}
-			}
+		if e.voice != nil && e.pos >= e.voice.end {
+			e.voice = nil
 		}
 
 		acc := 0
-		for i := range e.voices {
-			v := &e.voices[i]
-			if v.start <= e.pos && e.pos < v.end {
-				if (v.phase/v.half)&1 == 0 {
-					acc += 8000
-				} else {
-					acc -= 8000
-				}
-				v.phase++
+		if e.voice != nil {
+			if (e.voice.phase / e.voice.half) & 1 == 0 {
+				acc += 8000
+			} else {
+				acc -= 8000
 			}
+			e.voice.phase++
 		}
 		e.pos++
 
@@ -919,20 +872,6 @@ func (e *beepEngine) Read(p []byte) (int, error) {
 	}
 
 	return n, nil
-}
-
-// extend re-anchors a still-active voice of the same frequency to the end of
-// its scheduled blip. It reports whether the event was merged into an
-// existing voice.
-func (e *beepEngine) extend(ev beepEvent) bool {
-	for i := range e.voices {
-		v := &e.voices[i]
-		if v.freq == ev.freq && v.start <= ev.at && ev.at < v.end {
-			v.end = ev.at + beepFrames
-			return true
-		}
-	}
-	return false
 }
 
 // ensureAudio creates and starts the persistent beep player on first use, so

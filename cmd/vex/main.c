@@ -517,68 +517,111 @@ m3ApiRawFunction(host_palreset) {
 }
 
 // ---- audio (beep) ---------------------------------------------------------
-// Small pool of live beep Sounds. raylib copies the wave data when a Sound is
-// loaded (and again when it is played into a pool channel), so a freshly
-// generated wave can be dropped right after LoadSoundFromWave(). Finished
-// sounds are unloaded lazily on the next beep, keeping the pool bounded.
-#define VEX_BEEP_POOL 8
-static Sound g_beeps[VEX_BEEP_POOL];
-static int g_beep_count = 0;
+// One persistent Sound whose buffer is rewritten per call. Each beep()
+// overwrites the Sound's f32-stereo buffer with a fresh ~100ms square wave at
+// the requested frequency and restarts playback, so a beep() arriving while a
+// previous blip is still playing cuts it off and starts a new one. The Sound
+// is created lazily on the first call (so headless runs that never beep()
+// don't touch the audio device) and unloaded on shutdown.
+//
+// The previous design used an 8-Sound pool where each beep() produced a fresh
+// Sound and stacked them: a cart calling beep() in a tight loop piled up to
+// 8 overlapping copies of the same blip (8x amplitude) and silently dropped
+// the 9th. Go and JS already use the monophonic retrigger model, and that is
+// also what PICO-8-style beeps mean in practice, so the C host now matches.
+static Sound g_beep = {0};
+static bool g_beep_loaded = false;
+static float* g_beep_buf = NULL;
+static int g_beep_frames = 0;
+static int g_beep_rate = 0;
 static bool g_audio_ready = false;
 
-static void beep_reap(void) {
-    for (int i = 0; i < g_beep_count; i++) {
-        if (!IsSoundPlaying(g_beeps[i])) {
-            UnloadSound(g_beeps[i]);
-            for (int j = i; j < g_beep_count - 1; j++) g_beeps[j] = g_beeps[j + 1];
-            g_beep_count--;
-            i--;
-        }
-    }
-}
-
 static void beep_cleanup(void) {
-    for (int i = 0; i < g_beep_count; i++) UnloadSound(g_beeps[i]);
-    g_beep_count = 0;
+    if (g_beep_loaded) {
+        UnloadSound(g_beep);
+        g_beep = (Sound){0};
+        g_beep_loaded = false;
+    }
+    RL_FREE(g_beep_buf);
+    g_beep_buf = NULL;
+    g_beep_frames = 0;
+    g_beep_rate = 0;
     if (g_audio_ready) {
         g_audio_ready = false;
         CloseAudioDevice();
     }
 }
 
-// beep(freq): play a ~100ms square-wave blip at freq Hz (16-bit mono, 22050 Hz).
+// beep(freq): play a ~100ms square-wave blip at freq Hz, monophonic.
+// The C host used to allocate a fresh Sound per call from a small s16 mono
+// buffer; it now writes directly into a f32 stereo buffer at the device's
+// native rate and uses UpdateSound() to swap it into the persistent Sound.
+// That keeps the wave generation in float math (matching the device format)
+// while avoiding the per-call AudioBuffer allocation that LoadSoundFromWave
+// would otherwise do, and lets PlaySound()'s built-in restart-from-frame-0
+// handle the retrigger for free.
 m3ApiRawFunction(host_beep) {
     m3ApiGetArg(int32_t, freq)
     if (!g_audio_ready) m3ApiSuccess();
-    beep_reap();
+
+    if (!g_beep_loaded) {
+        // Load a 1-frame placeholder to discover the device sample rate
+        // (raylib doesn't expose a public getter). Any rate we pass to
+        // LoadSoundFromWave is resampled to the device rate, so the
+        // placeholder's rate is irrelevant.
+        float ph[2] = {0.0f, 0.0f};
+        Wave pw = {
+            .frameCount = 1,
+            .sampleRate = 44100,
+            .sampleSize = 32,
+            .channels = 2,
+            .data = ph,
+        };
+        Sound ps = LoadSoundFromWave(pw);
+        g_beep_rate = (int)ps.stream.sampleRate;
+        UnloadSound(ps);
+        if (g_beep_rate <= 0) g_beep_rate = 44100;
+
+        g_beep_frames = g_beep_rate / 10; // 100ms
+        g_beep_buf = RL_MALLOC((size_t)g_beep_frames * 2 * sizeof(float));
+        if (!g_beep_buf) m3ApiSuccess();
+        for (int i = 0; i < g_beep_frames * 2; i++) g_beep_buf[i] = 0.0f;
+
+        Wave wave = {
+            .frameCount = (unsigned int)g_beep_frames,
+            .sampleRate = (unsigned int)g_beep_rate,
+            .sampleSize = 32,
+            .channels = 2,
+            .data = g_beep_buf,
+        };
+        g_beep = LoadSoundFromWave(wave);
+        g_beep_loaded = true;
+    }
+
     if (freq < 1) freq = 1;
     if (freq > 20000) freq = 20000;
 
-    // 2205 samples == 100ms at 22050 Hz; one static buffer reused every call.
-    static int16_t samples[2205];
-    const int rate = 22050;
-    const int half = rate / (2 * freq); // samples per square-wave half-period
+    // Square wave at the device rate, ±8000/32768 ≈ ±0.24 of full scale to
+    // match the Go host's s16 peak (8000) and the JS host's 8000/32768 gain.
+    // Phase starts at sign=+1 on sample 0 and toggles every `half` samples,
+    // so a retrigger after a different frequency restarts the new blip at a
+    // known phase instead of clicking mid-half-period.
+    const float amp = 8000.0f / 32768.0f;
+    const int half = g_beep_rate / (2 * freq); // samples per square half-period
     int sign = 1;
-    for (int i = 0; i < (int)(sizeof(samples) / sizeof(samples[0])); i++) {
-        if (half > 0 && i > 0 && i % half == 0) sign = -sign; // toggle after sample 0, +8000 first
-        samples[i] = (int16_t)(sign * 8000);
+    for (int i = 0; i < g_beep_frames; i++) {
+        if (half > 0 && i > 0 && i % half == 0) sign = -sign;
+        float s = (float)sign * amp;
+        g_beep_buf[i * 2] = s;
+        g_beep_buf[i * 2 + 1] = s;
     }
 
-    Wave wave = {
-        .frameCount = (unsigned int)(sizeof(samples) / sizeof(samples[0])),
-        .sampleRate = rate,
-        .sampleSize = 16,
-        .channels = 1,
-        .data = samples,
-    };
-
-    Sound s = LoadSoundFromWave(wave);
-    if (g_beep_count < VEX_BEEP_POOL) {
-        g_beeps[g_beep_count++] = s;
-        PlaySound(s);
-    } else {
-        UnloadSound(s); // pool full: drop the new one rather than reorder
-    }
+    // UpdateSound() stops the buffer and memcpys our f32 stereo data in place
+    // (the Sound's internal buffer is f32 stereo at the device rate, same as
+    // g_beep_buf, so the copy is a straight byte-for-byte overwrite). The
+    // following PlaySound() then restarts from frame 0, which is the retrigger.
+    UpdateSound(g_beep, g_beep_buf, g_beep_frames);
+    PlaySound(g_beep);
     m3ApiSuccess();
 }
 
