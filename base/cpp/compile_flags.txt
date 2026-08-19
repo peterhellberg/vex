@@ -1,0 +1,3 @@
+-I.
+-std=c++17
+-Wno-unknown-attributes

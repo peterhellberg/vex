@@ -1,0 +1,39 @@
+CART    ?= cart
+SRC     := $(CART).cpp
+WASM    := $(CART).wasm
+SDK     := vex.h
+SDK_URL := https://raw.githubusercontent.com/peterhellberg/vex/main/$(SDK)
+
+.PHONY: all build run web clean distclean
+
+all: build
+
+build: $(WASM)
+
+bundle: $(WASM)
+	@vex-web -bundle $(WASM)
+
+$(SDK):
+	@curl --silent -Lo $@ $(SDK_URL)
+
+$(WASM): $(SRC) $(SDK)
+	@zig c++ \
+		--target=wasm32-freestanding \
+		-nostdlib \
+		-std=c++17 \
+		-Os \
+		-Wl,--no-entry \
+		-I. \
+		-o $(WASM) $(SRC)
+
+run: $(WASM)
+	vex -w $(WASM)
+
+web: $(WASM)
+	vex-web $(WASM)
+
+clean:
+	rm -f $(WASM)
+
+distclean: clean
+	rm -f $(SDK)
