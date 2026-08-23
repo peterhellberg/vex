@@ -8,13 +8,13 @@ import (
 
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -24,6 +24,7 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -119,7 +120,7 @@ func init() {
 }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(os.Args[1:]); err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -137,7 +138,9 @@ func parse(args []string) (in Input, cart string, _ error) {
 	fs.IntVar(&in.scale, "scale", VEX_SCALE_DEF, "window scale factor (1..20)")
 	fs.BoolVar(&in.watch, "w", false, "watch cart file for changes and auto-reload")
 	fs.BoolVar(&in.watch, "watch", false, "watch cart file for changes and auto-reload")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return Input{}, "", err
+	}
 
 	cart = fs.Arg(0)
 	if cart == "" {
@@ -163,7 +166,7 @@ func run(args []string) error {
 	in, cart, err := parse(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "usage: vex-run [-s scale] [-w] <cart.wasm>\n")
-		return nil
+		return err
 	}
 
 	wasmBytes, err := os.ReadFile(cart)
@@ -181,7 +184,7 @@ func run(args []string) error {
 	game := NewGame()
 
 	if err := buildEnvModule(ctx, game, r); err != nil {
-		return fmt.Errorf("build env moduleule: %w", err)
+		return fmt.Errorf("build env module: %w", err)
 	}
 
 	module, err := r.Instantiate(ctx, wasmBytes)
@@ -211,6 +214,7 @@ func run(args []string) error {
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetTPS(60)
 
+	game.uiReady = true
 	if err := ebiten.RunGame(game); err != nil && err != ebiten.Termination {
 		return err
 	}
@@ -244,6 +248,12 @@ type Game struct {
 	pollTick int
 	instSeq  int
 
+	// uiReady is set just before ebiten.RunGame starts. Input/window queries
+	// (btn, btnp, mx, my, mbtn) return zero until then, so a cart driven
+	// headlessly (e.g. from tests, which never open a window) gets stable,
+	// device-free results instead of poking ebiten's uninitialized UI layer.
+	uiReady bool
+
 	// Reusable scanline buffers for tri(), avoiding a map + per-row heap
 	// allocation on every filled triangle.
 	triL []int32
@@ -251,12 +261,12 @@ type Game struct {
 
 	// Audio for beep(): one shared context and a single persistent mixer
 	// player that synthesizes the beeps (see beepEngine).
-	audioCtx    *audio.Context
-	audio       *beepEngine
-	audioPl     *audio.Player
-	audioOn     bool // the persistent player has been created
-	audioReady  bool // the device has started consuming the stream
-	startedAt   time.Time
+	audioCtx   *audio.Context
+	audio      *beepEngine
+	audioPl    *audio.Player
+	audioOn    bool // the persistent player has been created
+	audioReady bool // the device has started consuming the stream
+	startedAt  time.Time
 }
 
 func NewGame() *Game {
@@ -551,7 +561,7 @@ func (g *Game) tri(x1, y1, x2, y2, x3, y3 int32, color uint32) {
 	addEdge(x2, y2, x3, y3)
 	addEdge(x3, y3, x1, y1)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if l[i] <= r[i] {
 			g.hline(ymin+int32(i), l[i], r[i], color)
 		}
@@ -600,7 +610,9 @@ func (g *Game) blit(m api.Module, ptr uint32, x, y, w, h int32, key uint32) {
 
 		col := int32(0)
 		for col < w {
-			for col < w && src[col] == byte(key) {
+			// Raw compare against the full key value: a key outside 0..255
+			// never matches any pixel byte, matching the C and JS hosts.
+			for col < w && uint32(src[col]) == key {
 				col++
 			}
 
@@ -667,7 +679,7 @@ func (g *Game) text(m api.Module, ptr uint32, x, y int32, color uint32) {
 			continue
 		}
 
-		for yy := int32(0); yy < 8; yy++ {
+		for yy := range int32(8) {
 			py := y + yy
 			if py < 0 || py >= VEX_H {
 				continue
@@ -676,7 +688,7 @@ func (g *Game) text(m api.Module, ptr uint32, x, y int32, color uint32) {
 			rowBits := fontRows[idx*8+int(yy)]
 			rowStart := int(py) * VEX_W
 
-			for xx := int32(0); xx < 8; xx++ {
+			for xx := range int32(8) {
 				if rowBits&(1<<(7-xx)) != 0 {
 					px := curX + xx
 					if px >= 0 && px < VEX_W {
@@ -695,7 +707,7 @@ func (g *Game) title(m api.Module, ptr uint32) {
 }
 
 func (g *Game) btn(button uint32) uint32 {
-	if int(button) >= VEX_NUM_BTNS {
+	if !g.uiReady || int(button) >= VEX_NUM_BTNS {
 		return 0
 	}
 
@@ -707,7 +719,7 @@ func (g *Game) btn(button uint32) uint32 {
 }
 
 func (g *Game) btnp(button uint32) uint32 {
-	if int(button) >= VEX_NUM_BTNS {
+	if !g.uiReady || int(button) >= VEX_NUM_BTNS {
 		return 0
 	}
 
@@ -722,17 +734,27 @@ func (g *Game) btnp(button uint32) uint32 {
 }
 
 func (g *Game) mx() uint32 {
+	if !g.uiReady {
+		return 0
+	}
 	x, _ := ebiten.CursorPosition()
 	return uint32(max(0, min(x, VEX_W-1)))
 }
 
 func (g *Game) my() uint32 {
+	if !g.uiReady {
+		return 0
+	}
 	_, y := ebiten.CursorPosition()
 	return uint32(max(0, min(y, VEX_H-1)))
 }
 
 func (g *Game) mbtn(button uint32) uint32 {
-	if int(button) < len(mouseBtns) && ebiten.IsMouseButtonPressed(mouseBtns[button]) {
+	if !g.uiReady || int(button) < 0 || int(button) >= len(mouseBtns) {
+		return 0
+	}
+
+	if ebiten.IsMouseButtonPressed(mouseBtns[button]) {
 		return 1
 	}
 
@@ -801,8 +823,8 @@ type beepEngine struct {
 
 type beepVoice struct {
 	freq  uint32
-	half  int // samples per square half-period (beepRate / (2*freq))
-	phase int // position within the current half-period
+	half  int   // samples per square half-period (beepRate / (2*freq))
+	phase int   // position within the current half-period
 	end   int64 // exclusive last frame of the current blip
 }
 
@@ -854,7 +876,7 @@ func (e *beepEngine) Read(p []byte) (int, error) {
 
 		acc := 0
 		if e.voice != nil {
-			if (e.voice.phase / e.voice.half) & 1 == 0 {
+			if (e.voice.phase/e.voice.half)&1 == 0 {
 				acc += 8000
 			} else {
 				acc -= 8000
@@ -875,7 +897,9 @@ func (e *beepEngine) Read(p []byte) (int, error) {
 }
 
 // ensureAudio creates and starts the persistent beep player on first use, so
-// the audio device begins warming up before the cart's first beep.
+// the audio device begins warming up before the cart's first beep. If the
+// player can't be created (no audio device, headless/CI), audio is considered
+// ready immediately so the cart clock isn't held back by the warm-up gate.
 func (g *Game) ensureAudio() {
 	if g.audioOn {
 		return
@@ -884,6 +908,7 @@ func (g *Game) ensureAudio() {
 
 	p, err := audio.NewPlayer(g.audioCtx, g.audio)
 	if err != nil {
+		g.audioReady = true
 		return
 	}
 	p.SetBufferSize(audioBufferSize)
@@ -1102,25 +1127,34 @@ func buildEnvModule(ctx context.Context, g *Game, r wazero.Runtime) error {
 func readCString(m api.Module, ptr uint32) string {
 	mem := m.Memory()
 
-	var buf []byte
-
-	for i := uint32(0); ; i++ {
-		b, ok := mem.ReadByte(ptr + i)
-		if !ok || b == 0 {
-			break
-		}
-
-		buf = append(buf, b)
+	size := mem.Size()
+	if ptr >= size {
+		return ""
 	}
 
-	return string(buf)
+	// One read (a zero-copy view, not a copy) of the rest of linear memory;
+	// carts keep their strings short and NUL-terminated.
+	data, ok := mem.Read(ptr, size-ptr)
+	if !ok {
+		return ""
+	}
+
+	end := 0
+	for end < len(data) && data[end] != 0 {
+		end++
+	}
+
+	return string(data[:end])
 }
 
+// filterStderr swaps fd 2 for a pipe and forwards everything except the
+// given noise lines to the original stderr. Uses golang.org/x/sys/unix so it
+// also compiles on darwin/arm64, where syscall.Dup2 doesn't exist.
 func filterStderr() (restore func()) {
-	orig, _ := syscall.Dup(2)
+	orig, _ := unix.Dup(2)
 
 	r, w, _ := os.Pipe()
-	syscall.Dup2(int(w.Fd()), 2)
+	unix.Dup2(int(w.Fd()), 2)
 
 	os.Stderr = os.NewFile(uintptr(2), "/dev/stderr")
 
@@ -1132,17 +1166,17 @@ func filterStderr() (restore func()) {
 				continue
 			}
 
-			syscall.Write(orig, []byte(line+"\n"))
+			unix.Write(orig, []byte(line+"\n"))
 		}
 	}()
 
 	return func() {
-		syscall.Dup2(orig, 2)
+		unix.Dup2(orig, 2)
 
 		os.Stderr = os.NewFile(uintptr(2), "/dev/stderr")
 
 		w.Close()
 		r.Close()
-		syscall.Close(orig)
+		unix.Close(orig)
 	}
 }
