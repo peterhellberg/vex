@@ -337,6 +337,13 @@ func (g *Game) hline(y, x0, x1 int32, color uint32) {
 }
 
 func (g *Game) line(x0, y0, x1, y1 int32, color uint32) {
+	// Reject obviously absurd endpoints (same VEX_COORD_MAX bound as the C
+	// host): bresenham iterates once per coordinate step, so an endpoint near
+	// INT32_MIN/MAX would otherwise spin for billions of iterations.
+	if !g.coordOK(x0) || !g.coordOK(y0) || !g.coordOK(x1) || !g.coordOK(y1) {
+		return
+	}
+
 	dx := int32(x1 - x0)
 	if dx < 0 {
 		dx = -dx
@@ -501,6 +508,15 @@ func (g *Game) circb(cx, cy, r int32, color uint32) {
 }
 
 func (g *Game) tri(x1, y1, x2, y2, x3, y3 int32, color uint32) {
+	// Same vertex bound as the C host: any vertex beyond ±VEX_COORD_MAX
+	// rejects the whole triangle (the maxRows guard below then only has to
+	// cover spans between in-range vertices).
+	if !g.coordOK(x1) || !g.coordOK(y1) ||
+		!g.coordOK(x2) || !g.coordOK(y2) ||
+		!g.coordOK(x3) || !g.coordOK(y3) {
+		return
+	}
+
 	ymin := min(y1, min(y2, y3))
 	ymax := max(y1, max(y2, y3))
 
