@@ -74,9 +74,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	// Default to loopback: this is a dev tool that serves local files, so
-	// don't expose it to the network unless asked to (-addr 0.0.0.0:8383).
-	fs.StringVar(&in.addr, "addr", "localhost:8383", "address to listen on")
+	// Binds on all interfaces by default so a cart served from your machine
+	// is reachable from other devices on the network (phones for the
+	// touch/gamepad controls); use -addr localhost:8383 to restrict it.
+	fs.StringVar(&in.addr, "addr", ":8383", "address to listen on")
 	fs.BoolVar(&in.noOpen, "no-open", false, "don't open the browser on start")
 	fs.DurationVar(&in.poll, "poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
 	fs.BoolVar(&in.bundle, "bundle", false, "write a static bundle for the cart to bundle/<name>/ (and .zip) instead of serving")

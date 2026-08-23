@@ -36,8 +36,10 @@ All findings have been addressed except where noted:
   clamp as C/Go.
 - **§3 Robustness** — all fixed (link errors reported, headless audio stall
   removed, x/sys/unix portability, strict scale parsing, unknown-flag
-  diagnostics, render-texture checks, localhost default bind,
-  ServeContent-based cart serving, SSE keepalive, spr.zig hardening).
+  diagnostics, render-texture checks, ServeContent-based cart serving, SSE
+  keepalive, spr.zig hardening). The original `:8383` (all-interfaces)
+  default bind was deliberately kept so carts are easy to reach from other
+  devices; `-addr localhost:8383` restricts it.
 - **§4 raylib build** — `cmd/vex/build.zig` now compiles raylib sources
   directly and links platform libs itself (4b approach); the link is quiet
   and no longer depends on raylib's build.zig API.
