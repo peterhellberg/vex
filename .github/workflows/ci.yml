@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install pinned Zig (version from build.zig.zon)
+        run: ./scripts/install-zig.sh
+        env:
+          ZIG_DIR: /tmp/zig-pinned
+
+      - name: Add zig to PATH
+        run: echo "/tmp/zig-pinned" >> "$GITHUB_PATH"
+
+      - name: Install Linux X11/GL dev libraries (raylib link deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxi-dev libxcursor-dev pkg-config
+
+      - name: Build SDK package (vex-init, example + test carts)
+        run: zig build --prefix . --release=fast
+
+      - name: Build C host (cmd/vex)
+        run: cd cmd/vex && zig build --prefix ../.. --release=fast
+
+      - name: Run Zig tests (spr.zig)
+        run: zig build test
+
+      - name: Vet and test Go modules
+        run: |
+          go vet ./...
+          go build ./...
+          go test ./...
+
+      - name: Build Go hosts
+        run: |
+          go build -o bin/vex-web ./cmd/vex-web
+          go build -o bin/vex-run ./cmd/vex-run

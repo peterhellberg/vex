@@ -1,0 +1,33 @@
+# Playwright-driven browser tests (cmd/vex-web/test). Not run on every
+# push/PR -- trigger manually from the GitHub Actions tab.
+name: Web tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install pinned Zig (version from build.zig.zon)
+        run: ./scripts/install-zig.sh
+        env:
+          ZIG_DIR: /tmp/zig-pinned
+
+      - name: Add zig to PATH
+        run: echo "/tmp/zig-pinned" >> "$GITHUB_PATH"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium
+
+      - name: Build the cart bundle and drive the page
+        run: make test-web
