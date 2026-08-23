@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <errno.h>
 
 #include "raylib.h"
 #include "rlgl.h"
@@ -341,6 +342,30 @@ m3ApiRawFunction(host_circb) {
     m3ApiSuccess();
 }
 
+// Set one framebuffer pixel, dropping coordinates outside the screen.
+static void host_pixel(int32_t x, int32_t y, Color c) {
+    if (x < 0 || x >= VEX_W || y < 0 || y >= VEX_H) return;
+    DrawPixel(x, y, c);
+}
+
+// Bresenham line -- byte-for-byte the line() of the Go and JS hosts, so all
+// three rasterize identical pixels. (raylib's DrawLine emits GL LINES whose
+// rasterization is driver-dependent.)
+static void host_bresenham(int32_t x0, int32_t y0, int32_t x1, int32_t y1, Color c) {
+    int32_t dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    int32_t sx = x0 < x1 ? 1 : -1;
+    int32_t dy = y1 > y0 ? y1 - y0 : y0 - y1;
+    int32_t sy = y0 < y1 ? 1 : -1;
+    int32_t err = dx - dy;
+    for (;;) {
+        host_pixel(x0, y0, c);
+        if (x0 == x1 && y0 == y1) break;
+        int32_t e2 = err * 2;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 < dx)  { err += dx; y0 += sy; }
+    }
+}
+
 m3ApiRawFunction(host_line) {
     m3ApiGetArg(int32_t, x0)
     m3ApiGetArg(int32_t, y0)
@@ -348,8 +373,34 @@ m3ApiRawFunction(host_line) {
     m3ApiGetArg(int32_t, y1)
     m3ApiGetArg(int32_t, color)
     if (!COORDS_OK(x0, y0) || !COORDS_OK(x1, y1)) m3ApiSuccess();
-    DrawLine(x0, y0, x1, y1, PAL(color));
+    host_bresenham(x0, y0, x1, y1, PAL(color));
     m3ApiSuccess();
+}
+
+// Integer scanline triangle fill -- byte-for-byte the tri() of the Go host:
+// per row, track the floor'd leftmost/rightmost edge crossing and draw one
+// hline span. Independent of vertex order or winding, so no normalization
+// step is needed.
+#define TRI_MAX_ROWS (2 * VEX_COORD_MAX + 1) // vertices are COORDS_OK-bounded
+static int32_t g_tri_l[TRI_MAX_ROWS];
+static int32_t g_tri_r[TRI_MAX_ROWS];
+
+static void tri_add_edge(int32_t ax, int32_t ay, int32_t bx, int32_t by,
+                         int32_t ymin, int32_t* l, int32_t* r) {
+    if (ay == by) return; // horizontal edge: its endpoints are covered by the others
+    // double math to match the Go and JS hosts bit-for-bit at half-pixel
+    // boundaries (a float here would round differently in rare cases).
+    double slope = (double)(bx - ax) / (double)(by - ay);
+    int32_t ys = ay < by ? ay : by;
+    int32_t ye = ay < by ? by : ay;
+    for (int32_t y = ys; y <= ye; y++) {
+        double xf = (double)ax + (double)(y - ay) * slope;
+        int32_t xi = (int32_t)xf;
+        if (xf < 0.0 && xf - (double)xi > 0.0) xi--; // true floor
+        int32_t i = y - ymin;
+        if (xi < l[i]) l[i] = xi;
+        if (xi > r[i]) r[i] = xi;
+    }
 }
 
 m3ApiRawFunction(host_tri) {
@@ -361,16 +412,23 @@ m3ApiRawFunction(host_tri) {
     m3ApiGetArg(int32_t, y3)
     m3ApiGetArg(int32_t, color)
     if (!COORDS_OK(x1, y1) || !COORDS_OK(x2, y2) || !COORDS_OK(x3, y3)) m3ApiSuccess();
-    // raylib keeps backface culling on, so a back-facing winding would be
-    // dropped. Normalize to the front-facing order so any vertex order draws.
-    // Cast before subtraction to avoid int32_t overflow UB.
-    int64_t cross = ((int64_t)x2 - x1) * ((int64_t)y3 - y1) - ((int64_t)y2 - y1) * ((int64_t)x3 - x1);
-    if (cross > 0) {
-        int32_t tx = x2, ty = y2;
-        x2 = x3; y2 = y3;
-        x3 = tx; y3 = ty;
+    int32_t ymin = y1 < y2 ? (y1 < y3 ? y1 : y3) : (y2 < y3 ? y2 : y3);
+    int32_t ymax = y1 > y2 ? (y1 > y3 ? y1 : y3) : (y2 > y3 ? y2 : y3);
+    int64_t n64 = (int64_t)ymax - ymin + 1;
+    if (n64 <= 0 || n64 > TRI_MAX_ROWS) m3ApiSuccess(); // guard hostile spans
+    int n = (int)n64;
+
+    const int32_t INF32 = 1 << 30;
+    for (int i = 0; i < n; i++) { g_tri_l[i] = INF32; g_tri_r[i] = -INF32; }
+    tri_add_edge(x1, y1, x2, y2, ymin, g_tri_l, g_tri_r);
+    tri_add_edge(x2, y2, x3, y3, ymin, g_tri_l, g_tri_r);
+    tri_add_edge(x3, y3, x1, y1, ymin, g_tri_l, g_tri_r);
+
+    Color c = PAL(color);
+    for (int i = 0; i < n; i++) {
+        if (g_tri_l[i] <= g_tri_r[i])
+            host_hline(ymin + i, g_tri_l[i], g_tri_r[i], c);
     }
-    DrawTriangle((Vector2){x1, y1}, (Vector2){x2, y2}, (Vector2){x3, y3}, PAL(color));
     m3ApiSuccess();
 }
 
@@ -382,18 +440,12 @@ m3ApiRawFunction(host_trib) {
     m3ApiGetArg(int32_t, x3)
     m3ApiGetArg(int32_t, y3)
     m3ApiGetArg(int32_t, color)
+    // Three Bresenham edges, matching trib() of the Go and JS hosts.
     if (!COORDS_OK(x1, y1) || !COORDS_OK(x2, y2) || !COORDS_OK(x3, y3)) m3ApiSuccess();
-    // DrawTriangleLines isn't subject to backface culling, but normalize the
-    // winding the same way host_tri does so filled and outlined versions of
-    // the same triangle share an edge order and carts don't have to remember
-    // which entry point normalizes.
-    int64_t cross = ((int64_t)x2 - x1) * ((int64_t)y3 - y1) - ((int64_t)y2 - y1) * ((int64_t)x3 - x1);
-    if (cross > 0) {
-        int32_t tx = x2, ty = y2;
-        x2 = x3; y2 = y3;
-        x3 = tx; y3 = ty;
-    }
-    DrawTriangleLines((Vector2){x1, y1}, (Vector2){x2, y2}, (Vector2){x3, y3}, PAL(color));
+    Color c = PAL(color);
+    host_bresenham(x1, y1, x2, y2, c);
+    host_bresenham(x2, y2, x3, y3, c);
+    host_bresenham(x3, y3, x1, y1, c);
     m3ApiSuccess();
 }
 
@@ -479,22 +531,32 @@ m3ApiRawFunction(host_btnp) {
     m3ApiReturn(held && !prev);
 }
 
-// Mouse position, mapped from window space into logical screen coordinates.
+// Mouse position, mapped from window space into logical screen coordinates
+// and clamped to the framebuffer (0..W-1 / 0..H-1), matching the Go host and
+// the documented API range.
+static inline int32_t clampi32(int32_t v, int32_t lo, int32_t hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 m3ApiRawFunction(host_mx) {
     m3ApiReturnType(int32_t)
-    m3ApiReturn((int32_t)((GetMouseX() - g_view_ox) / g_view_scale));
+    int32_t mx = (int32_t)((GetMouseX() - g_view_ox) / g_view_scale);
+    m3ApiReturn(clampi32(mx, 0, VEX_W - 1));
 }
 
 m3ApiRawFunction(host_my) {
     m3ApiReturnType(int32_t)
-    m3ApiReturn((int32_t)((GetMouseY() - g_view_oy) / g_view_scale));
+    int32_t my = (int32_t)((GetMouseY() - g_view_oy) / g_view_scale);
+    m3ApiReturn(clampi32(my, 0, VEX_H - 1));
 }
 
 // mbtn(button) -> held? 0 left, 1 right, 2 middle (raylib button indices).
 m3ApiRawFunction(host_mbtn) {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, button)
-    int held = (button >= 0 && button <= 6) ? IsMouseButtonDown(button) : 0;
+    // raylib only defines mouse buttons 0..2; anything else reads past its
+    // internal bool[3] state array.
+    int held = (button >= 0 && button < 3) ? IsMouseButtonDown(button) : 0;
     m3ApiReturn(held);
 }
 
@@ -628,28 +690,36 @@ m3ApiRawFunction(host_beep) {
 static M3Result link_host(IM3Module mod) {
     const char* m = "env";
     // Linking a function the cart doesn't import returns functionLookupFailed,
-    // which is harmless: carts only import the API they actually use.
-    m3_LinkRawFunction(mod, m, "cls",   "v(i)",     &host_cls);
-    m3_LinkRawFunction(mod, m, "pset",  "v(iii)",   &host_pset);
-    m3_LinkRawFunction(mod, m, "rect",  "v(iiiii)", &host_rect);
-    m3_LinkRawFunction(mod, m, "rectb", "v(iiiii)", &host_rectb);
-    m3_LinkRawFunction(mod, m, "circ",  "v(iiii)",  &host_circ);
-    m3_LinkRawFunction(mod, m, "circb", "v(iiii)",  &host_circb);
-    m3_LinkRawFunction(mod, m, "line",  "v(iiiii)", &host_line);
-    m3_LinkRawFunction(mod, m, "tri",   "v(iiiiiii)", &host_tri);
-    m3_LinkRawFunction(mod, m, "trib",  "v(iiiiiii)", &host_trib);
-    m3_LinkRawFunction(mod, m, "blit",  "v(*iiiii)", &host_blit);
-    m3_LinkRawFunction(mod, m, "text",     "v(*iii)",  &host_text);
-    m3_LinkRawFunction(mod, m, "title",    "v(*)",     &host_title);
-    m3_LinkRawFunction(mod, m, "btn",      "i(i)",     &host_btn);
-    m3_LinkRawFunction(mod, m, "btnp",     "i(i)",     &host_btnp);
-    m3_LinkRawFunction(mod, m, "mx",       "i()",      &host_mx);
-    m3_LinkRawFunction(mod, m, "my",       "i()",      &host_my);
-    m3_LinkRawFunction(mod, m, "mbtn",     "i(i)",     &host_mbtn);
-    m3_LinkRawFunction(mod, m, "pal",      "v(ii)",    &host_pal);
-    m3_LinkRawFunction(mod, m, "palreset", "v()",      &host_palreset);
-    m3_LinkRawFunction(mod, m, "beep",     "v(i)",     &host_beep);
-    return m3Err_none;
+    // which is harmless: carts only import the API they actually use. Any
+    // other failure (e.g. a signature mismatch on an import we do have) is
+    // reported to the caller instead of being silently masked.
+    M3Result first_err = m3Err_none;
+    #define LINK(name, sig, fn) do {                                      \
+        M3Result r_ = m3_LinkRawFunction(mod, m, name, sig, fn);          \
+        if (r_ && r_ != m3Err_functionLookupFailed && !first_err) first_err = r_; \
+    } while (0)
+    LINK("cls",   "v(i)",     &host_cls);
+    LINK("pset",  "v(iii)",   &host_pset);
+    LINK("rect",  "v(iiiii)", &host_rect);
+    LINK("rectb", "v(iiiii)", &host_rectb);
+    LINK("circ",  "v(iiii)",  &host_circ);
+    LINK("circb", "v(iiii)",  &host_circb);
+    LINK("line",  "v(iiiii)", &host_line);
+    LINK("tri",   "v(iiiiiii)", &host_tri);
+    LINK("trib",  "v(iiiiiii)", &host_trib);
+    LINK("blit",  "v(*iiiii)", &host_blit);
+    LINK("text",     "v(*iii)",  &host_text);
+    LINK("title",    "v(*)",     &host_title);
+    LINK("btn",      "i(i)",     &host_btn);
+    LINK("btnp",     "i(i)",     &host_btnp);
+    LINK("mx",       "i()",      &host_mx);
+    LINK("my",       "i()",      &host_my);
+    LINK("mbtn",     "i(i)",     &host_mbtn);
+    LINK("pal",      "v(ii)",    &host_pal);
+    LINK("palreset", "v()",      &host_palreset);
+    LINK("beep",     "v(i)",     &host_beep);
+    #undef LINK
+    return first_err;
 }
 
 // Set after InitWindow() and cleared before CloseWindow(); read by die() so
@@ -658,12 +728,12 @@ static M3Result link_host(IM3Module mod) {
 static bool g_window_open = false;
 
 static void die(IM3Runtime rt, const char* what, M3Result err) {
-    if (rt) {
+    if (rt && err) {
         M3ErrorInfo info;
         m3_GetErrorInfo(rt, &info);
         fprintf(stderr, "vex: %s: %s (%s)\n", what, err, info.message ? info.message : "");
     } else {
-        fprintf(stderr, "vex: %s: %s\n", what, err);
+        fprintf(stderr, "vex: %s%s%s\n", what, err ? ": " : "", err ? (const char*)err : "");
     }
     // Close raylib's window before exit so its GL teardown doesn't print a
     // noisy "context still bound" warning. Guarded because die() may be called
@@ -717,7 +787,13 @@ static bool load_cart(IM3Environment env, const char* path, Cart* out) {
     if (err) { fprintf(stderr, "vex: parse: %s\n", err); m3_FreeRuntime(rt); free(wasm); return false; }
     err = m3_LoadModule(rt, mod);
     if (err) { fprintf(stderr, "vex: load: %s\n", err); m3_FreeModule(mod); m3_FreeRuntime(rt); free(wasm); return false; }
-    link_host(mod);
+    err = link_host(mod);
+    if (err) {
+        M3ErrorInfo info;
+        m3_GetErrorInfo(rt, &info);
+        fprintf(stderr, "vex: link: %s (%s)\n", err, info.message ? info.message : "");
+        m3_FreeRuntime(rt); free(wasm); return false;
+    }
 
     // Resolving update() compiles it, which is where wasm3 first notices a
     // missing import -- a cart calling a host function this vex doesn't link
@@ -804,16 +880,37 @@ static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     return true;
 }
 
+// Strict integer parse for -s/--scale: rejects trailing garbage and empty
+// strings where atoi() would silently yield 0.
+static bool parse_long(const char* s, long* out) {
+    errno = 0;
+    char* end;
+    long v = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0') return false;
+    *out = v;
+    return true;
+}
+
 int main(int argc, char** argv) {
     int scale = VEX_SCALE;
     bool watch = false; // -w/--watch: auto-reload the cart when its file changes
     const char* cart_path = NULL;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
-        if ((strcmp(a, "-s") == 0 || strcmp(a, "--scale") == 0) && i + 1 < argc) {
-            scale = atoi(argv[++i]);
+        if (strcmp(a, "-s") == 0 || strcmp(a, "--scale") == 0) {
+            long v;
+            if (i + 1 >= argc || !parse_long(argv[++i], &v)) {
+                fprintf(stderr, "vex: %s requires an integer scale\n", a);
+                fprintf(stderr, "usage: %s [-s scale] [-w] <cart.wasm>\n", argv[0]);
+                return 1;
+            }
+            scale = (int)v;
         } else if (strcmp(a, "-w") == 0 || strcmp(a, "--watch") == 0) {
             watch = true;
+        } else if (a[0] == '-') {
+            fprintf(stderr, "vex: unknown option %s\n", a);
+            fprintf(stderr, "usage: %s [-s scale] [-w] <cart.wasm>\n", argv[0]);
+            return 1;
         } else if (cart_path == NULL) {
             cart_path = a;
         }
@@ -838,6 +935,7 @@ int main(int argc, char** argv) {
     SetTargetFPS(60);
 
     RenderTexture2D screen = LoadRenderTexture(VEX_W, VEX_H);
+    if (screen.id == 0) die(cart.rt, "cannot create framebuffer render texture", NULL);
     SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
     init_font_atlas();
 
@@ -910,6 +1008,7 @@ int main(int argc, char** argv) {
                 SetWindowSize(VEX_W * scale, VEX_H * scale);
             }
             screen = LoadRenderTexture(VEX_W, VEX_H);
+            if (screen.id == 0) die(cart.rt, "cannot re-create framebuffer after fullscreen toggle", NULL);
             SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
         }
         if (super && IsKeyPressed(KEY_I)) integer_scale = !integer_scale;
