@@ -476,9 +476,19 @@ let memory = null;
 let mem8 = null;
 let prevButtons = 0;
 
+// Cached view: rebuilding a Uint8Array on every text()/blit()/title() call
+// is pure GC churn, so only refresh when the underlying buffer was replaced
+// -- which happens exactly when the cart grows its linear memory (the old
+// buffer is detached) or a new cart is instantiated.
+let cachedBuffer = null;
+
 function updateMemoryViews()
 {
+    if (memory !== null && cachedBuffer === memory.buffer)
+        return;
+
     memory = instance.exports.memory;
+    cachedBuffer = memory.buffer;
     mem8 = new Uint8Array(memory.buffer);
 }
 
