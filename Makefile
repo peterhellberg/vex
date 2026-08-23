@@ -88,6 +88,9 @@ $(TEST_DIR)/node_modules/.package-lock.json: $(TEST_DIR)/package.json
 # Alias for "I just want the deps to be ready" — useful in CI.
 test-deps: $(TEST_DIR)/node_modules/.package-lock.json
 
+# Regenerates everything under docs/ (index.html, main.js, main.wasm,
+# sources.tar) from vex.zig. The artifacts are committed for GitHub Pages --
+# don't hand-edit them, rerun this target instead.
 docs:
 	rm -rf docs .docs-tmp
 	mkdir -p .docs-tmp
@@ -103,10 +106,10 @@ install: all
 	install -m 0755 bin/vex-run $(BINDIR)/vex-run
 
 uninstall:
-	rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web
+	rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web $(BINDIR)/vex-run
 
 clean:
-	rm -rf bin zig-out .zig-cache cmd/vex/zig-out cmd/vex/.zig-cache cmd/vex/zig-pkg
+	rm -rf bin zig-out .zig-cache zig-pkg cmd/vex/zig-out cmd/vex/.zig-cache cmd/vex/zig-pkg
 	rm -rf $(TEST_DIR)/node_modules
 	rm -rf $(RELEASE_DIR)
 
@@ -163,9 +166,9 @@ endef
 release-linux: export LINUX_DISPLAY_BACKEND ?= X11
 release-linux:
 	@mkdir -p $(STAGING_DIR)/linux-amd64/vex-$(VERSION)
-	zig build --prefix $(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
+	zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
 		-Dtarget=native --release=fast
-	cd cmd/vex && zig build --prefix ../../$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
+	cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
 		-Dtarget=native --release=fast -Dlinux_display_backend=$(LINUX_DISPLAY_BACKEND)
 	$(call vex-web-cross,linux,amd64,linux-amd64/vex-$(VERSION),)
 	cp README.md $(STAGING_DIR)/linux-amd64/vex-$(VERSION)/
@@ -180,9 +183,9 @@ release-linux:
 # flag all flow through the host build.zig unchanged.
 release-windows:
 	@mkdir -p $(STAGING_DIR)/windows-amd64/vex-$(VERSION)
-	zig build --prefix $(STAGING_DIR)/windows-amd64/vex-$(VERSION) \
+	zig build --prefix $(CURDIR)/$(STAGING_DIR)/windows-amd64/vex-$(VERSION) \
 		-Dtarget=x86_64-windows-gnu --release=fast
-	cd cmd/vex && zig build --prefix ../../$(STAGING_DIR)/windows-amd64/vex-$(VERSION) \
+	cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/windows-amd64/vex-$(VERSION) \
 		-Dtarget=x86_64-windows-gnu --release=fast
 	$(call vex-web-cross,windows,amd64,windows-amd64/vex-$(VERSION),.exe)
 	cp README.md $(STAGING_DIR)/windows-amd64/vex-$(VERSION)/
@@ -198,9 +201,9 @@ release-windows:
 # raylib; nothing extra is needed at the Makefile level.
 release-macos:
 	@mkdir -p $(STAGING_DIR)/macos-amd64/vex-$(VERSION)
-	zig build --prefix $(STAGING_DIR)/macos-amd64/vex-$(VERSION) \
+	zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-amd64/vex-$(VERSION) \
 		-Dtarget=x86_64-macos --release=fast
-	cd cmd/vex && zig build --prefix ../../$(STAGING_DIR)/macos-amd64/vex-$(VERSION) \
+	cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-amd64/vex-$(VERSION) \
 		-Dtarget=x86_64-macos --release=fast
 	$(call vex-web-cross,darwin,amd64,macos-amd64/vex-$(VERSION),)
 	cp README.md $(STAGING_DIR)/macos-amd64/vex-$(VERSION)/
