@@ -159,13 +159,10 @@ define vex-web-cross
 			-o $(STAGING_DIR)/$(3)/vex-web$(4) ./cmd/vex-web
 endef
 
-# Strip symbols from the Zig binaries. The Go binary already has -s -w
-# (see vex-web-cross above) so it's stripped at build time; the Zig builds
-# don't have a -Dstrip equivalent in 0.17, so we do it as a post-step.
-# Saves ~5 MB on the release tarball.
-define strip-binary
-	strip --strip-unneeded $(STAGING_DIR)/$(1)
-endef
+# Binaries aren't stripped: the Zig builds have no -Dstrip equivalent in
+# 0.17 and the right strip flags depend on host OS vs target format, which
+# isn't worth the complexity here. The Go binary is already stripped at
+# build time via -s -w.
 
 # Linux: build native. The SDK package has no raylib dep, so the
 # linux_display_backend option is host-only; we forward it to the host
@@ -182,8 +179,6 @@ release-linux:
 	$(call vex-web-cross,linux,amd64,linux-amd64/vex-$(VERSION),)
 	cp README.md $(STAGING_DIR)/linux-amd64/vex-$(VERSION)/
 	cp LICENSE $(STAGING_DIR)/linux-amd64/vex-$(VERSION)/
-	$(call strip-binary,linux-amd64/vex-$(VERSION)/bin/vex)
-	$(call strip-binary,linux-amd64/vex-$(VERSION)/bin/vex-init)
 	tar -czf $(CURDIR)/$(RELEASE_DIR)/vex-$(VERSION)-linux-amd64.tar.gz \
 		-C $(STAGING_DIR)/linux-amd64 vex-$(VERSION)
 	@echo "==> $(RELEASE_DIR)/vex-$(VERSION)-linux-amd64.tar.gz"
