@@ -40,11 +40,10 @@ jobs:
         run: |
           echo "CC=zig cc" >> "$GITHUB_ENV"
 
-      - name: Install X11/ALSA dev libraries (ebitengine cgo link deps)
+      - name: Install X11/GL/ALSA dev libraries (ebitengine cgo link deps)
         run: |
-          sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libx11-dev libxrandr-dev libxinerama-dev \
+            libgl-dev libx11-dev libxrandr-dev libxinerama-dev \
             libxi-dev libxcursor-dev libxxf86vm-dev \
             libasound2-dev pkg-config
 
