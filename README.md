@@ -27,7 +27,9 @@ Dependencies are fetched on first build.
 > *and* raylib's `build.zig` (e.g. `no field named 'args' in struct 'Build'`).
 > Download the exact build from a
 > [community mirror](https://ziglang.org/download/community-mirrors.txt), e.g.
-> `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.387+31f157d80.tar.xz`.
+> `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.387+31f157d80.tar.xz`
+> — or just run [`scripts/install-zig.sh`](scripts/install-zig.sh), which
+> parses the pinned version and installs it for you.
 
 ```sh
 zig build --prefix .    # build vex-init into ./bin + cart.wasm and zcart.wasm into ./bin/carts
@@ -87,12 +89,6 @@ Without them the build stops at `unable to find dynamic system library 'GL'`.
 
 The resulting `vex` is statically linked against raylib and wasm3; only the
 system X11/GL libraries (present on any desktop) are needed at runtime.
-
-> [!Note]
-> On Linux the link step prints `warning(link): unexpected LLD stderr` and a
-> few `archive member '…/libGL.so' is neither ET_REL nor LLVM bitcode`
-> warnings. These are harmless — raylib's static archive references the system
-> `.so`s by path — and `zig build` still exits `0` with a working `vex` binary.
 
 ## Controls
 
@@ -350,6 +346,8 @@ zig build-exe -target wasm32-freestanding \
 
 `color` is a palette index `0..15`
 
+Strings passed to `text()` and `title()` are truncated at 127 characters.
+
 Buttons: 
  - `0` left
  - `1` right
@@ -360,7 +358,7 @@ Buttons:
 
 ## How vex works
 
-The host — a single [`main.c`](main.c) — opens a [raylib](https://www.raylib.com/)
+The host — a single [`main.c`](cmd/vex/main.c) — opens a [raylib](https://www.raylib.com/)
 window and runs the cart on the [wasm3](https://github.com/wasm3/wasm3)
 interpreter. It links a small `env` API into the cart's imports, calls the
 cart's exported `boot()` once at start and `update()` once per frame, then blits
@@ -397,7 +395,7 @@ There are three interchangeable hosts — see the [Native Go
 version](#native-go-version) and [Web version](#web-version) sections for the
 Go and browser alternatives:
 
-- **C host (`vex`)** — the reference implementation in [`main.c`](main.c).
+- **C host (`vex`)** — the reference implementation in [`cmd/vex/main.c`](cmd/vex/main.c).
   - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
     embeddable WASM interpreter _(pure C, MIT)_; only its core files are
     compiled.
