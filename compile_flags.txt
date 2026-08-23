@@ -1,4 +1,5 @@
 -I.
--Izig-pkg/raylib-6.0.0-whq8uLXSLwWGU9sQmZVQm0RquGkb0vEediLE8EoK9IYn/src
--Izig-pkg/N-V-__8AAPJTRwDyyZ7xBJrI5d3EG3JfvAPjPvNcdHLp0zqS/source
+-Icmd/vex/zig-pkg/raylib-6.0.0-whq8uCSwLgWWeF3ec3dbG6Rr36SLFL-s2WJ1Q_2E22Bb/src
+-Icmd/vex/zig-pkg/N-V-__8AAPJTRwDyyZ7xBJrI5d3EG3JfvAPjPvNcdHLp0zqS/source
+-std=c23
 -Wno-unknown-attributes
