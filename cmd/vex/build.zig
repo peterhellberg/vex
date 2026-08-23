@@ -1,5 +1,9 @@
 const std = @import("std");
 
+/// raylib's Linux display backend, mapped to GLFW's _GLFW_X11 /
+/// _GLFW_WAYLAND macros by addRaylib.
+pub const LinuxDisplayBackend = enum { X11, Wayland, Both, None };
+
 // vex - the C console host.
 //
 // Lives in its own package so that the cart SDK (the parent package) has no
@@ -18,10 +22,8 @@ pub fn build(b: *std.Build) void {
         .preferred_optimize_mode = .ReleaseFast,
     });
 
-    // raylib's Linux display backend. Forwarded to the raylib dependency;
-    // X11 (the default) also covers Wayland via XWayland. Tag names match
-    // raylib's own enum so the value passes straight through.
-    const LinuxDisplayBackend = enum { X11, Wayland, Both, None };
+    // raylib's Linux display backend. X11 (the default) also covers Wayland
+    // via XWayland; tag names match raylib's own enum.
     const linux_display_backend = b.option(
         LinuxDisplayBackend,
         "linux_display_backend",
@@ -38,9 +40,9 @@ pub fn build(b: *std.Build) void {
     };
 
     // macOS framework stubs (AppKit, IOKit, ...) for cross-compiling to
-    // macOS from a non-macOS host. raylib links these frameworks but only
-    // adds the -F search paths itself if its own xcode_frameworks dependency
-    // resolves, so add the paths here explicitly for the macOS target.
+    // macOS from a non-macOS host. linkFramework() alone doesn't satisfy a
+    // Mach-O link from Linux, so the stub include + framework + lib paths
+    // are added alongside it below.
     const xcode_frameworks = if (target.result.os.tag == .macos)
         b.lazyDependency("xcode_frameworks", .{})
     else
@@ -49,15 +51,8 @@ pub fn build(b: *std.Build) void {
     const raylib_dep = b.lazyDependency("raylib", .{
         .target = target,
         .optimize = optimize,
-        .linux_display_backend = linux_display_backend,
     }) orelse return; // raylib not yet fetched; exit cleanly so zig fetches it
     const wasm3 = b.lazyDependency("wasm3", .{}) orelse return;
-
-    const raylib = raylib_dep.artifact("raylib");
-
-    if (xcode_frameworks) |fws| {
-        raylib.root_module.addSystemIncludePath(fws.path("include"));
-    }
 
     const exe = b.addExecutable(.{
         .name = "vex",
@@ -71,6 +66,17 @@ pub fn build(b: *std.Build) void {
         .file = b.path("main.c"),
         .flags = &.{"-std=c23"},
     });
+
+    // Compile raylib's sources directly into the executable and link the
+    // platform libraries ourselves, instead of linking the dependency's
+    // static archive (which embeds resolved system libraries as archive
+    // members and makes the linker emit warnings for each of them).
+    addRaylib(exe.root_module, raylib_dep, linux_display_backend);
+
+    if (xcode_frameworks) |fws| {
+        exe.root_module.addSystemIncludePath(fws.path("include"));
+    }
+
     exe.root_module.addCSourceFiles(.{
         .root = wasm3.path("source"),
         .files = &wasm3_core,
@@ -85,7 +91,6 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-Dd_m3Use32BitSlots=0", "-fwrapv" },
     });
     exe.root_module.addIncludePath(wasm3.path("source"));
-    exe.root_module.linkLibrary(raylib); // brings in raylib headers + platform libs
     if (xcode_frameworks) |fws| {
         exe.root_module.addSystemFrameworkPath(fws.path("Frameworks"));
         exe.root_module.addLibraryPath(fws.path("lib"));
@@ -108,4 +113,87 @@ pub fn build(b: *std.Build) void {
     run_z.addFileArg(cart_z);
     if (b.args) |a| run_z.addArgs(a);
     b.step("runz", "Run the Zig example cart").dependOn(&run_z.step);
+}
+
+/// Compile raylib (desktop GLFW backend) directly into the given module and
+/// link its platform libraries, instead of linking the dependency's prebuilt
+/// static archive.
+fn addRaylib(
+    mod: *std.Build.Module,
+    raylib_dep: *std.Build.Dependency,
+    linux_display_backend: LinuxDisplayBackend,
+) void {
+    const target = mod.resolved_target.?.result;
+
+    const rl_src = raylib_dep.path("src");
+
+    mod.addIncludePath(rl_src);
+    mod.addIncludePath(raylib_dep.path("src/platforms"));
+    mod.addIncludePath(raylib_dep.path("src/external/glfw/include"));
+
+    mod.addCMacro("_GNU_SOURCE", "");
+    mod.addCMacro("GL_SILENCE_DEPRECATION", "199309L");
+    mod.addCMacro("SUPPORT_MODULE_RSHAPES", "1");
+    mod.addCMacro("SUPPORT_MODULE_RTEXTURES", "1");
+    mod.addCMacro("SUPPORT_MODULE_RTEXT", "1");
+    mod.addCMacro("SUPPORT_MODULE_RMODELS", "1");
+    mod.addCMacro("SUPPORT_MODULE_RAUDIO", "1");
+    mod.addCMacro("PLATFORM_DESKTOP_GLFW", "");
+    mod.addCMacro("GRAPHICS_API_OPENGL_33", "");
+
+    switch (target.os.tag) {
+        .linux => {
+            mod.linkSystemLibrary("GL", .{});
+            if (linux_display_backend != .Wayland) {
+                // X11 is the default (and covers Wayland via XWayland).
+                // None also resolves here: GLFW refuses to compile without
+                // a window-system backend, so "none" can only mean "X11
+                // macros, kept for compatibility with the old option".
+                mod.addCMacro("_GLFW_X11", "");
+                inline for (.{ "X11", "Xrandr", "Xinerama", "Xi", "Xcursor" }) |lib| {
+                    mod.linkSystemLibrary(lib, .{});
+                }
+            }
+            if (linux_display_backend == .Wayland or linux_display_backend == .Both) {
+                mod.addCMacro("_GLFW_WAYLAND", "");
+                inline for (.{ "wayland-client", "wayland-cursor", "wayland-egl", "xkbcommon" }) |lib| {
+                    mod.linkSystemLibrary(lib, .{});
+                }
+            }
+        },
+        .windows => {
+            inline for (.{ "opengl32", "winmm", "gdi32" }) |lib| {
+                mod.linkSystemLibrary(lib, .{});
+            }
+        },
+        .macos => {
+            inline for (.{ "Foundation", "CoreServices", "CoreGraphics", "AppKit", "IOKit", "QuartzCore" }) |fw| {
+                mod.linkFramework(fw, .{});
+            }
+        },
+        else => @panic("vex: unsupported target OS for raylib"),
+    }
+
+    mod.addCSourceFiles(.{
+        .root = rl_src,
+        .files = &.{
+            "rcore.c",
+            "rshapes.c",
+            "rtextures.c",
+            "rtext.c",
+            "rmodels.c",
+            "raudio.c",
+        },
+        .flags = &.{"-std=c99"},
+    });
+
+    // rglfw.c includes Objective-C on macOS and must be compiled separately.
+    const glfw_flags: []const []const u8 = if (target.os.tag == .macos)
+        &.{ "-std=c99", "-ObjC" }
+    else
+        &.{"-std=c99"};
+    mod.addCSourceFile(.{
+        .file = raylib_dep.path("src/rglfw.c"),
+        .flags = glfw_flags,
+    });
 }

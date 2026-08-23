@@ -5,8 +5,12 @@
     .minimum_zig_version = "0.17.0-dev.387+31f157d80",
     .dependencies = .{
         .raylib = .{
-            .url = "https://github.com/raysan5/raylib/archive/aaacda6e147031f2af0cfb6c1fd7e64d761ddb1f.tar.gz",
-            .hash = "raylib-6.0.0-whq8uLXSLwWGU9sQmZVQm0RquGkb0vEediLE8EoK9IYn",
+            // Pinned to the official 6.0 release tag: vex uses only plain
+            // window/input/2D/audio functionality, and since build.zig
+            // compiles raylib's sources directly there is no reason to
+            // track master for Zig-build compatibility.
+            .url = "https://github.com/raysan5/raylib/archive/refs/tags/6.0.tar.gz",
+            .hash = "raylib-6.0.0-whq8uCSwLgWWeF3ec3dbG6Rr36SLFL-s2WJ1Q_2E22Bb",
             .lazy = true,
         },
         .wasm3 = .{
