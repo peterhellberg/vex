@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -96,7 +97,25 @@ func TestCartRenderGolden(t *testing.T) {
 			}
 
 			sum := sha256.Sum256(g.pixels)
-			hash := hex.EncodeToString(sum[:])
+			sha := hex.EncodeToString(sum[:])
+
+			// FNV-1a 64 over the same bytes: the C host prints this exact
+			// value for a headless run (`vex -n 30 cart.wasm`), so golden
+			// files double as cross-host pixel-parity fixtures.
+			const ( // FNV-1a offset basis and prime
+				fnvOffset = 1469598103934665603
+				fnvPrime  = 1099511628211
+			)
+			var fnv uint64 = fnvOffset
+			for _, b := range g.pixels {
+				fnv ^= uint64(b)
+				fnv *= fnvPrime
+			}
+
+			if dumpDir := os.Getenv("VEX_GOLDEN_DUMP"); dumpDir != "" {
+				_ = os.MkdirAll(dumpDir, 0o755)
+				_ = os.WriteFile(filepath.Join(dumpDir, name+".raw"), g.pixels, 0o644)
+			}
 
 			goldPath := filepath.Join("testdata", strings.TrimSuffix(name, ".wasm")+".golden")
 
@@ -104,7 +123,8 @@ func TestCartRenderGolden(t *testing.T) {
 				if err := os.MkdirAll("testdata", 0o755); err != nil {
 					t.Fatalf("mkdir testdata: %v", err)
 				}
-				if err := os.WriteFile(goldPath, []byte(hash+"\n"), 0o644); err != nil {
+				body := fmt.Sprintf("sha256 %s\nfnv1a64 %016x\n", sha, fnv)
+				if err := os.WriteFile(goldPath, []byte(body), 0o644); err != nil {
 					t.Fatalf("write golden: %v", err)
 				}
 				return
@@ -114,10 +134,33 @@ func TestCartRenderGolden(t *testing.T) {
 			if err != nil {
 				t.Skipf("no golden yet (%v); run `go test ./... -update` to create it", err)
 			}
-			if strings.TrimSpace(string(want)) != hash {
-				t.Fatalf("framebuffer hash changed for %s:\n got %s\nwant %s\n(if intentional, re-run with -update)",
-					name, hash, strings.TrimSpace(string(want)))
+			wantSha, wantFnv, ok := parseGolden(string(want))
+			if !ok {
+				t.Fatalf("malformed golden file %s", goldPath)
+			}
+			if wantSha != sha {
+				t.Fatalf("framebuffer sha256 changed for %s:\n got %s\nwant %s", name, sha, wantSha)
+			}
+			if wantFnv != fmt.Sprintf("%016x", fnv) {
+				t.Fatalf("framebuffer fnv1a64 changed for %s: got %016x want %s", name, fnv, wantFnv)
 			}
 		})
 	}
+}
+
+// parseGolden reads "sha256 <hex>" / "fnv1a64 <hex>" lines.
+func parseGolden(s string) (sha, fnv string, ok bool) {
+	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		switch fields[0] {
+		case "sha256":
+			sha = fields[1]
+		case "fnv1a64":
+			fnv = fields[1]
+		}
+	}
+	return sha, fnv, sha != "" && fnv != ""
 }
