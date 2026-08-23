@@ -929,7 +929,9 @@ int main(int argc, char** argv) {
     M3Result err;
 
     // ---- raylib window + framebuffer -------------------------------------
-    SetTraceLogLevel(LOG_WARNING);
+    // Errors only, like 4b: raylib's INFO chatter (GLFW hints, audio device
+    // notes) is noise during normal play.
+    SetTraceLogLevel(LOG_ERROR);
     InitWindow(VEX_W * scale, VEX_H * scale, "vex");
     g_window_open = true;
     SetTargetFPS(60);
