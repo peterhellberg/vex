@@ -45,10 +45,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgl-dev libx11-dev libxrandr-dev libxinerama-dev \
             libxi-dev libxcursor-dev libxxf86vm-dev \
-            libasound2-dev pkg-config
+            libasound2-dev xvfb pkg-config
 
       - name: Vet, test, and build cmd/vex-run
+        # ebiten's package init calls glfw.Init(), which needs an X display
+        # even for tests that never open a window; run under Xvfb.
         working-directory: cmd/vex-run
         run: |
-          go vet ./... && go test ./...
+          go vet ./... && xvfb-run -a go test ./...
           go build -o ../../bin/vex-run .
