@@ -1,6 +1,6 @@
 # Playwright-driven browser tests (cmd/vex-web/test). Not run on every
 # push/PR -- trigger manually from the GitHub Actions tab.
-name: Web tests
+name: web-tests
 
 on:
   workflow_dispatch:
