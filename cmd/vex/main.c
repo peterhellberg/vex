@@ -1034,9 +1034,11 @@ int main(int argc, char** argv) {
         printf("fb-changes=%ld fnv1a64=%016llx mem=%u\n",
                changes, (unsigned long long)fnv1a64(g_fb, sizeof g_fb),
                (unsigned)m3_GetMemorySize(cart.rt));
-        printf("palette=");
-        for (int i = 0; i < 16; i++) printf("%08x", (unsigned)g_palette[i]);
-        printf("\n");
+        for (int i = 0; i < 16; i++)
+            printf("palette[%2d]=%02x%02x%02x\n", i,
+                   (unsigned)(g_palette[i] & 0xFF),
+                   (unsigned)((g_palette[i] >> 8) & 0xFF),
+                   (unsigned)((g_palette[i] >> 16) & 0xFF));
 
         if (dump_path) {
             FILE* f = fopen(dump_path, "wb");
