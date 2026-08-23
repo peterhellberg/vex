@@ -5,7 +5,7 @@
 // exported update() once per frame. Carts draw into a 320x180 framebuffer
 // that is scaled up to the window with nearest-neighbour filtering.
 //
-//   usage: ./vex <cart.wasm>
+//   usage: ./vex [-s scale] [-w] [-n frames] [-t] <cart.wasm>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 
 #include "raylib.h"
 #include "rlgl.h"
@@ -34,8 +35,20 @@ static const Color DEFAULT_PALETTE[16] = {
     { 41,  54, 111, 255}, { 59,  93, 201, 255}, { 65, 166, 246, 255}, {115, 239, 247, 255},
     {244, 244, 244, 255}, {148, 176, 194, 255}, { 86, 108, 134, 255}, { 51,  60,  87, 255},
 };
-static Color palette[16];
-#define PAL(c) (palette[(unsigned)(c) & 15])
+
+// Live palette as packed RGBA. Byte order in memory is R,G,B,A -- identical
+// to the Go host's pixel buffer, so framebuffer hashes compare across hosts.
+static uint32_t g_palette[16];
+
+static inline uint32_t pack_rgba(int r, int g, int b) {
+    return (uint32_t)r | (uint32_t)g << 8 | (uint32_t)b << 16 | 0xFFu << 24;
+}
+
+// The software framebuffer. Carts rasterize here with plain stores, and the
+// finished frame is uploaded to the GPU exactly once per frame. This replaces
+// the previous design where every primitive call became raylib GL draw work
+// inside a render texture (pset alone was a textured quad per pixel).
+static uint32_t g_fb[VEX_W * VEX_H];
 
 // 8x8 bitmap font, shared byte-for-byte with the web host (cmd/vex-web/assets/vex.js)
 // so text() looks identical in both. Glyphs cover ASCII 32..127; FONT8[c - 32]
@@ -141,47 +154,21 @@ static const uint64_t FONT8[96] = {
     0x0000000000000000ULL  // 127 DEL
 };
 
-// Draw a string with the 8x8 font: one textured quad per glyph, advancing
-// 8 px per glyph (unsupported chars leave an 8 px gap) -- matching vex.js text().
+// Row-unpacked font: g_font_rows[g*8 + row] holds one row of glyph g (bit 7
+// = leftmost pixel), unpacked once at startup so text() can rasterize glyphs
+// into the framebuffer with plain byte math instead of textured quads.
+static uint8_t g_font_rows[96 * 8];
 
-// Pre-rendered font atlas: 96 glyphs laid out left-to-right in one 768x8 RGBA
-// texture. Each "set" pixel is opaque white (1,1,1,255); each "clear" pixel is
-// fully transparent (0,0,0,0). draw_text() then emits one textured quad per
-// glyph (DrawTexturePro with the tint color) instead of N filled rectangles,
-// which cuts the per-call cost from ~10 raylib draws per glyph down to 1.
-static Texture2D g_font_atlas = {0};
-static void init_font_atlas(void) {
-    Image atlas = GenImageColor(96 * 8, 8, BLANK); // BLANK = (0,0,0,0)
-    for (int g = 0; g < 96; g++) {
-        uint64_t bits = FONT8[g];
-        for (int row = 0; row < 8; row++) {
-            unsigned byte = (unsigned)(bits >> ((7 - row) * 8)) & 0xFF;
-            for (int col = 0; col < 8; col++) {
-                if (byte & (1u << (7 - col))) {
-                    ImageDrawPixel(&atlas, g * 8 + col, row, WHITE);
-                }
-            }
-        }
-    }
-    g_font_atlas = LoadTextureFromImage(atlas);
-    SetTextureFilter(g_font_atlas, TEXTURE_FILTER_POINT);
-    UnloadImage(atlas);
+static void init_font(void) {
+    for (int g = 0; g < 96; g++)
+        for (int row = 0; row < 8; row++)
+            g_font_rows[g * 8 + row] = (uint8_t)(FONT8[g] >> ((7 - row) * 8));
 }
 
-static void draw_text(const char* s, int x, int y, Color c) {
-    for (; *s; s++, x += 8) {
-        int idx = (unsigned char)*s - VEX_FONT_FIRST;
-        if (idx < 0 || idx >= 96) continue;
-        // One textured quad per glyph instead of ~10 filled rectangles per
-        // glyph: the font atlas is pre-rendered at startup as one 768x8 RGBA
-        // texture with white pixels where the glyph is set and alpha=0
-        // elsewhere; tint=c and the default alpha blend discard the clear
-        // pixels and paint the rest with the cart's color.
-        Rectangle src = { (float)(idx * 8), 0.0f, 8.0f, 8.0f };
-        Rectangle dst = { (float)x, (float)y, 8.0f, 8.0f };
-        DrawTexturePro(g_font_atlas, src, dst, (Vector2){0, 0}, 0.0f, c);
-    }
-}
+// Set after InitWindow() and cleared on teardown; also acts as the "UI is
+// live" gate: with -n (headless) there is no window, and input queries must
+// return zero deterministically -- mirroring the Go host's uiReady flag.
+static bool g_window_open = false;
 
 // Current framebuffer->window mapping (logical points), used to map raylib's
 // window-space mouse position back into the cart's logical coordinates.
@@ -192,7 +179,8 @@ static const int VEX_KEYS[6] = { KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN, KEY_Z, K
 static uint8_t g_prev_btns = 0;
 
 static void reset_palette(void) {
-    for (int i = 0; i < 16; i++) palette[i] = DEFAULT_PALETTE[i];
+    for (int i = 0; i < 16; i++)
+        g_palette[i] = pack_rgba(DEFAULT_PALETTE[i].r, DEFAULT_PALETTE[i].g, DEFAULT_PALETTE[i].b);
 }
 
 // Copy a bounded, NUL-terminated string out of a cart's linear memory.
@@ -212,12 +200,51 @@ static inline bool coord_ok(int32_t v) {
 }
 #define COORDS_OK(x, y) (coord_ok(x) && coord_ok(y))
 
+// ---- framebuffer rasterization helpers ------------------------------------
+// All primitives write plain uint32 stores; nothing touches the GPU until
+// the finished frame is uploaded once per present().
+
+static inline void fb_pset(int32_t x, int32_t y, uint32_t c) {
+    if ((uint32_t)x < VEX_W && (uint32_t)y < VEX_H)
+        g_fb[(size_t)y * VEX_W + x] = c;
+}
+
+static void fb_fill(uint32_t c) {
+    for (size_t i = 0; i < VEX_W * VEX_H; i++) g_fb[i] = c;
+}
+
+// Inclusive horizontal span on row y, clipped to the framebuffer.
+static void fb_hline(int32_t y, int32_t x0, int32_t x1, uint32_t c) {
+    if (y < 0 || y >= VEX_H) return;
+    if (x0 > x1) { int32_t t = x0; x0 = x1; x1 = t; }
+    if (x1 < 0 || x0 >= VEX_W) return;
+    if (x0 < 0) x0 = 0;
+    if (x1 >= VEX_W) x1 = VEX_W - 1;
+    uint32_t* row = &g_fb[(size_t)y * VEX_W];
+    for (int32_t x = x0; x <= x1; x++) row[x] = c;
+}
+
+// Clipped filled rectangle: identical clipping to the Go host's rect().
+static void fb_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t c) {
+    if (w <= 0 || h <= 0) return;
+    if (!coord_ok(x) || !coord_ok(y)) return;
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
+    int32_t x0 = x < 0 ? 0 : x;
+    int32_t y0 = y < 0 ? 0 : y;
+    int32_t x1 = x + w < VEX_W ? x + w : VEX_W;
+    int32_t y1 = y + h < VEX_H ? y + h : VEX_H;
+    for (int32_t yy = y0; yy < y1; yy++) {
+        uint32_t* row = &g_fb[(size_t)yy * VEX_W];
+        for (int32_t xx = x0; xx < x1; xx++) row[xx] = c;
+    }
+}
+
 // ---- host API: functions the cart imports from module "env" --------------
-// These run inside BeginTextureMode(), so raylib draws into the framebuffer.
 
 m3ApiRawFunction(host_cls) {
     m3ApiGetArg(int32_t, color)
-    ClearBackground(PAL(color));
+    fb_fill(g_palette[(unsigned)(color) & 15]);
     m3ApiSuccess();
 }
 
@@ -225,8 +252,7 @@ m3ApiRawFunction(host_pset) {
     m3ApiGetArg(int32_t, x)
     m3ApiGetArg(int32_t, y)
     m3ApiGetArg(int32_t, color)
-    if (!COORDS_OK(x, y)) m3ApiSuccess();
-    DrawPixel(x, y, PAL(color));
+    fb_pset(x, y, g_palette[(unsigned)(color) & 15]);
     m3ApiSuccess();
 }
 
@@ -236,13 +262,7 @@ m3ApiRawFunction(host_rect) {
     m3ApiGetArg(int32_t, w)
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
-    if (w <= 0 || h <= 0) m3ApiSuccess();
-    if (!COORDS_OK(x, y)) m3ApiSuccess();
-    // Clamp w and h to the framebuffer so a malformed cart can't ask raylib
-    // to fill an INT_MAX-wide rectangle (which it accepts and stalls on).
-    if (w > VEX_W) w = VEX_W;
-    if (h > VEX_H) h = VEX_H;
-    DrawRectangle(x, y, w, h, PAL(color));
+    fb_rect(x, y, w, h, g_palette[(unsigned)(color) & 15]);
     m3ApiSuccess();
 }
 
@@ -252,33 +272,19 @@ m3ApiRawFunction(host_rectb) {
     m3ApiGetArg(int32_t, w)
     m3ApiGetArg(int32_t, h)
     m3ApiGetArg(int32_t, color)
-    if (w <= 0 || h <= 0) m3ApiSuccess();
-    if (!COORDS_OK(x, y)) m3ApiSuccess();
-    if (w > VEX_W) w = VEX_W;
-    if (h > VEX_H) h = VEX_H;
-    // A 1px outline drawn as four filled edges inside the w*h box, so corners
-    // are solid and pixel-aligned (DrawRectangleLines leaves corner gaps).
-    Color c = PAL(color);
-    DrawRectangle(x, y, w, 1, c);              // top
-    DrawRectangle(x, y + h - 1, w, 1, c);      // bottom
-    DrawRectangle(x, y, 1, h, c);              // left
-    DrawRectangle(x + w - 1, y, 1, h, c);      // right
+    // Four edges decomposed exactly like the Go and JS hosts, so corners and
+    // degenerate sizes land on the same pixels everywhere.
+    uint32_t c = g_palette[(unsigned)(color) & 15];
+    fb_rect(x, y, w, 1, c);
+    fb_rect(x, y + h - 1, w, 1, c);
+    fb_rect(x, y + 1, 1, h - 2, c);
+    if (w > 1) fb_rect(x + w - 1, y + 1, 1, h - 2, c);
     m3ApiSuccess();
 }
 
-// Draw a horizontal run of pixels on row y from x0..x1 inclusive, clipped to
-// the framebuffer -- the same hline() the Go and JS hosts use, so circ() and
-// circb() land on the identical pixels there. (raylib's DrawCircleLines and
-// DrawCircle instead rasterize 36-segment line/triangle fans, which collapse a
-// radius < ~4px into a blocky square.)
-static void host_hline(int32_t y, int32_t x0, int32_t x1, Color c) {
-    if (y < 0 || y >= VEX_H) return;
-    if (x0 > x1) { int32_t t = x0; x0 = x1; x1 = t; }
-    if (x1 < 0 || x0 >= VEX_W) return;
-    if (x0 < 0) x0 = 0;
-    if (x1 >= VEX_W) x1 = VEX_W - 1;
-    DrawRectangle(x0, y, x1 - x0 + 1, 1, c);
-}
+// Draw a horizontal run of pixels on row y from x0..x1 inclusive -- the same
+// hline() the Go and JS hosts use, so circ()/circb()/tri() land on identical
+// pixels everywhere (see fb_hline above).
 
 m3ApiRawFunction(host_circ) {
     m3ApiGetArg(int32_t, x)
@@ -289,15 +295,14 @@ m3ApiRawFunction(host_circ) {
     if (r > VEX_COORD_MAX) r = VEX_COORD_MAX;
     if (!COORDS_OK(x, y)) m3ApiSuccess();
     // Midpoint circle algorithm, filled with horizontal spans -- byte-for-byte
-    // the circ() of the Go and JS hosts, which keep small radii round where
-    // raylib's DrawCircle degenerates into a square.
-    Color c = PAL(color);
+    // the circ() of the Go and JS hosts.
+    uint32_t c = g_palette[(unsigned)(color) & 15];
     int32_t rx = r, ry = 0, err = 0;
     while (rx >= ry) {
-        host_hline(y + ry, x - rx, x + rx, c);
-        host_hline(y + rx, x - ry, x + ry, c);
-        host_hline(y - ry, x - rx, x + rx, c);
-        host_hline(y - rx, x - ry, x + ry, c);
+        fb_hline(y + ry, x - rx, x + rx, c);
+        fb_hline(y + rx, x - ry, x + ry, c);
+        fb_hline(y - ry, x - rx, x + rx, c);
+        fb_hline(y - rx, x - ry, x + ry, c);
         ry++;
         if (err <= 0) {
             err += 2 * ry + 1;
@@ -318,19 +323,18 @@ m3ApiRawFunction(host_circb) {
     if (r > VEX_COORD_MAX) r = VEX_COORD_MAX;
     if (!COORDS_OK(x, y)) m3ApiSuccess();
     // Midpoint circle outline, 8-way symmetric single pixels -- matching the
-    // Go and JS hosts. DrawCircleLines has the same small-radius artifact as
-    // DrawCircle, so the shared algorithm keeps every radius identical.
-    Color c = PAL(color);
+    // Go and JS hosts.
+    uint32_t c = g_palette[(unsigned)(color) & 15];
     int32_t rx = r, ry = 0, err = 0;
     while (rx >= ry) {
-        host_hline(y + ry, x + rx, x + rx, c);
-        host_hline(y + rx, x + ry, x + ry, c);
-        host_hline(y + rx, x - ry, x - ry, c);
-        host_hline(y + ry, x - rx, x - rx, c);
-        host_hline(y - ry, x - rx, x - rx, c);
-        host_hline(y - rx, x - ry, x - ry, c);
-        host_hline(y - rx, x + ry, x + ry, c);
-        host_hline(y - ry, x + rx, x + rx, c);
+        fb_pset(x + rx, y + ry, c);
+        fb_pset(x + ry, y + rx, c);
+        fb_pset(x - ry, y + rx, c);
+        fb_pset(x - rx, y + ry, c);
+        fb_pset(x - rx, y - ry, c);
+        fb_pset(x - ry, y - rx, c);
+        fb_pset(x + ry, y - rx, c);
+        fb_pset(x + rx, y - ry, c);
         ry++;
         if (err <= 0) {
             err += 2 * ry + 1;
@@ -342,23 +346,16 @@ m3ApiRawFunction(host_circb) {
     m3ApiSuccess();
 }
 
-// Set one framebuffer pixel, dropping coordinates outside the screen.
-static void host_pixel(int32_t x, int32_t y, Color c) {
-    if (x < 0 || x >= VEX_W || y < 0 || y >= VEX_H) return;
-    DrawPixel(x, y, c);
-}
-
 // Bresenham line -- byte-for-byte the line() of the Go and JS hosts, so all
-// three rasterize identical pixels. (raylib's DrawLine emits GL LINES whose
-// rasterization is driver-dependent.)
-static void host_bresenham(int32_t x0, int32_t y0, int32_t x1, int32_t y1, Color c) {
+// three rasterize identical pixels.
+static void host_bresenham(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t c) {
     int32_t dx = x1 > x0 ? x1 - x0 : x0 - x1;
     int32_t sx = x0 < x1 ? 1 : -1;
     int32_t dy = y1 > y0 ? y1 - y0 : y0 - y1;
     int32_t sy = y0 < y1 ? 1 : -1;
     int32_t err = dx - dy;
     for (;;) {
-        host_pixel(x0, y0, c);
+        fb_pset(x0, y0, c);
         if (x0 == x1 && y0 == y1) break;
         int32_t e2 = err * 2;
         if (e2 > -dy) { err -= dy; x0 += sx; }
@@ -373,7 +370,7 @@ m3ApiRawFunction(host_line) {
     m3ApiGetArg(int32_t, y1)
     m3ApiGetArg(int32_t, color)
     if (!COORDS_OK(x0, y0) || !COORDS_OK(x1, y1)) m3ApiSuccess();
-    host_bresenham(x0, y0, x1, y1, PAL(color));
+    host_bresenham(x0, y0, x1, y1, g_palette[(unsigned)(color) & 15]);
     m3ApiSuccess();
 }
 
@@ -424,10 +421,10 @@ m3ApiRawFunction(host_tri) {
     tri_add_edge(x2, y2, x3, y3, ymin, g_tri_l, g_tri_r);
     tri_add_edge(x3, y3, x1, y1, ymin, g_tri_l, g_tri_r);
 
-    Color c = PAL(color);
+    uint32_t c = g_palette[(unsigned)(color) & 15];
     for (int i = 0; i < n; i++) {
         if (g_tri_l[i] <= g_tri_r[i])
-            host_hline(ymin + i, g_tri_l[i], g_tri_r[i], c);
+            fb_hline(ymin + i, g_tri_l[i], g_tri_r[i], c);
     }
     m3ApiSuccess();
 }
@@ -442,7 +439,7 @@ m3ApiRawFunction(host_trib) {
     m3ApiGetArg(int32_t, color)
     // Three Bresenham edges, matching trib() of the Go and JS hosts.
     if (!COORDS_OK(x1, y1) || !COORDS_OK(x2, y2) || !COORDS_OK(x3, y3)) m3ApiSuccess();
-    Color c = PAL(color);
+    uint32_t c = g_palette[(unsigned)(color) & 15];
     host_bresenham(x1, y1, x2, y2, c);
     host_bresenham(x2, y2, x3, y3, c);
     host_bresenham(x3, y3, x1, y1, c);
@@ -468,25 +465,30 @@ m3ApiRawFunction(host_blit) {
     if (h > VEX_H) h = VEX_H;
     if ((size_t)w > (size_t)-1 / (size_t)h) m3ApiSuccess();
     m3ApiCheckMem(data, (size_t)w * (size_t)h);
-    // Batch horizontal runs of equal, non-key pixels into one DrawRectangle
-    // per run instead of one DrawPixel per pixel. For a typical sprite (the
-    // same palette entry repeated, or a small handful of non-key colors per
-    // row) this cuts draw-call count by 10x or more; for the existing common
-    // case of key=-1 ("draw every pixel") it drops N*M calls down to h, one
-    // solid rectangle per row. Even the pathological checkerboard (two
-    // palette entries alternating every pixel) is roughly the same speed as
-    // per-pixel DrawPixel, because DrawPixel in raylib is heavy enough that
-    // doubling the call count doesn't matter.
+    // Batch horizontal runs of equal, non-key pixels into one clipped span
+    // fill per run. For a typical sprite (palette entries repeated per row)
+    // this is several times fewer inner-loop iterations than per-pixel
+    // stores; for key=-1 ("draw every pixel") each row collapses to a single
+    // contiguous span. Rows outside the framebuffer are skipped and x spans
+    // are clipped, matching the Go host's blit().
     for (int32_t row = 0; row < h; row++) {
+        int32_t yy = y + row;
+        if (yy < 0 || yy >= VEX_H) continue;
+        uint32_t* dst = &g_fb[(size_t)yy * VEX_W];
         const uint8_t* src = data + (size_t)row * w;
         int32_t col = 0;
         while (col < w) {
-            while (col < w && src[col] == key) col++; // skip transparent run
+            while (col < w && (uint32_t)src[col] == (uint32_t)key) col++; // transparent run
             if (col >= w) break;
             int32_t start = col;
             uint8_t run = src[col];
-            while (col < w && src[col] == run) col++; // extend solid run
-            DrawRectangle(x + start, y + row, col - start, 1, PAL(run));
+            while (col < w && src[col] == run) col++; // solid run
+            int32_t sx = x + start;
+            int32_t ex = x + col;
+            if (sx < 0) sx = 0;
+            if (ex > VEX_W) ex = VEX_W;
+            uint32_t v = g_palette[run & 15];
+            for (; sx < ex; sx++) dst[sx] = v;
         }
     }
     m3ApiSuccess();
@@ -500,14 +502,37 @@ m3ApiRawFunction(host_text) {
     m3ApiCheckMem(s, 1);
     char buf[128];
     cart_cstr(runtime, _mem, s, buf, sizeof(buf));
-    draw_text(buf, x, y, PAL(color));
+
+    // Rasterize glyphs straight into the framebuffer from the unpacked font
+    // rows. Unsupported characters advance a full 8px slot, matching the Go
+    // and JS hosts.
+    uint32_t c = g_palette[(unsigned)(color) & 15];
+    for (const unsigned char* p = (const unsigned char*)buf; *p; ++p, x += 8) {
+        int idx = *p - VEX_FONT_FIRST;
+        if (idx < 0 || idx >= 96) continue;
+        for (int row = 0; row < 8; row++) {
+            unsigned bits = g_font_rows[idx * 8 + row];
+            if (!bits) continue;
+            int32_t py = y + row;
+            if (py < 0 || py >= VEX_H) continue;
+            uint32_t* dst = &g_fb[(size_t)py * VEX_W];
+            for (int col = 0; col < 8; col++) {
+                if (bits & (0x80u >> col)) {
+                    int32_t px = x + col;
+                    if ((uint32_t)px < VEX_W) dst[px] = c;
+                }
+            }
+        }
+    }
     m3ApiSuccess();
 }
 
-// title(s): set the window title from a cart string.
+// title(s): set the window title from a cart string. No-op before the window
+// exists (headless -n mode).
 m3ApiRawFunction(host_title) {
     m3ApiGetArgMem(const char*, s)
     m3ApiCheckMem(s, 1);
+    if (!g_window_open) m3ApiSuccess();
     char buf[128];
     cart_cstr(runtime, _mem, s, buf, sizeof(buf));
     SetWindowTitle(buf);
@@ -515,10 +540,13 @@ m3ApiRawFunction(host_title) {
 }
 
 // btn(button) -> held? Buttons: 0 left, 1 right, 2 up, 3 down, 4 Z, 5 X.
+// Without a window (headless -n mode) every input reads as released, which
+// keeps runs deterministic and mirrors the Go host's uiReady gate.
 m3ApiRawFunction(host_btn) {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, button)
-    int held = (button >= 0 && button < 6) ? IsKeyDown(VEX_KEYS[button]) : 0;
+    int held = g_window_open && button >= 0 && button < 6
+        ? IsKeyDown(VEX_KEYS[button]) : 0;
     m3ApiReturn(held);
 }
 
@@ -526,8 +554,9 @@ m3ApiRawFunction(host_btn) {
 m3ApiRawFunction(host_btnp) {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, button)
-    int held = (button >= 0 && button < 6) ? IsKeyDown(VEX_KEYS[button]) : 0;
-    int prev = (button >= 0 && button < 6) ? ((g_prev_btns >> button) & 1) : 0;
+    int held = g_window_open && button >= 0 && button < 6
+        ? IsKeyDown(VEX_KEYS[button]) : 0;
+    int prev = (g_prev_btns >> button) & 1;
     m3ApiReturn(held && !prev);
 }
 
@@ -540,12 +569,14 @@ static inline int32_t clampi32(int32_t v, int32_t lo, int32_t hi) {
 
 m3ApiRawFunction(host_mx) {
     m3ApiReturnType(int32_t)
+    if (!g_window_open) m3ApiReturn(0);
     int32_t mx = (int32_t)((GetMouseX() - g_view_ox) / g_view_scale);
     m3ApiReturn(clampi32(mx, 0, VEX_W - 1));
 }
 
 m3ApiRawFunction(host_my) {
     m3ApiReturnType(int32_t)
+    if (!g_window_open) m3ApiReturn(0);
     int32_t my = (int32_t)((GetMouseY() - g_view_oy) / g_view_scale);
     m3ApiReturn(clampi32(my, 0, VEX_H - 1));
 }
@@ -556,7 +587,8 @@ m3ApiRawFunction(host_mbtn) {
     m3ApiGetArg(int32_t, button)
     // raylib only defines mouse buttons 0..2; anything else reads past its
     // internal bool[3] state array.
-    int held = (button >= 0 && button < 3) ? IsMouseButtonDown(button) : 0;
+    int held = g_window_open && button >= 0 && button < 3
+        ? IsMouseButtonDown(button) : 0;
     m3ApiReturn(held);
 }
 
@@ -565,10 +597,8 @@ m3ApiRawFunction(host_mbtn) {
 m3ApiRawFunction(host_pal) {
     m3ApiGetArg(int32_t, index)
     m3ApiGetArg(int32_t, rgb)
-    palette[(unsigned)index & 15] = (Color){
-        (unsigned char)((rgb >> 16) & 0xFF), (unsigned char)((rgb >> 8) & 0xFF),
-        (unsigned char)(rgb & 0xFF), 255,
-    };
+    g_palette[(unsigned)index & 15] =
+        pack_rgba((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
     m3ApiSuccess();
 }
 
@@ -722,11 +752,6 @@ static M3Result link_host(IM3Module mod) {
     return first_err;
 }
 
-// Set after InitWindow() and cleared before CloseWindow(); read by die() so
-// raylib is only torn down when it was actually set up. Declared before die()
-// so the cleanup branch compiles.
-static bool g_window_open = false;
-
 static void die(IM3Runtime rt, const char* what, M3Result err) {
     if (rt && err) {
         M3ErrorInfo info;
@@ -852,8 +877,8 @@ static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     // baseline. Doing reset_palette() *after* boot() would erase any palette
     // overrides the cart's boot() made (e.g. vex.pal(0, ...)) -- which is the
     // original bug this comment now documents.
-    Color old_pal[16];
-    memcpy(old_pal, palette, sizeof(palette));
+    uint32_t old_pal[16];
+    memcpy(old_pal, g_palette, sizeof(g_palette));
     reset_palette();
 
     // Try boot() on the fresh cart BEFORE swapping it in: if it traps, the
@@ -863,7 +888,7 @@ static bool reload_cart(IM3Environment env, const char* path, Cart* cart) {
     if (fresh.f_boot) {
         M3Result err = m3_CallV(fresh.f_boot);
         if (err) {
-            memcpy(palette, old_pal, sizeof(palette));
+            memcpy(g_palette, old_pal, sizeof(g_palette));
             M3ErrorInfo info;
             m3_GetErrorInfo(fresh.rt, &info);
             fprintf(stderr, "vex: boot: %s (%s)\n", err,
@@ -891,9 +916,33 @@ static bool parse_long(const char* s, long* out) {
     return true;
 }
 
+// FNV-1a 64-bit over the framebuffer -- cheap, deterministic, and identical
+// to what the Go host's golden tests compute over their pixel buffer, so a
+// headless C run can be diffed against them byte-for-byte.
+static uint64_t fnv1a64(const void* data, size_t n) {
+    const uint8_t* p = data;
+    uint64_t h = 1469598103934665603ULL;
+    while (n--) { h ^= *p++; h *= 1099511628211ULL; }
+    return h;
+}
+
+// Create the GPU-side copy of the framebuffer. A plain texture (not a render
+// texture): carts draw on the CPU now, so GL only needs to receive the
+// finished frame once per present.
+static Texture2D make_screen_texture(void) {
+    Image img = GenImageColor(VEX_W, VEX_H, BLANK);
+    Texture2D t = LoadTextureFromImage(img);
+    SetTextureFilter(t, TEXTURE_FILTER_POINT);
+    UnloadImage(img);
+    return t;
+}
+
 int main(int argc, char** argv) {
     int scale = VEX_SCALE;
-    bool watch = false; // -w/--watch: auto-reload the cart when its file changes
+    bool watch = false;  // -w/--watch: auto-reload the cart when its file changes
+    bool trace = false;  // -t/--trace: with -n, print a line per framebuffer change
+    long frames = -1;    // -n/--frames N: run N frames headlessly, then report
+    const char* dump_path = NULL; // --dump <file>: write raw framebuffer bytes
     const char* cart_path = NULL;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
@@ -901,22 +950,36 @@ int main(int argc, char** argv) {
             long v;
             if (i + 1 >= argc || !parse_long(argv[++i], &v)) {
                 fprintf(stderr, "vex: %s requires an integer scale\n", a);
-                fprintf(stderr, "usage: %s [-s scale] [-w] <cart.wasm>\n", argv[0]);
+                fprintf(stderr, "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n", argv[0]);
                 return 1;
             }
             scale = (int)v;
+        } else if (strcmp(a, "-n") == 0 || strcmp(a, "--frames") == 0) {
+            if (i + 1 >= argc || !parse_long(argv[++i], &frames) || frames < 0) {
+                fprintf(stderr, "vex: %s requires a frame count\n", a);
+                fprintf(stderr, "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n", argv[0]);
+                return 1;
+            }
+        } else if (strcmp(a, "-t") == 0 || strcmp(a, "--trace") == 0) {
+            trace = true;
+        } else if (strcmp(a, "--dump") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "vex: %s requires a file path\n", a);
+                return 1;
+            }
+            dump_path = argv[++i];
         } else if (strcmp(a, "-w") == 0 || strcmp(a, "--watch") == 0) {
             watch = true;
         } else if (a[0] == '-') {
             fprintf(stderr, "vex: unknown option %s\n", a);
-            fprintf(stderr, "usage: %s [-s scale] [-w] <cart.wasm>\n", argv[0]);
+            fprintf(stderr, "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n", argv[0]);
             return 1;
         } else if (cart_path == NULL) {
             cart_path = a;
         }
     }
     if (!cart_path) {
-        fprintf(stderr, "usage: %s [-s scale] [-w] <cart.wasm>\n", argv[0]);
+        fprintf(stderr, "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n", argv[0]);
         return 1;
     }
     if (scale < 1) scale = 1;
@@ -928,24 +991,7 @@ int main(int argc, char** argv) {
     if (!load_cart(env, cart_path, &cart)) { m3_FreeEnvironment(env); return 1; }
     M3Result err;
 
-    // ---- raylib window + framebuffer -------------------------------------
-    // Errors only, like 4b: raylib's INFO chatter (GLFW hints, audio device
-    // notes) is noise during normal play.
-    SetTraceLogLevel(LOG_ERROR);
-    InitWindow(VEX_W * scale, VEX_H * scale, "vex");
-    g_window_open = true;
-    SetTargetFPS(60);
-
-    RenderTexture2D screen = LoadRenderTexture(VEX_W, VEX_H);
-    if (screen.id == 0) die(cart.rt, "cannot create framebuffer render texture", NULL);
-    SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
-    init_font_atlas();
-
-    // Audio for beep(). InitAudioDevice() is safe to call when no audio
-    // device exists (headless/CI) -- it just fails and beep() stays silent.
-    InitAudioDevice();
-    g_audio_ready = IsAudioDeviceReady();
-
+    init_font();
     reset_palette();
 
     if (cart.f_boot) {
@@ -953,14 +999,73 @@ int main(int argc, char** argv) {
         if (err) die(cart.rt, "boot", err);
     }
 
-    // Prime the framebuffer with a clean clear before the main loop runs, so
-    // the very first visible frame isn't uninitialized GPU memory. Carts that
-    // call cls() in their first update() will overwrite this on the first
-    // iteration; carts that skip cls() start from a known-dark-blue state
-    // (palette[0] after boot()'s pal() overrides) instead of GPU garbage.
-    BeginTextureMode(screen);
-        ClearBackground(PAL(0));
-    EndTextureMode();
+    // Prime the framebuffer with a clean clear before any update() runs, so
+    // carts that skip cls() start from a known-dark-blue state (palette[0]
+    // after boot()'s pal() overrides) instead of garbage.
+    fb_fill(g_palette[0]);
+
+    // ---- headless run (-n frames): no window, no audio --------------------
+    // Inputs read as released, title() is ignored, beep() is silent -- which
+    // makes runs fully deterministic and directly comparable against the Go
+    // host's golden framebuffer hashes.
+    if (frames >= 0) {
+        struct timespec t0, t1;
+        timespec_get(&t0, TIME_UTC);
+
+        uint64_t prev = fnv1a64(g_fb, sizeof g_fb);
+        long changes = 0;
+        for (long i = 0; i < frames; i++) {
+            err = m3_CallV(cart.f_update);
+            if (err) die(cart.rt, "update", err);
+
+            uint64_t h = fnv1a64(g_fb, sizeof g_fb);
+            if (h != prev) {
+                changes++;
+                if (trace) printf("frame %ld fb=%016llx\n", i, (unsigned long long)h);
+                prev = h;
+            }
+        }
+        timespec_get(&t1, TIME_UTC);
+        double ms = (double)(t1.tv_sec - t0.tv_sec) * 1000.0
+                  + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+
+        printf("cart=%s frames=%ld total-ms=%.2f ms/frame=%.3f\n",
+               cart_path, frames, ms, frames > 0 ? ms / (double)frames : ms);
+        printf("fb-changes=%ld fnv1a64=%016llx mem=%u\n",
+               changes, (unsigned long long)fnv1a64(g_fb, sizeof g_fb),
+               (unsigned)m3_GetMemorySize(cart.rt));
+        printf("palette=");
+        for (int i = 0; i < 16; i++) printf("%08x", (unsigned)g_palette[i]);
+        printf("\n");
+
+        if (dump_path) {
+            FILE* f = fopen(dump_path, "wb");
+            if (!f) { fprintf(stderr, "vex: cannot write %s\n", dump_path); return 1; }
+            fwrite(g_fb, sizeof g_fb, 1, f);
+            fclose(f);
+        }
+
+        m3_FreeRuntime(cart.rt);
+        m3_FreeEnvironment(env);
+        free(cart.wasm);
+        return 0;
+    }
+
+    // ---- raylib window + audio --------------------------------------------
+    // Errors only, like 4b: raylib's INFO chatter (GLFW hints, audio device
+    // notes) is noise during normal play.
+    SetTraceLogLevel(LOG_ERROR);
+    InitWindow(VEX_W * scale, VEX_H * scale, "vex");
+    g_window_open = true;
+    SetTargetFPS(60);
+
+    Texture2D screen = make_screen_texture();
+    if (screen.id == 0) die(cart.rt, "cannot create framebuffer texture", NULL);
+
+    // Audio for beep(). InitAudioDevice() is safe to call when no audio
+    // device exists (headless/CI) -- it just fails and beep() stays silent.
+    InitAudioDevice();
+    g_audio_ready = IsAudioDeviceReady();
 
     bool integer_scale = false; // crisp integer scale vs. fractional fill;
                                 // enabled automatically on entering fullscreen
@@ -998,8 +1103,8 @@ int main(int argc, char** argv) {
             // exactly and hides the menu bar, so the picture isn't pushed off
             // the bottom of a notched screen as borderless-windowed would.
             // Toggling fullscreen can recreate the GL context (macOS), so the
-            // render texture must be re-created afterwards.
-            UnloadRenderTexture(screen);
+            // framebuffer texture must be re-created afterwards.
+            UnloadTexture(screen);
             int mon = GetCurrentMonitor();
             if (!IsWindowFullscreen()) {
                 SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
@@ -1009,9 +1114,8 @@ int main(int argc, char** argv) {
                 ToggleFullscreen();
                 SetWindowSize(VEX_W * scale, VEX_H * scale);
             }
-            screen = LoadRenderTexture(VEX_W, VEX_H);
-            if (screen.id == 0) die(cart.rt, "cannot re-create framebuffer after fullscreen toggle", NULL);
-            SetTextureFilter(screen.texture, TEXTURE_FILTER_POINT);
+            screen = make_screen_texture();
+            if (screen.id == 0) die(cart.rt, "cannot re-create framebuffer texture after fullscreen toggle", NULL);
         }
         if (super && IsKeyPressed(KEY_I)) integer_scale = !integer_scale;
 
@@ -1059,21 +1163,22 @@ int main(int argc, char** argv) {
         float ox = (sw - dw) / 2.0f, oy = (sh - dh) / 2.0f;
         g_view_scale = view_scale; g_view_ox = ox; g_view_oy = oy;
 
-        // Run the cart, drawing into the framebuffer.
-        BeginTextureMode(screen);
-            err = m3_CallV(cart.f_update);
-        EndTextureMode();
+        // Run the cart: pure CPU rasterization into g_fb.
+        err = m3_CallV(cart.f_update);
         if (err) die(cart.rt, "update", err);
 
-        // Capture button state for next frame's btnp() edge detection.
+        // Upload the finished frame to the GPU (one small 320x180 transfer
+        // per frame) and capture button state for next frame's btnp().
+        UpdateTexture(screen, g_fb);
         g_prev_btns = 0;
         for (int i = 0; i < 6; i++) {
             if (IsKeyDown(VEX_KEYS[i])) g_prev_btns |= (1u << i);
         }
 
-        // Blit the framebuffer to the screen (src height negative: render
-        // textures are stored bottom-up).
-        Rectangle src = { 0, 0, (float)VEX_W, -(float)VEX_H };
+        // Blit the framebuffer to the screen. The texture is top-down, so no
+        // negative-height source flip is needed (render textures stored
+        // bottom-up; this one doesn't).
+        Rectangle src = { 0, 0, (float)VEX_W, (float)VEX_H };
         BeginDrawing();
             ClearBackground(BLACK);
             if (surface_mismatch) {
@@ -1086,7 +1191,7 @@ int main(int argc, char** argv) {
                 rlMatrixMode(RL_PROJECTION); rlPushMatrix(); rlLoadIdentity();
                 rlOrtho(0, VEX_W, VEX_H, 0, -1.0, 1.0);
                 rlMatrixMode(RL_MODELVIEW); rlLoadIdentity();
-                DrawTexturePro(screen.texture, src,
+                DrawTexturePro(screen, src,
                     (Rectangle){ 0, 0, (float)VEX_W, (float)VEX_H },
                     (Vector2){ 0, 0 }, 0.0f, WHITE);
                 rlDrawRenderBatchActive();
@@ -1095,13 +1200,12 @@ int main(int argc, char** argv) {
                 rlViewport(0, 0, (int)sw, (int)sh); // restore for next frame
             } else {
                 Rectangle dst = { ox, oy, dw, dh };
-                DrawTexturePro(screen.texture, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
+                DrawTexturePro(screen, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
             }
         EndDrawing();
     }
 
-    UnloadRenderTexture(screen);
-    UnloadTexture(g_font_atlas);
+    UnloadTexture(screen);
     g_window_open = false;
     beep_cleanup();
     CloseWindow();
