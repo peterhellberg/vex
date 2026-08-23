@@ -144,7 +144,7 @@ distclean: clean
 #                                      binary runs on any modern distro)
 #   windows:  -Dtarget=x86_64-windows-gnu   (full cross-compile, MinGW
 #                                           import libs come from Zig)
-#   macos:    -Dtarget=x86_64-macos   (cross-compile via the xcode_frameworks
+#   macos:    -Dtarget=aarch64-macos   (cross-compile via the xcode_frameworks
 #                                     lazy dep, which stubs AppKit/IOKit on
 #                                     non-macOS hosts so raylib links)
 #
@@ -206,21 +206,21 @@ release-windows:
 # detects `.macos` and adds the stub include + framework + lib paths to
 # raylib; nothing extra is needed at the Makefile level.
 release-macos:
-	@mkdir -p $(STAGING_DIR)/macos-amd64/vex-$(VERSION)
-	zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-amd64/vex-$(VERSION) \
-		-Dtarget=x86_64-macos --release=fast
-	cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-amd64/vex-$(VERSION) \
-		-Dtarget=x86_64-macos --release=fast
-	$(call vex-web-cross,darwin,amd64,macos-amd64/vex-$(VERSION),)
-	cp README.md $(STAGING_DIR)/macos-amd64/vex-$(VERSION)/
-	cp LICENSE $(STAGING_DIR)/macos-amd64/vex-$(VERSION)/
+	@mkdir -p $(STAGING_DIR)/macos-aarch64/vex-$(VERSION)
+	zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-aarch64/vex-$(VERSION) \
+		-Dtarget=aarch64-macos --release=fast
+	cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-aarch64/vex-$(VERSION) \
+		-Dtarget=aarch64-macos --release=fast
+	$(call vex-web-cross,darwin,arm64,macos-aarch64/vex-$(VERSION),)
+	cp README.md $(STAGING_DIR)/macos-aarch64/vex-$(VERSION)/
+	cp LICENSE $(STAGING_DIR)/macos-aarch64/vex-$(VERSION)/
 	# macOS binaries aren't stripped on a Linux host: the Mach-O strip tools
 	# (otool, dsymutil, llvm-strip with the right target) aren't reliably
 	# available, and llvm-strip on the wrong target would corrupt the
 	# binary. Users on macOS can strip manually if they care.
-	tar -czf $(CURDIR)/$(RELEASE_DIR)/vex-$(VERSION)-macos-amd64.tar.gz \
-		-C $(STAGING_DIR)/macos-amd64 vex-$(VERSION)
-	@echo "==> $(RELEASE_DIR)/vex-$(VERSION)-macos-amd64.tar.gz"
+	tar -czf $(CURDIR)/$(RELEASE_DIR)/vex-$(VERSION)-macos-aarch64.tar.gz \
+		-C $(STAGING_DIR)/macos-aarch64 vex-$(VERSION)
+	@echo "==> $(RELEASE_DIR)/vex-$(VERSION)-macos-aarch64.tar.gz"
 
 release: release-linux release-windows release-macos
 	@echo ""
