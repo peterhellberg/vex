@@ -574,6 +574,15 @@ function line(x0, y0, x1, y1, color)
     x1 |= 0;
     y1 |= 0;
 
+    // Reject absurd endpoints, matching the native hosts' VEX_COORD_MAX
+    // bound (bresenham iterates once per coordinate step).
+    const B = VEX_W * 16;
+    if (
+        x0 < -B || x0 > B || y0 < -B || y0 > B ||
+        x1 < -B || x1 > B || y1 < -B || y1 > B
+    )
+        return;
+
     let dx = Math.abs(x1 - x0);
     let sx = x0 < x1 ? 1 : -1;
 
@@ -828,6 +837,16 @@ function tri(x1,y1,x2,y2,x3,y3,color)
     x1 |= 0; y1 |= 0;
     x2 |= 0; y2 |= 0;
     x3 |= 0; y3 |= 0;
+
+    // Same vertex bound as the native hosts: any vertex beyond the
+    // coordinate limit rejects the whole triangle.
+    const B = VEX_W * 16;
+    if (
+        x1 < -B || x1 > B || y1 < -B || y1 > B ||
+        x2 < -B || x2 > B || y2 < -B || y2 > B ||
+        x3 < -B || x3 > B || y3 < -B || y3 > B
+    )
+        return;
 
     const ymin = Math.min(y1, Math.min(y2, y3));
     const ymax = Math.max(y1, Math.max(y2, y3));
