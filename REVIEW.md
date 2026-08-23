@@ -62,6 +62,37 @@ render harness).
 
 ---
 
+## Second review pass (post-fix audit)
+
+A fresh pass over the tree once the fixes landed surfaced six more items,
+all resolved:
+
+1. **JS host: per-call view allocation.** `updateMemoryViews()` rebuilt a
+   `Uint8Array` on every `text()`/`blit()`/`title()` call. It now caches the
+   view and refreshes only when the underlying buffer was replaced — which
+   happens exactly when the cart grows its linear memory (the old buffer is
+   detached) or a new cart is instantiated. Same correctness as the §1.2 fix,
+   without the GC churn.
+2. **vex-web: directory diagnostics.** Pointing the server at a directory
+   logged `read <path>: <nil>`; it now prints "is a directory" (still 404).
+3. **CI gap: `cmd/vex-run` was never tested.** It's a separate Go module, so
+   the root `go vet ./... && go test ./...` silently skipped its unit and
+   golden tests. The CI job now vets/builds/tests both modules.
+4. **Web-tests workflow**: added `npx playwright install-deps chromium` so
+   the manually triggered job has Chromium's system libraries on the runner.
+5. **go.mod tidiness**: `golang.org/x/sys` moved from the `// indirect`
+   block to a direct require, since `filterStderr` imports it directly.
+6. **conformance_test.go**: dropped a hand-rolled substring search in favor
+   of `strings.Index`.
+
+Also re-verified during this pass: root `build.zig` carries no leftovers
+from the briefly attempted build-delegation experiment; and a cold
+`make distclean && make all` rebuilds everything — including the raylib 6.0
+tag fetch — with zero warnings and no `libraylib.a` anywhere in project or
+global caches.
+
+---
+
 ## 1. Bugs
 
 ### 1.1 C host: `mbtn()` accepts out-of-range buttons → OOB read

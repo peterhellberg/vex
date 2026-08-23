@@ -2,6 +2,7 @@
 
 STATUS: COMPLETE. All findings fixed or explicitly deferred; everything
 verified. Deferred items are listed in REVIEW.md "Resolution status".
+A second review pass (section 17 below) audited the fixes themselves.
 
 Working notes kept below so any interrupted change can be resumed.
 
@@ -183,3 +184,20 @@ Plan (mirror ../4b/build.zig addRaylib):
   C and JS updated to match it exactly.
 - line canonical = Bresenham (Go formulation), C switched from GL DrawLine.
 - Keep rmodels/rtext compiled for now (trimming is an experiment, not a fix).
+
+## 17. Second review pass — DONE
+
+- [x] JS `updateMemoryViews()`: caches the Uint8Array view; refreshes only
+      when memory.buffer identity changes (growth detaches, reload swaps).
+      No more per-call allocation.
+- [x] vex-web `serveCart`: separate "is a directory" message (was
+      "read <path>: <nil>"); verified 404 + clean log line.
+- [x] conformance_test.go: strings.Index replaces hand-rolled index().
+- [x] cmd/vex-run/go.mod: golang.org/x/sys moved to direct require block.
+- [x] ci.yml: vet/build/test cmd/vex-run module too (separate module was
+      invisible to root ./...).
+- [x] test-web.yml: npx playwright install-deps chromium for runner libs.
+- [x] Confirmed no leftovers of reverted build delegation in root build.zig;
+      cold distclean→make all cycle: zero warnings, no libraylib.a.
+- Verified: node --check (as .mjs), go vet/test both modules (-count=1),
+  zig build test, vex-web bundle + directory smoke tests.
