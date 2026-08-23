@@ -22,6 +22,20 @@ const ctx = canvas.getContext("2d", {
 const image = ctx.createImageData(VEX_W, VEX_H);
 const pixels = image.data;
 
+// Uint32 view over the same bytes: one store per pixel instead of four, and
+// cls() becomes a native fill(). TypedArray views use platform byte order;
+// every browser platform is little-endian, so the u32 layout is
+// 0xAABBGGRR (alpha in the high byte) -- see packColor().
+const pixels32 = new Uint32Array(pixels.buffer);
+
+// Pack an 0xRRGGBB color into the u32 layout above, with alpha forced to FF.
+// Doing this once in pal()/palreset() takes the per-pixel shifting out of
+// every drawing routine.
+function packColor(c)
+{
+    return 0xFF000000 | ((c & 0xFF) << 16) | (c & 0xFF00) | (c >>> 16);
+}
+
 //// Part 2: Palette
 
 const DEFAULT_PALETTE = [
@@ -43,16 +57,17 @@ const DEFAULT_PALETTE = [
 0x333C57
 ];
 
-let palette = [...DEFAULT_PALETTE];
+let palette = new Uint32Array(16);
 
 function pal(index, rgb)
 {
-    palette[index & 15] = rgb >>> 0;
+    palette[index & 15] = packColor(rgb >>> 0);
 }
 
 function palreset()
 {
-    palette = [...DEFAULT_PALETTE];
+    for (let i = 0; i < 16; i++)
+        palette[i] = packColor(DEFAULT_PALETTE[i]);
 }
 
 //// Part 3: Input
@@ -517,16 +532,6 @@ function title(ptr)
 
 //// Part 5: Core pixel routines
 
-// Write a framebuffer pixel at byte index i (4 bytes per pixel) from a
-// palette color.
-function fillPixel(i, c)
-{
-    pixels[i + 0] = (c >> 16) & 255;
-    pixels[i + 1] = (c >> 8) & 255;
-    pixels[i + 2] = c & 255;
-    pixels[i + 3] = 255;
-}
-
 function pset(x, y, color)
 {
     if (
@@ -537,28 +542,12 @@ function pset(x, y, color)
     )
         return;
 
-    fillPixel((y * VEX_W + x) << 2, palette[color & 15]);
+    pixels32[y * VEX_W + x] = palette[color & 15];
 }
 
 function cls(color)
 {
-    const c = palette[color & 15];
-
-    // Seed one pixel, then double the filled prefix onto itself with native
-    // copyWithin (4 -> 8 -> 16 ... bytes) -- ~16 memcpys instead of one
-    // fillPixel call per pixel, matching the Go host's cls().
-    pixels[0] = (c >> 16) & 255;
-    pixels[1] = (c >> 8) & 255;
-    pixels[2] = c & 255;
-    pixels[3] = 255;
-
-    let n = 4;
-    while (n < pixels.length)
-    {
-        const m = Math.min(n, pixels.length - n);
-        pixels.copyWithin(n, 0, m);
-        n += m;
-    }
+    pixels32.fill(palette[color & 15]);
 }
 
 //// Part 6: Bresenham line()
@@ -633,12 +622,11 @@ function rect(x, y, w, h, color)
 
     for (let yy = y0; yy < y1; yy++)
     {
-        let i = ((yy * VEX_W) + x0) << 2;
+        let i = yy * VEX_W + x0;
 
         for (let xx = x0; xx < x1; xx++)
         {
-            fillPixel(i, c);
-            i += 4;
+            pixels32[i++] = c;
         }
     }
 }
@@ -731,12 +719,11 @@ function hline(x0, x1, y, color)
 
     const c = palette[color & 15];
 
-    let i = (y * VEX_W + x0) << 2;
+    let i = y * VEX_W + x0;
 
     for (let x = x0; x <= x1; x++)
     {
-        fillPixel(i, c);
-        i += 4;
+        pixels32[i++] = c;
     }
 }
 
@@ -805,20 +792,46 @@ function blit(ptr, x, y, w, h, key)
     if (w <= 0 || h <= 0)
         return;
 
+    // Clamp to the framebuffer before validating against cart memory, so a
+    // mostly-offscreen blit doesn't demand bytes no other host reads
+    // (matches the C and Go hosts).
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
+
     if (ptr < 0 || ptr + w * h > mem8.length)
         return;
 
     for (let row = 0; row < h; row++)
     {
-        for (let col = 0; col < w; col++)
+        const yy = y + row;
+
+        if (yy < 0 || yy >= VEX_H)
+            continue;
+
+        const dst = yy * VEX_W;
+        const src = ptr + row * w;
+
+        let col = 0;
+        while (col < w)
         {
-            const c = mem8[ptr + row * w + col];
+            while (col < w && mem8[src + col] === key)
+                col++;
 
-            // Out-of-bounds reads (undefined) and key pixels are skipped.
-            if (c === undefined || c === key)
-                continue;
+            if (col >= w)
+                break;
 
-            pset(x + col, y + row, c);
+            const start = col;
+            const run = mem8[src + col];
+
+            while (col < w && mem8[src + col] === run)
+                col++;
+
+            let sx = Math.max(0, x + start);
+            const ex = Math.min(VEX_W, x + col);
+            const v = palette[run & 15];
+
+            for (; sx < ex; sx++)
+                pixels32[dst + sx] = v;
         }
     }
 }
@@ -831,6 +844,31 @@ const TRI_INF = 1 << 30;
 const TRI_MAX_ROWS = 2 * (VEX_W * 16) + 1; // matches the hosts' coord bound
 let triL = new Int32Array(64);
 let triR = new Int32Array(64);
+
+// Per row, track the floor'd leftmost/rightmost x where any edge crosses it
+// -- byte-for-byte the tri() of the C and Go hosts, so all three fill
+// identical pixels regardless of vertex order or winding. (Module-level so
+// no closure is allocated per tri() call.)
+function addTriEdge(ax, ay, bx, by, ymin, triL, triR)
+{
+    if (ay === by)
+        return; // horizontal edge: its endpoints are covered by the others
+
+    const slope = (bx - ax) / (by - ay);
+
+    const yStart = Math.min(ay, by);
+    const yEnd   = Math.max(ay, by);
+
+    for (let y = yStart; y <= yEnd; y++)
+    {
+        const xf = ax + (y - ay) * slope;
+        const xi = Math.floor(xf);
+        const i = y - ymin;
+
+        if (xi < triL[i]) triL[i] = xi;
+        if (xi > triR[i]) triR[i] = xi;
+    }
+}
 
 function tri(x1,y1,x2,y2,x3,y3,color)
 {
@@ -867,33 +905,9 @@ function tri(x1,y1,x2,y2,x3,y3,color)
         triR[i] = -TRI_INF;
     }
 
-    // Per row, track the floor'd leftmost/rightmost x where any edge crosses
-    // it -- byte-for-byte the tri() of the C and Go hosts, so all three fill
-    // identical pixels regardless of vertex order or winding.
-    function addEdge(ax, ay, bx, by)
-    {
-        if (ay === by)
-            return; // horizontal edge: its endpoints are covered by the others
-
-        const slope = (bx - ax) / (by - ay);
-
-        const yStart = Math.min(ay, by);
-        const yEnd   = Math.max(ay, by);
-
-        for (let y = yStart; y <= yEnd; y++)
-        {
-            const xf = ax + (y - ay) * slope;
-            const xi = Math.floor(xf);
-            const i = y - ymin;
-
-            if (xi < triL[i]) triL[i] = xi;
-            if (xi > triR[i]) triR[i] = xi;
-        }
-    }
-
-    addEdge(x1, y1, x2, y2);
-    addEdge(x2, y2, x3, y3);
-    addEdge(x3, y3, x1, y1);
+    addTriEdge(x1, y1, x2, y2, ymin, triL, triR);
+    addTriEdge(x2, y2, x3, y3, ymin, triL, triR);
+    addTriEdge(x3, y3, x1, y1, ymin, triL, triR);
 
     for (let i = 0; i < n; i++)
     {
@@ -1039,31 +1053,44 @@ function text(ptr, x, y, color)
     y |= 0;
 
     const str = readCString(ptr);
+    const c = palette[color & 15];
 
     for (let i = 0; i < str.length; i++)
     {
-        const c = str.charCodeAt(i) - FONT_FIRST;
+        const ch = str.charCodeAt(i) - FONT_FIRST;
 
         // skip unsupported chars
-        if (c < 0 || c >= FONT8.length)
+        if (ch < 0 || ch >= FONT8.length)
         {
             x += 8;
             continue;
         }
 
-        const base = c * 8;
+        const base = ch * 8;
 
         for (let yy = 0; yy < 8; yy++)
         {
             const rowBits = FONT_ROWS[base + yy];
 
+            if (!rowBits)
+                continue;
+
+            const py = y + yy;
+
+            if (py < 0 || py >= VEX_H)
+                continue;
+
+            const dst = py * VEX_W;
+
             for (let xx = 0; xx < 8; xx++)
             {
-                // extract bit (MSB-first per row)
-                const bit = (rowBits >> (7 - xx)) & 1;
+                if (rowBits & (0x80 >> xx))
+                {
+                    const px = x + xx;
 
-                if (bit)
-                    pset(x + xx, y + yy, color);
+                    if (px >= 0 && px < VEX_W)
+                        pixels32[dst + px] = c;
+                }
             }
         }
 
@@ -1152,7 +1179,7 @@ let frameGen = 0;
 // One cart tick: run logic, capture button state for btnp(). The framebuffer
 // is presented once per animation frame (after all catch-up ticks), not once
 // per tick.
-function tick(gen)
+function tick()
 {
     // run cart logic
     instance.exports.update();
@@ -1188,7 +1215,7 @@ function frame(gen, now)
 
     let ran = 0;
     while (acc >= TICK_MS) {
-        tick(gen);
+        tick();
         acc -= TICK_MS;
         ran++;
     }
