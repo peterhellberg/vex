@@ -64,7 +64,11 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addCSourceFile(.{
         .file = b.path("main.c"),
-        .flags = &.{"-std=c23"},
+        // -ffp-contract=off keeps the triangle edge math bit-for-bit
+        // identical to the Go/JS hosts: clang would otherwise fuse
+        // ax + (y-ay)*slope into an FMA whose rounding differs from their
+        // separate multiply+add, moving individual edge pixels.
+        .flags = &.{ "-std=c23", "-ffp-contract=off" },
     });
 
     // Compile raylib's sources directly into the executable and link the
