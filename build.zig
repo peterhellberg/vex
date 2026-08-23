@@ -7,8 +7,9 @@ const std = @import("std");
 // that links raylib + wasm3) lives in a separate `cmd/vex/` package so the
 // raylib/wasm3 deps aren't pulled in by everyone.
 //
-//   zig build           build ./vex-init + cart.wasm + zcart.wasm
+//   zig build              build ./vex-init + cart.wasm + zcart.wasm
 //   zig build --prefix .   install vex-init into ./bin and carts into ./bin/carts
+//   zig build test         run the SDK tests
 //
 // The host is built separately, see cmd/vex/build.zig (or just run `make`,
 // which builds both).
@@ -64,7 +65,7 @@ pub fn build(b: *std.Build) void {
     // --- test carts: wasm32-freestanding stress-test modules ------------------
     const test_carts = [_][]const u8{
         "test_audio", "test_coords", "test_blit", "test_arith", "test_palette",
-        "test_api",   "test_bench",  "test_font",
+        "test_api",   "test_bench",  "test_font", "test_hostile",
     };
     inline for (test_carts) |name| {
         const t = b.addExecutable(.{
@@ -79,6 +80,16 @@ pub fn build(b: *std.Build) void {
         t.entry = .disabled;
         b.getInstallStep().dependOn(&b.addInstallArtifact(t, .{ .dest_dir = .{ .override = .{ .custom = "bin/carts" } } }).step);
     }
+
+    // --- tests: run the SDK's zig test blocks (`zig build test`) -------------
+    const sdk_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("spr.zig"),
+        .target = b.resolveTargetQuery(.{}),
+        .optimize = optimize,
+    }) });
+    const run_sdk_tests = b.addRunArtifact(sdk_tests);
+    const test_step = b.step("test", "Run SDK tests (spr.zig)");
+    test_step.dependOn(&run_sdk_tests.step);
 
     // --- vex-init: scaffold a new cart project ------------------------------
     const init_exe = b.addExecutable(.{
