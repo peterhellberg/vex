@@ -1,12 +1,12 @@
-name: CI
+name: vex-run
 
+# cmd/vex-run depends on ebitengine (cgo, X11/ALSA link deps), which makes it
+# too heavy to run on every PR; this workflow is triggered manually instead.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
-  build:
+  vex-run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -17,8 +17,6 @@ jobs:
           echo "version=$(awk -F'"' '/\.minimum_zig_version/ {print $2; exit}' build.zig.zon)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pinned Zig toolchain
-        # On a hit, install-zig.sh finds the existing binary and only
-        # re-creates the symlink.
         uses: actions/cache@v5
         with:
           path: /tmp/zig-pinned
@@ -35,32 +33,23 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.work
-          # This repo has no root go.sum; it is a go.work workspace.
-          cache-dependency-path: go.work.sum
+          cache-dependency-path: cmd/vex-run/go.sum
 
       # gcc is never used; zig cc stands in as the C compiler throughout.
       - name: Use zig cc as the C compiler
         run: |
           echo "CC=zig cc" >> "$GITHUB_ENV"
 
-      - name: Install X11/GL dev libraries (raylib link deps)
+      - name: Install X11/ALSA dev libraries (ebitengine cgo link deps)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgl1-mesa-dev libx11-dev libxrandr-dev \
-            libxinerama-dev libxi-dev libxcursor-dev pkg-config
+            libx11-dev libxrandr-dev libxinerama-dev \
+            libxi-dev libxcursor-dev libxxf86vm-dev \
+            libasound2-dev pkg-config
 
-      - name: Build SDK package (vex-init, example + test carts)
-        # Debug builds keep CI fast; these steps only verify compilation.
-        run: zig build --prefix .
-
-      - name: Build C host (cmd/vex)
-        run: cd cmd/vex && zig build --prefix ../..
-
-      - name: Run Zig tests (spr.zig)
-        run: zig build test
-
-      - name: Vet, test, and build root Go module
+      - name: Vet, test, and build cmd/vex-run
+        working-directory: cmd/vex-run
         run: |
           go vet ./... && go test ./...
-          go build -o bin/vex-web ./cmd/vex-web
+          go build -o ../../bin/vex-run .
