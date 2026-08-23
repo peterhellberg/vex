@@ -126,13 +126,15 @@ function setMouse(e)
 {
     const r = canvas.getBoundingClientRect();
 
-    mouseX = Math.floor(
+    // Clamped to the framebuffer (0..W-1 / 0..H-1), matching the native
+    // hosts and the documented API range.
+    mouseX = Math.max(0, Math.min(VEX_W - 1, Math.floor(
         (e.clientX - r.left) * VEX_W / r.width
-    );
+    )));
 
-    mouseY = Math.floor(
+    mouseY = Math.max(0, Math.min(VEX_H - 1, Math.floor(
         (e.clientY - r.top) * VEX_H / r.height
-    );
+    )));
 }
 
 // Each button tracks the pointers holding it, so lifting one finger mid
@@ -484,17 +486,15 @@ function readCString(ptr)
 {
     updateMemoryViews();
 
+    let end = ptr;
+    while (end < mem8.length && mem8[end] !== 0)
+        end++;
+
+    // Chunked String.fromCharCode keeps long strings O(n) instead of the
+    // O(n²) of repeated += concatenation.
     let s = "";
-
-    while (ptr < mem8.length)
-    {
-        const c = mem8[ptr++];
-
-        if (c === 0)
-            break;
-
-        s += String.fromCharCode(c);
-    }
+    for (let i = ptr; i < end; i += 4096)
+        s += String.fromCharCode.apply(null, mem8.subarray(i, Math.min(i + 4096, end)));
 
     return s;
 }
@@ -659,6 +659,12 @@ function circ(cx, cy, r, color)
     cy |= 0;
     r  |= 0;
 
+    // Radius clamp matching the native hosts: bounds the midpoint loop so a
+    // bogus cart value can't spin millions of iterations.
+    const R_MAX = VEX_W * 16;
+    if (r < 0) r = 0;
+    if (r > R_MAX) r = R_MAX;
+
     let x = r;
     let y = 0;
     let err = 0;
@@ -725,6 +731,11 @@ function circb(cx, cy, r, color)
     cy |= 0;
     r  |= 0;
 
+    // Radius clamp matching the native hosts (see circ).
+    const R_MAX = VEX_W * 16;
+    if (r < 0) r = 0;
+    if (r > R_MAX) r = R_MAX;
+
     let x = r;
     let y = 0;
     let err = 0;
@@ -767,13 +778,16 @@ function blit(ptr, x, y, w, h, key)
     w |= 0;
     h |= 0;
 
+    // Refresh the memory view BEFORE the bounds check: a cart that grew its
+    // linear memory detaches the old buffer (length 0), and checking a stale
+    // view would silently skip every blit.
+    updateMemoryViews();
+
     if (w <= 0 || h <= 0)
         return;
 
     if (ptr < 0 || ptr + w * h > mem8.length)
         return;
-
-    updateMemoryViews();
 
     for (let row = 0; row < h; row++)
     {
@@ -792,17 +806,41 @@ function blit(ptr, x, y, w, h, key)
 
 //// Part 10: Triangle fill (tri) + outline (trib)
 
+// Reusable scanline edge buffers, grown on demand -- avoids allocating two
+// arrays per tri() call.
+const TRI_INF = 1 << 30;
+const TRI_MAX_ROWS = 2 * (VEX_W * 16) + 1; // matches the hosts' coord bound
+let triL = new Int32Array(64);
+let triR = new Int32Array(64);
+
 function tri(x1,y1,x2,y2,x3,y3,color)
 {
     x1 |= 0; y1 |= 0;
     x2 |= 0; y2 |= 0;
     x3 |= 0; y3 |= 0;
 
-    // For each scanline, track the leftmost and rightmost x where any edge
-    // crosses it. A triangle is convex, so [min, max] is exactly the span to
-    // fill -- independent of vertex order or winding.
-    const rows = new Map();
+    const ymin = Math.min(y1, Math.min(y2, y3));
+    const ymax = Math.max(y1, Math.max(y2, y3));
 
+    const n = ymax - ymin + 1;
+    if (n <= 0 || n > TRI_MAX_ROWS)
+        return; // guard hostile spans, matching the native hosts
+
+    if (n > triL.length)
+    {
+        triL = new Int32Array(n);
+        triR = new Int32Array(n);
+    }
+
+    for (let i = 0; i < n; i++)
+    {
+        triL[i] = TRI_INF;
+        triR[i] = -TRI_INF;
+    }
+
+    // Per row, track the floor'd leftmost/rightmost x where any edge crosses
+    // it -- byte-for-byte the tri() of the C and Go hosts, so all three fill
+    // identical pixels regardless of vertex order or winding.
     function addEdge(ax, ay, bx, by)
     {
         if (ay === by)
@@ -815,16 +853,12 @@ function tri(x1,y1,x2,y2,x3,y3,color)
 
         for (let y = yStart; y <= yEnd; y++)
         {
-            const x = ax + (y - ay) * slope;
-            const row = rows.get(y);
+            const xf = ax + (y - ay) * slope;
+            const xi = Math.floor(xf);
+            const i = y - ymin;
 
-            if (row === undefined)
-                rows.set(y, { l: x, r: x });
-            else
-            {
-                if (x < row.l) row.l = x;
-                if (x > row.r) row.r = x;
-            }
+            if (xi < triL[i]) triL[i] = xi;
+            if (xi > triR[i]) triR[i] = xi;
         }
     }
 
@@ -832,14 +866,10 @@ function tri(x1,y1,x2,y2,x3,y3,color)
     addEdge(x2, y2, x3, y3);
     addEdge(x3, y3, x1, y1);
 
-    for (const [y, v] of rows)
+    for (let i = 0; i < n; i++)
     {
-        hline(
-            Math.round(v.l),
-            Math.round(v.r),
-            y,
-            color
-        );
+        if (triL[i] <= triR[i])
+            hline(triL[i], triR[i], ymin + i, color);
     }
 }
 
@@ -1090,14 +1120,13 @@ function present()
 
 let frameGen = 0;
 
-// One cart tick: run logic, present, capture button state for btnp().
+// One cart tick: run logic, capture button state for btnp(). The framebuffer
+// is presented once per animation frame (after all catch-up ticks), not once
+// per tick.
 function tick(gen)
 {
     // run cart logic
     instance.exports.update();
-
-    // push framebuffer to canvas
-    present();
 
     // Capture button state for next frame's btnp().
     prevButtons = 0;
@@ -1128,10 +1157,15 @@ function frame(gen, now)
     // Slow frames must not trigger a catch-up burst of ticks.
     if (acc > 5 * TICK_MS) acc = 5 * TICK_MS;
 
+    let ran = 0;
     while (acc >= TICK_MS) {
         tick(gen);
         acc -= TICK_MS;
+        ran++;
     }
+
+    if (ran > 0)
+        present(); // one putImageData per animation frame, not per tick
 
     if (frameGen === gen)
         rafId = requestAnimationFrame(t => frame(gen, t));

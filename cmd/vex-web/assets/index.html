@@ -11,9 +11,11 @@ html, body {
     /* Use the dynamic viewport height on browsers that support it
      * (iOS Safari 15.4+, modern Chrome/Edge/Firefox) — `100vh` on iOS
      * includes the URL bar height and makes the page overflow when the
-     * bar is showing. Fall back to `100vh` everywhere else. */
-    height: 100dvh;
+     * bar is showing. The later `100dvh` declaration wins where supported;
+     * browsers that don't know dvh ignore it and keep the 100vh fallback.
+     */
     height: 100vh;
+    height: 100dvh;
 }
 
 body {
@@ -110,12 +112,13 @@ body.portrait #gamepad {
     /* aspect-ratio: 1 keeps the cluster square: width = height, so the
      * cross is a tidy square no matter how wide the viewport is. Capped
      * at 90% of the dynamic viewport height so the gamepad never
-     * overflows on short phones. */
+     * overflows on short phones. The later dvh declaration wins where
+     * supported; older browsers keep the vh fallback. */
     flex: 0 1 auto;
     display: grid;
     aspect-ratio: 1 / 1;
-    width: min(100%, calc(100dvh * 0.9));
     width: min(100%, calc(100vh * 0.9));
+    width: min(100%, calc(100dvh * 0.9));
     gap: clamp(6px, 1.6vmin, 14px);
 
     grid-template-columns: 1fr 1fr 1fr;

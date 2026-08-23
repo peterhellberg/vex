@@ -74,7 +74,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	fs.StringVar(&in.addr, "addr", ":8383", "address to listen on")
+	// Default to loopback: this is a dev tool that serves local files, so
+	// don't expose it to the network unless asked to (-addr 0.0.0.0:8383).
+	fs.StringVar(&in.addr, "addr", "localhost:8383", "address to listen on")
 	fs.BoolVar(&in.noOpen, "no-open", false, "don't open the browser on start")
 	fs.DurationVar(&in.poll, "poll", 500*time.Millisecond, "how often to stat the cart for live-reload")
 	fs.BoolVar(&in.bundle, "bundle", false, "write a static bundle for the cart to bundle/<name>/ (and .zip) instead of serving")
@@ -257,6 +259,10 @@ func serveReload(path string, interval time.Duration) http.HandlerFunc {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
+		// Keepalive comment every ~15s (at the default 500ms poll) so
+		// proxies and browsers don't time out the idle SSE connection.
+		ticks := 0
+
 		for {
 			select {
 			case <-r.Context().Done():
@@ -271,18 +277,34 @@ func serveReload(path string, interval time.Duration) http.HandlerFunc {
 					last = m
 					fmt.Fprint(w, "data: reload\n\n")
 					flusher.Flush()
+					continue
+				}
+
+				if ticks++; ticks%30 == 0 {
+					fmt.Fprint(w, ": ping\n\n")
+					flusher.Flush()
 				}
 			}
 		}
 	}
 }
 
-// serveCart returns a handler that reads the cart from disk on each request, so
-// rebuilding it and refreshing the page is enough to load the new bytes.
+// serveCart returns a handler that reads the cart from disk on each request,
+// so rebuilding it and refreshing the page is enough to load the new bytes.
+// Served via http.ServeContent for Range/If-Modified-Since support; the
+// per-request open keeps the live-reload semantics.
 func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		b, err := os.ReadFile(path)
+		f, err := os.Open(path)
 		if err != nil {
+			fmt.Fprintf(stderr, "read %s: %v\n", displayPath(path), err)
+			http.Error(w, "cart not found", http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+
+		fi, err := f.Stat()
+		if err != nil || fi.IsDir() {
 			fmt.Fprintf(stderr, "read %s: %v\n", displayPath(path), err)
 			http.Error(w, "cart not found", http.StatusNotFound)
 			return
@@ -290,7 +312,7 @@ func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/wasm")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write(b)
+		http.ServeContent(w, r, "", fi.ModTime(), f)
 	}
 }
 
