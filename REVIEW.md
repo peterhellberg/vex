@@ -93,6 +93,39 @@ global caches.
 
 ---
 
+## Third pass: cmd/vex performance & cross-host proof
+
+The reference host was restructured to match its siblings' architecture:
+
+- **Software framebuffer.** Every cart primitive used to become raylib GL
+  work inside a render texture (`pset` = one textured quad per pixel, `cls`
+  = a fullscreen quad). All primitives now rasterize into a CPU-side
+  `uint32` framebuffer with plain stores (span fills for `cls`/`rect`/`tri`
+  rows, run-batched `blit`, direct glyph writes for `text`), and the GPU
+  receives exactly one small 320×180 texture upload per frame. The font
+  atlas, `BeginTextureMode` around the cart, and the render-texture Y-flip
+  handling are all gone; the present path is a single letterboxed
+  `DrawTexturePro`.
+- **Headless debug mode** (mirroring 4b's `-d`): `vex -n <frames>` runs the
+  cart without window/audio and prints a summary (ms/frame, framebuffer
+  change count, FNV-1a64 hash, final palette); `-t` prints one line per
+  framebuffer change instead of per frame; `--dump <file>` writes the raw
+  RGBA buffer.
+- **Cross-host pixel parity is now proven**, not assumed: the Go golden
+  tests record both sha256 and FNV-1a64 of each cart's framebuffer, and the
+  C host computes the same FNV — all 11 carts match byte-for-byte between
+  the C and Go hosts.
+- **Two latent divergences surfaced by that check were fixed:**
+  1. Go/JS `line()`/`tri()` lacked the C host's ±VEX_COORD_MAX endpoint
+     gate (unbounded bresenham iteration + divergent pixels); all three now
+     gate identically.
+  2. clang fused the triangle edge math into an FMA on native builds,
+     rounding differently from Go/JS's separate multiply+add and moving
+     individual edge pixels; `main.c` now compiles with
+     `-ffp-contract=off`.
+
+---
+
 ## 1. Bugs
 
 ### 1.1 C host: `mbtn()` accepts out-of-range buttons → OOB read

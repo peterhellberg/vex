@@ -55,7 +55,7 @@ fetches nothing heavy.
 `make install` copies `vex`, `vex-init`, `vex-web`, and `vex-run` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
 
-`vex` is invoked as `vex [-s scale] [-w] <cart.wasm>`. For a dependency-free
+`vex` is invoked as `vex [-s scale] [-w] [-n frames] [-t] [--dump file] <cart.wasm>`. For a dependency-free
 alternative written in Go, see [Native Go version](#native-go-version). 
 
 The window is the 320×180 framebuffer times `scale` 
@@ -64,6 +64,15 @@ _(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it.
 With `-w`/`--watch`, vex polls the cart file and reloads it 
 automatically whenever it changes — the native counterpart 
 to vex-web's live-reload (see [Web version](#web-version)).
+
+For debugging and benchmarking, `-n <frames>` runs the cart headlessly —
+no window, no audio, inputs read as released — and prints a summary
+(frames, ms/frame, how many times the framebuffer changed, its FNV-1a64
+hash, and the final palette). `-t`/`--trace` additionally prints one line
+each time the framebuffer content changes during the run, and
+`--dump <file>` writes the raw RGBA framebuffer to disk. The hash matches
+what the Go host's golden tests compute, so `vex -n 30 cart.wasm` can be
+compared byte-for-byte against `cmd/vex-run/testdata/`.
 
 There are two example carts: 
 
