@@ -32,7 +32,7 @@ CART ?= bin/carts/cart.wasm
 # Path to the bundled test directory (Playwright scripts).
 TEST_DIR := cmd/vex-web/test
 
-.PHONY: all run runz web test-web install uninstall clean test-deps docs
+.PHONY: all run runz web test-web install uninstall clean distclean test-deps docs
 .PHONY: release release-linux release-windows release-macos
 
 # Version stamped into every archive name. Single source of truth: the SDK
@@ -108,10 +108,19 @@ install: all
 uninstall:
 	rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web $(BINDIR)/vex-run
 
+# Remove build artifacts. Fetched Zig packages (zig-pkg/) and the Playwright
+# node_modules are deliberately kept so the next build starts warm.
 clean:
-	rm -rf bin zig-out .zig-cache zig-pkg cmd/vex/zig-out cmd/vex/.zig-cache cmd/vex/zig-pkg
-	rm -rf $(TEST_DIR)/node_modules
+	rm -rf bin zig-out .zig-cache cmd/vex/zig-out cmd/vex/.zig-cache
 	rm -rf $(RELEASE_DIR)
+
+# Additionally drop everything fetched from the network: the vendored Zig
+# packages (raylib, wasm3, xcode_frameworks under cmd/vex/zig-pkg) and the
+# Playwright node_modules/Chromium install. Back to a fresh-checkout state;
+# the next build re-fetches and recompiles dependencies from scratch.
+distclean: clean
+	rm -rf zig-pkg cmd/vex/zig-pkg
+	rm -rf $(TEST_DIR)/node_modules
 
 # --- release ---------------------------------------------------------------
 #
