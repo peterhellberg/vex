@@ -17,9 +17,10 @@
 // browser.
 //
 // With -bundle, vex-web writes a static bundle for the cart instead of serving
-// it: index.html, vex.js and the cart wasm are written to bundle/<name>/ (where
-// <name> is the cart's base name without extension) and the directory is also
-// archived to bundle/<name>.zip. The bundle runs the cart without any server,
+// it: index.html, vex.js, the cart wasm and the project's src/ tree are written
+// to bundle/<name>/ (where <name> is the cart's base name without extension)
+// and the directory is also archived to bundle/<name>.zip. The bundle runs the
+// cart without any server,
 // so it can be hosted as plain static files. The paths it wrote are reported on
 // stdout; everything else (warnings, server logs) goes to stderr.
 package main
@@ -31,6 +32,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -349,13 +351,25 @@ func writeBundle(cart string, stdout io.Writer) error {
 		{cartFile, wasm},
 	}
 
+	// Ship the cart's readable source alongside the wasm (missing src/ is
+	// fine -- a bare wasm file bundles without it).
+	srcFiles, err := bundleSrcFiles()
+	if err != nil {
+		return err
+	}
+	files = append(files, srcFiles...)
+
 	dir := filepath.Join("bundle", name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(dir, f.name), f.data, 0o644); err != nil {
+		path := filepath.Join(dir, f.name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, f.data, 0o644); err != nil {
 			return err
 		}
 	}
@@ -368,6 +382,34 @@ func writeBundle(cart string, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "wrote bundle %s and %s\n", dir, zipPath)
 
 	return nil
+}
+
+// bundleSrcFiles collects the ./src tree (relative to the working directory,
+// i.e. the cart project root) as bundle entries under src/. Returns no files
+// when src/ does not exist.
+func bundleSrcFiles() ([]bundleFile, error) {
+	var files []bundleFile
+
+	err := filepath.WalkDir("src", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+
+		files = append(files, bundleFile{name: filepath.ToSlash(p), data: data})
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return files, err
 }
 
 // bundleIndexHTML returns a static copy of the embedded index.html that loads

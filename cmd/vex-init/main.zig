@@ -222,22 +222,16 @@ const build_zig_tmpl =
     \\    bundle.step.dependOn(b.getInstallStep());
     \\    b.step("bundle", "Build the cart and write a static bundle with vex-web").dependOn(&bundle.step);
     \\
-    \\    // `zig build deploy` bundles, copies src/ into the bundle, then scp's
-    \\    // it to play.c7.se. Edit scp_target / public_url below to point at
-    \\    // your own hosting setup.
+    \\    // `zig build deploy` bundles (vex-web -bundle already includes
+    \\    // src/ in the bundle and zip) and scp's it to play.c7.se. Edit
+    \\    // scp_target / public_url below to point at your own hosting setup.
     \\    const scp_target = "c7.se:/var/www/play.c7.se/vex/";
     \\    const public_url = "https://play.c7.se/vex/" ++ name ++ "/";
-    \\
-    \\    const rm_src = b.addSystemCommand(&.{{ "rm", "-rf", "bundle/" ++ name ++ "/src" }});
-    \\    rm_src.step.dependOn(&bundle.step);
-    \\
-    \\    const copy_src = b.addSystemCommand(&.{{ "cp", "-r", "src", "bundle/" ++ name ++ "/." }});
-    \\    copy_src.step.dependOn(&rm_src.step);
     \\
     \\    const deploy_cmd = "scp -r bundle/* " ++ scp_target ++
     \\        " && echo '→ Uploaded to " ++ public_url ++ "'";
     \\    const deploy = b.addSystemCommand(&.{{ "bash", "-c", deploy_cmd }});
-    \\    deploy.step.dependOn(&copy_src.step);
+    \\    deploy.step.dependOn(&bundle.step);
     \\    b.step("deploy", "Bundle the cart and scp it to play.c7.se").dependOn(&deploy.step);
     \\}}
     \\
