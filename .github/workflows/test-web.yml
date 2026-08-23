@@ -9,11 +9,28 @@ jobs:
   test-web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - name: Determine pinned Zig version
+        id: zig-version
+        run: |
+          echo "version=$(awk -F'"' '/\.minimum_zig_version/ {print $2; exit}' build.zig.zon)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pinned Zig toolchain
+        uses: actions/cache@v5
         with:
-          go-version-file: go.mod
+          path: /tmp/zig-pinned
+          key: zig-${{ runner.os }}-${{ steps.zig-version.outputs.version }}
+
+      - name: Cache Zig build caches
+        uses: actions/cache@v5
+        with:
+          path: |
+            .zig-cache
+            zig-pkg
+          key: zcache-${{ runner.os }}-${{ steps.zig-version.outputs.version }}
+          restore-keys: |
+            zcache-${{ runner.os }}-
 
       - name: Install pinned Zig (version from build.zig.zon)
         run: ./scripts/install-zig.sh
@@ -23,8 +40,18 @@ jobs:
       - name: Add zig to PATH
         run: echo "/tmp/zig-pinned" >> "$GITHUB_PATH"
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+          cache-dependency-path: go.work.sum
+
+      # gcc is never used; zig cc stands in as the C compiler throughout.
+      - name: Use zig cc as the C compiler
+        run: |
+          echo "CC=zig cc" >> "$GITHUB_ENV"
+
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium
