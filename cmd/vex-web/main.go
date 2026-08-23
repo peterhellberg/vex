@@ -305,8 +305,13 @@ func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 		defer f.Close()
 
 		fi, err := f.Stat()
-		if err != nil || fi.IsDir() {
-			fmt.Fprintf(stderr, "read %s: %v\n", displayPath(path), err)
+		if err != nil {
+			fmt.Fprintf(stderr, "stat %s: %v\n", displayPath(path), err)
+			http.Error(w, "cart not found", http.StatusNotFound)
+			return
+		}
+		if fi.IsDir() {
+			fmt.Fprintf(stderr, "cart %s is a directory\n", displayPath(path))
 			http.Error(w, "cart not found", http.StatusNotFound)
 			return
 		}
