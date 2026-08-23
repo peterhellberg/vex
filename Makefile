@@ -153,10 +153,12 @@ distclean: clean
 # let the user try `vex cart.wasm` immediately after unpacking. Strip them
 # here if a future policy wants a binary-only archive.
 
+# Build vex-web into <staging>/<target>/vex-$(VERSION)/bin/ alongside the
+# Zig-installed vex + vex-init binaries.
 define vex-web-cross
 	GOOS=$(1) GOARCH=$(2) CGO_ENABLED=0 \
 		go build -trimpath -ldflags='-s -w' \
-			-o $(STAGING_DIR)/$(3)/vex-web$(4) ./cmd/vex-web
+			-o $(STAGING_DIR)/$(3)/bin/vex-web$(4) ./cmd/vex-web
 endef
 
 # Binaries aren't stripped: the Zig builds have no -Dstrip equivalent in
