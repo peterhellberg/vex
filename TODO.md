@@ -176,6 +176,34 @@ Plan (mirror ../4b/build.zig addRaylib):
 - [x] REVIEW.md "Resolution status" section added after the intro;
       deferred items listed (raylib module trimming, cross-host pixel diff).
 
+## 18. Third pass: cmd/vex performance — DONE
+
+- [x] palette -> g_palette as packed uint32 RGBA (R,G,B,A byte order, same
+      as Go's pixel buffer so hashes compare).
+- [x] uint32_t g_fb[320*180]; fb_pset/fb_hline/fb_fill/fb_rect helpers;
+      ALL host_* primitives rewritten onto the framebuffer (cls=fill,
+      blit keeps run batching + now clips rows/x like Go, text writes
+      glyph bits from g_font_rows, rectb decomposed exactly like Go).
+- [x] Dropped font atlas texture, draw_text, BeginTextureMode around the
+      cart; present = UpdateTexture(plain texture) once/frame; removed
+      negative-src Y-flips; fullscreen toggle regenerates via
+      make_screen_texture().
+- [x] Headless debug mode: -n/--frames N (quiet summary incl. ms/frame,
+      fb-change count, fnv1a64, palette), -t/--trace (line per framebuffer
+      CHANGE, not per frame), --dump <file> (raw RGBA). Inputs gated on
+      g_window_open (= Go's uiReady); title/beep inert headless.
+- [x] golden_test.go records sha256 AND fnv1a64 per cart; goldens
+      regenerated in the new two-line format. Local VEX_GOLDEN_DUMP env
+      hook dumps raw pixels for debugging.
+- [x] PARITY FIX 1: line()/tri() endpoint gate at ±VEX_COORD_MAX added to
+      Go + JS hosts (C already had it) — unbounded bresenham + divergent
+      pixels eliminated.
+- [x] PARITY FIX 2: -ffp-contract=off for main.c — clang fused tri edge
+      math into FMA on native builds, moving individual edge pixels vs
+      Go/JS separate mul+add.
+- Verified: C-vs-Go FNV parity 11/11 carts at -n 30; windowed run under X
+  OK; -t and --dump exercised; go vet/test both modules; zig build test.
+
 ## Notes / decisions
 
 - §2 chosen semantics: blit key = RAW compare (documented); mx/my = CLAMPED
@@ -201,3 +229,36 @@ Plan (mirror ../4b/build.zig addRaylib):
       cold distclean→make all cycle: zero warnings, no libraylib.a.
 - Verified: node --check (as .mjs), go vet/test both modules (-count=1),
   zig build test, vex-web bundle + directory smoke tests.
+
+## 18. Third pass: cmd/vex performance — IN PROGRESS
+
+Goal: make the reference host as fast as the Go/JS hosts' architecture.
+
+Core insight: every cart draw call currently becomes raylib GL work inside
+a render texture (pset == one textured quad; cls == fullscreen quad).
+The Go/JS hosts rasterize a CPU framebuffer and upload once per frame.
+
+Plan:
+1. palette[] -> packed uint32 RGBA (byte order R,G,B,A in memory, matching
+   Go's g.pixels so framebuffer hashes are directly comparable).
+2. Add uint32_t g_fb[320*180]; rewrite all host_* primitives onto it:
+   cls=fill, pset=bounds-checked store, hline=span fill, rect=row spans,
+   blit keeps run batching, text writes glyph bits directly, line/trib via
+   existing bresenham, tri via existing scanline (spans -> fb writes).
+3. Drop font atlas texture + BeginTextureMode around update(). Present =
+   UpdateTexture(plain 320x180 RGBA8 texture) once/frame, then existing
+   letterboxed DrawTexturePro. Remove negative-src-height Y-flips (regular
+   textures are top-down, unlike render textures). Keep recreate-on-
+   fullscreen-toggle using LoadTextureFromImage.
+4. Add `-n <frames>` headless mode: no window/audio, inputs return 0
+   (mirrors Go's uiReady=false used by golden tests), runs boot+N updates,
+   prints FNV-1a64 of the framebuffer -> lets C output be diffed against
+   the Go goldens for pixel parity across ALL carts.
+
+Verification:
+- make all compiles clean.
+- For every bin/carts/*.wasm: `./bin/vex -n 30 CART` FNV must equal the
+  FNV emitted by `go test -update` goldens -> proves C==Go pixels.
+- zig build test / go tests still green.
+
+Status: edits below not started yet.
