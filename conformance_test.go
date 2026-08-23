@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -23,25 +24,16 @@ func mustRead(t *testing.T, path string) string {
 // section returns the text between start (inclusive) and the next occurrence
 // of end.
 func section(s, start, end string) string {
-	i := index(s, start)
+	i := strings.Index(s, start)
 	if i < 0 {
 		return ""
 	}
 	s = s[i:]
-	j := index(s[len(start):], end)
+	j := strings.Index(s[len(start):], end)
 	if j < 0 {
 		return ""
 	}
 	return s[:len(start)+j+len(end)]
-}
-
-func index(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 var (
