@@ -1035,7 +1035,7 @@ int main(int argc, char** argv) {
                changes, (unsigned long long)fnv1a64(g_fb, sizeof g_fb),
                (unsigned)m3_GetMemorySize(cart.rt));
         for (int i = 0; i < 16; i++)
-            printf("palette[%x]=%02x%02x%02x\n", i,
+            printf("palette[%X]=%02X%02X%02X\n", i,
                    (unsigned)(g_palette[i] & 0xFF),
                    (unsigned)((g_palette[i] >> 8) & 0xFF),
                    (unsigned)((g_palette[i] >> 16) & 0xFF));
