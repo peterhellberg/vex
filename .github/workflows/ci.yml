@@ -63,11 +63,13 @@ jobs:
           echo "CC=zig cc" >> "$GITHUB_ENV"
 
       - name: Install X11/GL dev libraries (raylib link deps)
+        # glvnd's libgl-dev is enough to link (no runtime rendering here).
+        # apt-get update costs several seconds; use the runner image's index
+        # first and refresh only if the install fails.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgl1-mesa-dev libx11-dev libxrandr-dev \
-            libxinerama-dev libxi-dev libxcursor-dev pkg-config
+          pkgs="libgl-dev libx11-dev libxrandr-dev libxinerama-dev libxi-dev libxcursor-dev"
+          sudo apt-get install -y --no-install-recommends $pkgs ||
+            { sudo apt-get update && sudo apt-get install -y --no-install-recommends $pkgs; }
 
       - name: Build SDK package (vex-init, example + test carts)
         # Debug builds keep CI fast; these steps only verify compilation.
