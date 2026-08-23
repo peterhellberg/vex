@@ -169,6 +169,7 @@ release-linux:
 		-Dtarget=native --release=fast -Dlinux_display_backend=$(LINUX_DISPLAY_BACKEND)
 	$(call vex-web-cross,linux,amd64,linux-amd64/vex-$(VERSION),)
 	cp README.md $(STAGING_DIR)/linux-amd64/vex-$(VERSION)/
+	cp LICENSE $(STAGING_DIR)/linux-amd64/vex-$(VERSION)/
 	$(call strip-binary,linux-amd64/vex-$(VERSION)/bin/vex)
 	$(call strip-binary,linux-amd64/vex-$(VERSION)/bin/vex-init)
 	tar -czf $(CURDIR)/$(RELEASE_DIR)/vex-$(VERSION)-linux-amd64.tar.gz \
@@ -185,6 +186,7 @@ release-windows:
 		-Dtarget=x86_64-windows-gnu --release=fast
 	$(call vex-web-cross,windows,amd64,windows-amd64/vex-$(VERSION),.exe)
 	cp README.md $(STAGING_DIR)/windows-amd64/vex-$(VERSION)/
+	cp LICENSE $(STAGING_DIR)/windows-amd64/vex-$(VERSION)/
 	# Windows binaries aren't stripped: `strip` is platform-aware and the
 	# Linux toolchain can't touch a PE file.
 	(cd $(STAGING_DIR)/windows-amd64 && \
@@ -202,6 +204,7 @@ release-macos:
 		-Dtarget=x86_64-macos --release=fast
 	$(call vex-web-cross,darwin,amd64,macos-amd64/vex-$(VERSION),)
 	cp README.md $(STAGING_DIR)/macos-amd64/vex-$(VERSION)/
+	cp LICENSE $(STAGING_DIR)/macos-amd64/vex-$(VERSION)/
 	# macOS binaries aren't stripped on a Linux host: the Mach-O strip tools
 	# (otool, dsymutil, llvm-strip with the right target) aren't reliably
 	# available, and llvm-strip on the wrong target would corrupt the

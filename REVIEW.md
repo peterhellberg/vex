@@ -365,11 +365,6 @@ Concrete suggestions, in order of value:
 
 ## 8. Repo hygiene
 
-- **No LICENSE file.** The README advertises `go install`-able commands and
-  GitHub publishes the repo; without a license, others technically can't reuse
-  anything. Adding MIT/Apache-2.0 (and a `LICENSE` entry to release archives)
-  is a five-minute fix with outsized value. (wasm3/raylib/wazero/ebitengine
-  all require attribution anyway.)
 - **No CI badge/workflow** — see §7.1.
 - **docs/** contains committed build artifacts (`main.wasm`, `sources.tar`).
   Fine if intentional for GitHub Pages, but worth a `docs/README` or a line in
@@ -385,7 +380,7 @@ Concrete suggestions, in order of value:
 
 | Priority | Item |
 |----------|------|
-| High | §1.1 `mbtn` OOB, §1.2 JS stale mem view, §1.3 CSS order, §8 LICENSE |
+| High | §1.1 `mbtn` OOB, §1.2 JS stale mem view, §1.3 CSS order |
 | Medium | §1.4–1.7 small bugs, §3.1–3.3 robustness, §4 raylib direct compile, §7.1 CI + zig test step |
 | Low | §2 semantics alignment, §5 table generation, §6 polish |
 
