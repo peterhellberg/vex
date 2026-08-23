@@ -24,6 +24,20 @@ jobs:
           path: /tmp/zig-pinned
           key: zig-${{ runner.os }}-${{ steps.zig-version.outputs.version }}
 
+      - name: Cache Zig build caches
+        # Zig's cache is content-addressed, so sharing it across runs is safe.
+        # The key includes the commit to force a fresh save each run; the
+        # restore-keys prefix still restores the newest previous cache, so only
+        # changed files recompile (raylib + wasm3 dominate the C host step).
+        uses: actions/cache@v5
+        with:
+          path: |
+            .zig-cache
+            cmd/vex/.zig-cache
+          key: zcache-${{ runner.os }}-${{ steps.zig-version.outputs.version }}-${{ github.sha }}
+          restore-keys: |
+            zcache-${{ runner.os }}-${{ steps.zig-version.outputs.version }}-
+
       - name: Install pinned Zig (version from build.zig.zon)
         run: ./scripts/install-zig.sh
         env:
