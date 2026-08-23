@@ -67,7 +67,7 @@ pub fn fromPNG(comptime input: []const u8, comptime max_size: usize) Sprite(max_
             const t2 = input[pos + 6];
             const t3 = input[pos + 7];
 
-            if (t0 == 'P') {
+            if (t0 == 'P' and t1 == 'L' and t2 == 'T' and t3 == 'E') {
                 found_plte = true;
             } else if (t0 == 'I' and t1 == 'D' and t2 == 'A' and t3 == 'T') {
                 if (idat_total == 0) idat_off = pos + 8;
@@ -137,6 +137,10 @@ fn paeth(a: u8, b: u8, c: u8) u8 {
 
 // ---- inflate (RFC 1951 deflate decompression) -------------------------------
 
+/// Inflate a raw DEFLATE stream. COMPTIME ONLY: the returned slice points
+/// into an internal buffer that only lives in the comptime evaluation
+/// context (returning it at runtime would dangle), and output is capped at
+/// 256 KiB.
 fn inflate(data: []const u8) []const u8 {
     var pos: usize = 2;
 
