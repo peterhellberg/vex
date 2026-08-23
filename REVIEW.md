@@ -22,6 +22,44 @@ The suggestions below are ordered roughly by priority within each section.
 
 ---
 
+## Resolution status
+
+All findings have been addressed except where noted:
+
+- **§1 Bugs** — all seven fixed (mbtn OOB, JS blit view refresh, CSS
+  fallback order, Makefile uninstall, vex-run CLI exit codes, README links,
+  typo).
+- **§2 Cross-host consistency** — `blit` key now raw-compares in all hosts;
+  `mx()/my()` clamp everywhere (matching the documented 0..319/0..179);
+  `line`/`tri`/`trib` use the same Bresenham + f64 integer-scanline
+  algorithms in all three hosts; JS `circ`/`circb` gained the same radius
+  clamp as C/Go.
+- **§3 Robustness** — all fixed (link errors reported, headless audio stall
+  removed, x/sys/unix portability, strict scale parsing, unknown-flag
+  diagnostics, render-texture checks, localhost default bind,
+  ServeContent-based cart serving, SSE keepalive, spr.zig hardening).
+- **§4 raylib build** — `cmd/vex/build.zig` now compiles raylib sources
+  directly and links platform libs itself (4b approach); the link is quiet
+  and no longer depends on raylib's build.zig API.
+- **§5 Duplication** — FONT8/palette drift is now caught by root
+  `conformance_test.go`; stale root zig-pkg deleted; compile_flags.txt
+  regenerated at the repo root with working dep paths.
+- **§6 Testing** — CI workflow added (`.github/workflows/ci.yml`) incl. the
+  new `zig build test` step; Go unit tests for parse/raster/beep engine;
+  golden framebuffer-hash tests for every built cart; hostile-input test
+  cart (`test_hostile`). The Playwright suite runs as a separate manually
+  triggered workflow (`.github/workflows/test-web.yml`).
+- **§7/§8** — LICENSE (MIT) added earlier; docs-target regeneration note and
+  `scripts/install-zig.sh` done.
+
+Deferred on purpose: trimming raylib's rmodels/rtext modules (an experiment
+for after the direct-source build settles), and full *cross-host* pixel
+comparison of rendered carts (goldens currently pin each host's output
+independently; comparing C vs Go vs JS framebuffers needs a headless C/JS
+render harness).
+
+---
+
 ## 1. Bugs
 
 ### 1.1 C host: `mbtn()` accepts out-of-range buttons → OOB read
