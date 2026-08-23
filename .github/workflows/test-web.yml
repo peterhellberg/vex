@@ -29,5 +29,8 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-chromium
 
+      - name: Install Chromium system dependencies
+        run: npx --yes playwright install-deps chromium
+
       - name: Build the cart bundle and drive the page
         run: make test-web
