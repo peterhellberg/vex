@@ -25,12 +25,13 @@ jobs:
           key: zig-${{ runner.os }}-${{ steps.zig-version.outputs.version }}
 
       - name: Cache Zig build caches
-        # Zig's cache is content-addressed, so sharing it across runs is safe.
-        # zig-pkg holds the fetched dependency sources (raylib, wasm3,
-        # xcode_frameworks), saving a GitHub download per run. The key includes
-        # the commit to force a fresh save each run; the restore-keys prefix
-        # still restores the newest previous cache, so only changed files
-        # recompile (raylib + wasm3 dominate the C host step).
+        # One entry per pinned Zig version, saved once and reused exactly:
+        # on an exact hit actions/cache skips the post-job upload entirely.
+        # Staleness is not a concern because both caches are
+        # content-addressed -- changed sources get new hashes and rebuild,
+        # and fetched packages live under their .zon hashes. The
+        # restore-keys fallback warms a fresh entry (e.g. after a pin bump)
+        # from the closest previous one.
         uses: actions/cache@v5
         with:
           path: |
@@ -38,9 +39,9 @@ jobs:
             zig-pkg
             cmd/vex/.zig-cache
             cmd/vex/zig-pkg
-          key: zcache-${{ runner.os }}-${{ steps.zig-version.outputs.version }}-${{ github.sha }}
+          key: zcache-${{ runner.os }}-${{ steps.zig-version.outputs.version }}
           restore-keys: |
-            zcache-${{ runner.os }}-${{ steps.zig-version.outputs.version }}-
+            zcache-${{ runner.os }}-
 
       - name: Install pinned Zig (version from build.zig.zon)
         run: ./scripts/install-zig.sh
