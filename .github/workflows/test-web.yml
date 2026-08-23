@@ -22,16 +22,10 @@ jobs:
           path: /tmp/zig-pinned
           key: zig-${{ runner.os }}-${{ steps.zig-version.outputs.version }}
 
-      - name: Cache Zig build caches
-        uses: actions/cache@v5
-        with:
-          path: |
-            .zig-cache
-            zig-pkg
-          key: zcache-${{ runner.os }}-${{ steps.zig-version.outputs.version }}
-          restore-keys: |
-            zcache-${{ runner.os }}-
-
+      # No shared zcache here: actions/cache entries are scoped to their path
+      # list, so this workflow (root package only) can never see ci.yml's
+      # cmd/vex-heavy entry -- and the root package (vex-init + two small
+      # carts) compiles in seconds without a cache.
       - name: Install pinned Zig (version from build.zig.zon)
         run: ./scripts/install-zig.sh
         env:
