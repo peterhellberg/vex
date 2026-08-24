@@ -556,7 +556,9 @@ m3ApiRawFunction(host_btnp) {
     m3ApiGetArg(int32_t, button)
     int held = g_window_open && button >= 0 && button < 6
         ? IsKeyDown(VEX_KEYS[button]) : 0;
-    int prev = (g_prev_btns >> button) & 1;
+    // Clamp before the shift: hostile carts probe out-of-range buttons and
+    // a negative shift is undefined behavior (crashes under Zig's cc).
+    int prev = button >= 0 && button < 8 ? (g_prev_btns >> button) & 1 : 0;
     m3ApiReturn(held && !prev);
 }
 
