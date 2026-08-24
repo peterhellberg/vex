@@ -69,5 +69,12 @@ VEX_EXPORT("update") void update(void) {
   tone(0, 100000, -5);
   tone(-9, 440, 100);
   tone(99, 440, 100000);
+
+  // noise/vol/apos: same hostile treatment; nothing may crash or click.
+  noise(0, 0, 0);
+  noise(77, -1, 20000);
+  vol(-2, 99);
+  vol(42, -7);
+  (void)apos();
   palreset();
 }

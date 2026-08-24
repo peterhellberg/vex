@@ -3,11 +3,11 @@
 // vex-web). The melody spans a wide frequency range and note lengths, plus a
 // rapid-fire section that stresses the hosts' voice mixing.
 //
-// The cart is a mechanical port of the original beep() version: it still
-// sustains held notes by re-triggering a flat legacy blip every RETRIGGER
-// frames on channel 0 (tone's ms <= 0 shim keeps the old 100ms blip). A note
-// with freq 0 is a rest (no tone). Frequencies are drawn on a log scale so
-// octaves are evenly spaced.
+// The cart still sustains held notes the old way, re-triggering a flat
+// legacy blip (ms < 0) every RETRIGGER frames on channel 0 -- a deliberate
+// stress test of rapid retriggers. New carts would just use ms == 0 and let
+// the voice sustain until the next note. A note with freq 0 is a rest (no
+// tone). Frequencies are drawn on a log scale so octaves are evenly spaced.
 #include "vex.h"
 
 #define NORMAL 12  // frames per regular note (0.2s at 60fps)
@@ -247,7 +247,7 @@ VEX_EXPORT("update") void update(void) {
   if (retrigger <= 0) {
     retrigger = RETRIGGER;
     if (n->freq > 0) {
-      tone(0, n->freq, 0);
+      tone(0, n->freq, -1);
       tones++;
       flash = RETRIGGER;
     }
