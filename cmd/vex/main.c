@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 #include <time.h>
 
 #include "raylib.h"
@@ -608,112 +609,159 @@ m3ApiRawFunction(host_palreset) {
     m3ApiSuccess();
 }
 
-// ---- audio (beep) ---------------------------------------------------------
-// One persistent Sound whose buffer is rewritten per call. Each beep()
-// overwrites the Sound's f32-stereo buffer with a fresh ~100ms square wave at
-// the requested frequency and restarts playback, so a beep() arriving while a
-// previous blip is still playing cuts it off and starts a new one. The Sound
-// is created lazily on the first call (so headless runs that never beep()
-// don't touch the audio device) and unloaded on shutdown.
+// ---- audio (tone) ---------------------------------------------------------
+// Four independent voices (VEX_TONE_CHANNELS), one persistent Sound per
+// channel whose f32 buffer is rewritten per call. A tone() on a channel
+// overwrites that channel's Sound with a fresh square wave and restarts it,
+// so a new note on an occupied channel cuts the old one off at frame 0,
+// while notes on different channels overlap: raylib/miniaudio sums the four
+// Sounds into the device output, where the sum clips softly at full scale.
+// The Sounds are created lazily on first use per channel (so headless runs
+// that never tone() don't touch the audio device) and unloaded on shutdown.
 //
-// The previous design used an 8-Sound pool where each beep() produced a fresh
-// Sound and stacked them: a cart calling beep() in a tight loop piled up to
-// 8 overlapping copies of the same blip (8x amplitude) and silently dropped
-// the 9th. Go and JS already use the monophonic retrigger model, and that is
-// also what PICO-8-style beeps mean in practice, so the C host now matches.
-static Sound g_beep = {0};
-static bool g_beep_loaded = false;
-static float* g_beep_buf = NULL;
-static int g_beep_frames = 0;
-static int g_beep_rate = 0;
+// Each voice's buffer grows to fit the longest tone played on it so far
+// (doubling), so carts cycling through a few durations don't thrash
+// allocations. ms is clamped to TONE_MAX_MS; the whole capacity is rewritten
+// on every call (the tail as silence) because UpdateSound() can only
+// overwrite the buffer, never shrink it.
+#define VEX_TONE_CHANNELS 4 // keep in sync with vex.h / vex.zig / README
+#define TONE_MAX_MS       5000
+
+typedef struct {
+    Sound  snd;
+    bool   loaded;
+    float* buf;        // mono f32, cap_frames long
+    int    cap_frames;
+} ToneVoice;
+
+static ToneVoice g_voices[VEX_TONE_CHANNELS];
+static int g_tone_rate = 0;
 static bool g_audio_ready = false;
 
-static void beep_cleanup(void) {
-    if (g_beep_loaded) {
-        UnloadSound(g_beep);
-        g_beep = (Sound){0};
-        g_beep_loaded = false;
+static void tone_cleanup(void) {
+    for (int c = 0; c < VEX_TONE_CHANNELS; c++) {
+        ToneVoice* v = &g_voices[c];
+        if (v->loaded) {
+            UnloadSound(v->snd);
+            v->snd = (Sound){0};
+            v->loaded = false;
+        }
+        RL_FREE(v->buf);
+        v->buf = NULL;
+        v->cap_frames = 0;
     }
-    RL_FREE(g_beep_buf);
-    g_beep_buf = NULL;
-    g_beep_frames = 0;
-    g_beep_rate = 0;
     if (g_audio_ready) {
         g_audio_ready = false;
         CloseAudioDevice();
     }
 }
 
-// beep(freq): play a ~100ms square-wave blip at freq Hz, monophonic.
-// The C host used to allocate a fresh Sound per call from a small s16 mono
-// buffer; it now writes directly into a f32 stereo buffer at the device's
-// native rate and uses UpdateSound() to swap it into the persistent Sound.
-// That keeps the wave generation in float math (matching the device format)
-// while avoiding the per-call AudioBuffer allocation that LoadSoundFromWave
-// would otherwise do, and lets PlaySound()'s built-in restart-from-frame-0
-// handle the retrigger for free.
-m3ApiRawFunction(host_beep) {
+// Discover the device sample rate via a 1-frame placeholder Sound (raylib
+// doesn't expose a public getter). Any rate we pass to LoadSoundFromWave is
+// resampled to the device rate anyway, so the placeholder's rate is irrelevant.
+static int tone_device_rate(void) {
+    if (g_tone_rate > 0) return g_tone_rate;
+    float ph[2] = {0.0f, 0.0f};
+    Wave pw = {
+        .frameCount = 1,
+        .sampleRate = 44100,
+        .sampleSize = 32,
+        .channels = 2,
+        .data = ph,
+    };
+    Sound ps = LoadSoundFromWave(pw);
+    int rate = (int)ps.stream.sampleRate;
+    UnloadSound(ps);
+    if (rate <= 0) rate = 44100;
+    g_tone_rate = rate;
+    return rate;
+}
+
+// tone(channel, freq, ms): play a square wave on voice 0..3 (out-of-range
+// channels clamp). freq <= 0 silences the channel; freq > 20000 clamps.
+// ms <= 0 plays the legacy flat ~100ms blip -- the compatibility shim for
+// beep() call sites being ported, sounding exactly like the old beep(). A
+// positive ms plays that many milliseconds (clamped to TONE_MAX_MS) with an
+// exponential decay envelope reaching ~1/256 amplitude at the last sample,
+// so held notes fade out instead of clicking off.
+m3ApiRawFunction(host_tone) {
+    m3ApiGetArg(int32_t, channel)
     m3ApiGetArg(int32_t, freq)
+    m3ApiGetArg(int32_t, ms)
     if (!g_audio_ready) m3ApiSuccess();
 
-    if (!g_beep_loaded) {
-        // Load a 1-frame placeholder to discover the device sample rate
-        // (raylib doesn't expose a public getter). Any rate we pass to
-        // LoadSoundFromWave is resampled to the device rate, so the
-        // placeholder's rate is irrelevant.
-        float ph[2] = {0.0f, 0.0f};
-        Wave pw = {
-            .frameCount = 1,
-            .sampleRate = 44100,
-            .sampleSize = 32,
-            .channels = 2,
-            .data = ph,
-        };
-        Sound ps = LoadSoundFromWave(pw);
-        g_beep_rate = (int)ps.stream.sampleRate;
-        UnloadSound(ps);
-        if (g_beep_rate <= 0) g_beep_rate = 44100;
+    int ch = channel < 0 ? 0 : channel;
+    if (ch >= VEX_TONE_CHANNELS) ch = VEX_TONE_CHANNELS - 1;
+    ToneVoice* v = &g_voices[ch];
 
-        g_beep_frames = g_beep_rate / 10; // 100ms
-        g_beep_buf = RL_MALLOC((size_t)g_beep_frames * 2 * sizeof(float));
-        if (!g_beep_buf) m3ApiSuccess();
-        for (int i = 0; i < g_beep_frames * 2; i++) g_beep_buf[i] = 0.0f;
-
-        Wave wave = {
-            .frameCount = (unsigned int)g_beep_frames,
-            .sampleRate = (unsigned int)g_beep_rate,
-            .sampleSize = 32,
-            .channels = 2,
-            .data = g_beep_buf,
-        };
-        g_beep = LoadSoundFromWave(wave);
-        g_beep_loaded = true;
+    // Silence this channel now; nothing else to do.
+    if (freq < 1) {
+        if (v->loaded && IsSoundPlaying(v->snd)) StopSound(v->snd);
+        m3ApiSuccess();
     }
 
-    if (freq < 1) freq = 1;
-    if (freq > 20000) freq = 20000;
+    // Grow the voice's buffer to fit this tone (doubling from the legacy
+    // blip size). The Sound is (re)created whenever the buffer moves, since
+    // its internal audio buffer aliases our memory.
+    int rate = tone_device_rate();
+    int dur_ms = ms <= 0 ? 100 : ms;
+    if (dur_ms > TONE_MAX_MS) dur_ms = TONE_MAX_MS;
+    long long need = (long long)rate * dur_ms / 1000;
+    if (need < 1) need = 1;
+
+    if ((long long)v->cap_frames < need) {
+        int cap = rate / 10; // start at the legacy blip size, grow by doubling
+        while ((long long)cap < need) cap *= 2;
+
+        RL_FREE(v->buf);
+        v->buf = RL_MALLOC((size_t)cap * sizeof(float));
+        if (!v->buf) {
+            v->cap_frames = 0;
+            v->loaded = false;
+            m3ApiSuccess();
+        }
+        memset(v->buf, 0, (size_t)cap * sizeof(float));
+
+        if (v->loaded) UnloadSound(v->snd);
+        Wave wave = {
+            .frameCount = (unsigned int)cap,
+            .sampleRate = (unsigned int)rate,
+            .sampleSize = 32,
+            .channels = 1,
+            .data = v->buf,
+        };
+        v->snd = LoadSoundFromWave(wave);
+        v->loaded = true;
+        v->cap_frames = cap;
+    }
 
     // Square wave at the device rate, ±8000/32768 ≈ ±0.24 of full scale to
     // match the Go host's s16 peak (8000) and the JS host's 8000/32768 gain.
     // Phase starts at sign=+1 on sample 0 and toggles every `half` samples,
-    // so a retrigger after a different frequency restarts the new blip at a
-    // known phase instead of clicking mid-half-period.
+    // so a retrigger after a different frequency restarts the new note at a
+    // known phase instead of clicking mid-half-period. The decay envelope
+    // steps down multiplicatively so it needs no per-sample expf().
     const float amp = 8000.0f / 32768.0f;
-    const int half = g_beep_rate / (2 * freq); // samples per square half-period
+    const bool decay = ms > 0;
+    const float step = decay ? expf(-5.545f / (float)need) : 1.0f; // ~1/256 at the end
+    const int half = rate / (2 * freq); // samples per square half-period
+    float env = amp;
     int sign = 1;
-    for (int i = 0; i < g_beep_frames; i++) {
+    for (int i = 0; i < (int)need; i++) {
         if (half > 0 && i > 0 && i % half == 0) sign = -sign;
-        float s = (float)sign * amp;
-        g_beep_buf[i * 2] = s;
-        g_beep_buf[i * 2 + 1] = s;
+        v->buf[i] = (float)sign * env;
+        env *= step;
     }
 
-    // UpdateSound() stops the buffer and memcpys our f32 stereo data in place
-    // (the Sound's internal buffer is f32 stereo at the device rate, same as
-    // g_beep_buf, so the copy is a straight byte-for-byte overwrite). The
-    // following PlaySound() then restarts from frame 0, which is the retrigger.
-    UpdateSound(g_beep, g_beep_buf, g_beep_frames);
-    PlaySound(g_beep);
+    // The tail beyond `need` must be silence: UpdateSound() overwrites the
+    // whole capacity buffer and older samples would otherwise linger.
+    for (int i = (int)need; i < v->cap_frames; i++) v->buf[i] = 0.0f;
+
+    // UpdateSound() stops the buffer and memcpys our f32 mono data in place
+    // (miniaudio converts mono -> device stereo during mixing). The following
+    // PlaySound() then restarts from frame 0, which is the retrigger.
+    UpdateSound(v->snd, v->buf, v->cap_frames);
+    PlaySound(v->snd);
     m3ApiSuccess();
 }
 
@@ -747,7 +795,7 @@ static M3Result link_host(IM3Module mod) {
     LINK("mbtn",     "i(i)",     &host_mbtn);
     LINK("pal",      "v(ii)",    &host_pal);
     LINK("palreset", "v()",      &host_palreset);
-    LINK("beep",     "v(i)",     &host_beep);
+    LINK("tone",     "v(iii)",   &host_tone);
     #undef LINK
     return first_err;
 }
@@ -765,7 +813,7 @@ static void die(IM3Runtime rt, const char* what, M3Result err) {
     // before InitWindow() (e.g. from a wasm load error in main).
     if (g_window_open) {
         g_window_open = false;
-        beep_cleanup();
+        tone_cleanup();
         CloseWindow();
     }
     exit(1);
@@ -1005,7 +1053,7 @@ int main(int argc, char** argv) {
     fb_fill(g_palette[0]);
 
     // ---- headless run (-n frames): no window, no audio --------------------
-    // Inputs read as released, title() is ignored, beep() is silent -- which
+    // Inputs read as released, title() is ignored, tone() is silent -- which
     // makes runs fully deterministic and directly comparable against the Go
     // host's golden framebuffer hashes.
     if (frames >= 0) {
@@ -1064,8 +1112,8 @@ int main(int argc, char** argv) {
     Texture2D screen = make_screen_texture();
     if (screen.id == 0) die(cart.rt, "cannot create framebuffer texture", NULL);
 
-    // Audio for beep(). InitAudioDevice() is safe to call when no audio
-    // device exists (headless/CI) -- it just fails and beep() stays silent.
+    // Audio for tone(). InitAudioDevice() is safe to call when no audio
+    // device exists (headless/CI) -- it just fails and tone() stays silent.
     InitAudioDevice();
     g_audio_ready = IsAudioDeviceReady();
 
@@ -1209,7 +1257,7 @@ int main(int argc, char** argv) {
 
     UnloadTexture(screen);
     g_window_open = false;
-    beep_cleanup();
+    tone_cleanup();
     CloseWindow();
     m3_FreeRuntime(cart.rt);
     m3_FreeEnvironment(env);
