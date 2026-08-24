@@ -671,9 +671,10 @@ static pthread_mutex_t g_tone_lock = PTHREAD_MUTEX_INITIALIZER;
 static ToneTrigger g_pending[VEX_TONE_CHANNELS];
 static bool g_pending_set[VEX_TONE_CHANNELS];
 
-// Full-scale single-voice amplitude: matches main's beep (8000/32768) so
-// loudness stays comparable across hosts.
-#define TONE_BASE_AMP (8000.0f / 32768.0f)
+// Full-scale single-voice amplitude in s16 output units, matching the Go
+// host's toneFullAmp. The mixer sums in s16 units and divides by 32768
+// once at the float write-out.
+#define TONE_FULL_AMP 8000.0f
 
 static void tone_cleanup(void) {
     if (g_stream_ready) {
@@ -703,6 +704,11 @@ static void voice_next_segment(ToneVoice* v) {
         }
         v->seg_left = n;
         v->slope = (v->seg_end[v->seg] - v->level) / (float)n;
+        if (v->seg == 2 && v->freq_to > 0.0f) {
+            // The slide rides the sustain segment: linear in Hz from the
+            // start frequency to the target across its samples.
+            v->freq_step = (v->freq_to - v->freq_start) / (float)n;
+        }
         return;
     }
 }
@@ -789,8 +795,8 @@ static void mix_callback(void* buffer, unsigned int frames) {
                 break;
             }
 
-            l += s * TONE_BASE_AMP * v->level * v->gl;
-            r += s * TONE_BASE_AMP * v->level * v->gr;
+            l += s * TONE_FULL_AMP * v->level * v->gl;
+            r += s * TONE_FULL_AMP * v->level * v->gr;
 
             // Envelope advances after the sample that used this level.
             if (v->seg_left > 0) v->seg_left--;

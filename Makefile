@@ -14,6 +14,8 @@
 #   make runz     build, then run the Zig example cart
 #   make web      serve the browser build (override the cart with CART=...)
 #   make test-web run Playwright tests against the browser build (override the cart with CART=...)
+#   make test-hosts run the Go engine/conformance tests plus the C mixer
+#                    harness (main.c's audio section compiled against stubs)
 #   make install  install the vex + vex-init + vex-web + vex-run binaries to ~/.local/bin
 #   make release          cross-compile release archives for Linux, Windows and
 #                         macOS into ./release
@@ -32,7 +34,7 @@ CART ?= bin/carts/cart.wasm
 # Path to the bundled test directory (Playwright scripts).
 TEST_DIR := cmd/vex-web/test
 
-.PHONY: all run runz web test-web install uninstall clean distclean test-deps docs
+.PHONY: all run runz web test-web test-hosts install uninstall clean distclean test-deps docs
 .PHONY: release release-linux release-windows release-macos
 
 # Version stamped into every archive name. Single source of truth: the SDK
@@ -73,6 +75,27 @@ web:
 # on the way out (success, failure, or exception); the explicit rm
 # below is a belt-and-suspenders safety net in case the script is
 # killed before its finally{} runs.
+# --- test-hosts ------------------------------------------------------------
+#
+# Cross-host tone() conformance:
+#   - cmd/vex-run: Go engine unit tests (envelope corners, duty flip point,
+#     slide target, noise LFSR, note mode) and golden cart renders
+#   - root: shared-table conformance (duty cycles, pan gains, soft-clip knee
+#     pinned identically across all three hosts' sources)
+#   - cmd/vex: the real audio section extracted from main.c and driven
+#     through the same trigger path carts use, compiled with zig cc (the
+#     only C compiler this repo uses)
+.PHONY: test-hosts
+test-hosts:
+	cd cmd/vex-run && go test ./...
+	go test ./...
+	awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
+		cmd/vex/main.c > cmd/vex/test/audio_section.inc
+	zig cc -std=c2x -I cmd/vex/test -o cmd/vex/test/tone_test.bin \
+		cmd/vex/test/tone_test.c -lm -lpthread
+	cmd/vex/test/tone_test.bin
+	rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
+
 test-web: $(TEST_DIR)/node_modules/.package-lock.json
 	zig build --prefix .
 	cd $(TEST_DIR) && node test_gamepad.js $(CURDIR)/$(CART)
