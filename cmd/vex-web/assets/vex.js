@@ -539,6 +539,82 @@ const TONE_WORKLET_URL = URL.createObjectURL(new Blob(
     { type: "application/javascript" }));
 
 
+// Run the mixer on the main thread through a ScriptProcessorNode instead of
+// an AudioWorklet. Worklets only exist in secure contexts (HTTPS or
+// localhost), so a console served over plain HTTP from another host would
+// otherwise be silent; this fallback renders the exact same mixer code.
+// Returns a shim exposing the port.postMessage surface tone() uses.
+function startToneFallback(ctx)
+{
+    let registered = null;
+    class ProcessorBase {
+        constructor() { this.port = { onmessage: null }; }
+    }
+    // Execute the serialized mixer with shims in scope; the class methods
+    // close over these parameters, so sampleRate stays bound to this
+    // context's rate for the lifetime of the voice objects.
+    const factory = new Function(
+        "AudioWorkletProcessor", "registerProcessor", "sampleRate",
+        "(" + toneWorkletMain.toString() + ")();");
+    factory(ProcessorBase,
+            (name, cls) => { registered = cls; },
+            ctx.sampleRate);
+
+    void registered;
+    const proc = new registered();
+    proc.port.postMessage = msg => {
+        if (proc.port.onmessage) proc.port.onmessage({ data: msg });
+    };
+
+    const sp = ctx.createScriptProcessor(4096, 1, 2);
+    sp.onaudioprocess = e => {
+        const L = e.outputBuffer.getChannelData(0);
+        const R = e.outputBuffer.getChannelData(1);
+        proc.process([], [[L, R]]);
+    };
+    sp.connect(ctx.destination);
+
+    return proc;
+}
+
+function startToneGraph(ctx)
+{
+    if (!ctx.audioWorklet) {
+        console.warn("vex: audio worklets unavailable (insecure context);" +
+                     " falling back to a main-thread mixer");
+        toneNode = startToneFallback(ctx);
+        toneNodeReady = true;
+        for (let ch = 0; ch < 4; ch++) {
+            if (parkedTriggers[ch]) {
+                toneNode.port.postMessage(parkedTriggers[ch]);
+                parkedTriggers[ch] = null;
+            }
+        }
+        return;
+    }
+
+    ctx.audioWorklet.addModule(TONE_WORKLET_URL).then(() => {
+        toneNode = new AudioWorkletNode(ctx, "tone-mixer",
+                                        { outputChannelCount: [2] });
+        toneNode.connect(ctx.destination);
+        toneNodeReady = true;
+        for (let ch = 0; ch < 4; ch++) {
+            if (parkedTriggers[ch]) {
+                toneNode.port.postMessage(parkedTriggers[ch]);
+                parkedTriggers[ch] = null;
+            }
+        }
+    }).catch(err => {
+        console.error("tone worklet:", err);
+        try {
+            toneNode = startToneFallback(ctx);
+            toneNodeReady = true;
+        } catch (err2) {
+            console.error("tone fallback:", err2);
+        }
+    });
+}
+
 function unlockAudio()
 {
     if (
@@ -548,29 +624,26 @@ function unlockAudio()
         return;
 
     if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // A one-sample silent buffer within the gesture makes iOS start the
-        // audio pipeline for real; otherwise it can defer actual rendering,
-        // and the first blips scheduled after resume() fire together.
-        const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
-        const src = audioCtx.createBufferSource();
-        src.buffer = buf;
-        src.connect(audioCtx.destination);
-        src.start(0);
+            // A one-sample silent buffer within the gesture makes iOS start
+            // the audio pipeline for real; otherwise it can defer actual
+            // rendering, and the first blips scheduled after resume() fire
+            // together.
+            const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+            const src = audioCtx.createBufferSource();
+            src.buffer = buf;
+            src.connect(audioCtx.destination);
+            src.start(0);
 
-        audioCtx.audioWorklet.addModule(TONE_WORKLET_URL).then(() => {
-            toneNode = new AudioWorkletNode(audioCtx, "tone-mixer",
-                                            { outputChannelCount: [2] });
-            toneNode.connect(audioCtx.destination);
-            toneNodeReady = true;
-            for (let ch = 0; ch < 4; ch++) {
-                if (parkedTriggers[ch]) {
-                    toneNode.port.postMessage(parkedTriggers[ch]);
-                    parkedTriggers[ch] = null;
-                }
-            }
-        }).catch(err => console.error("tone worklet:", err));
+            startToneGraph(audioCtx);
+        } catch (err) {
+            // Audio problems must never take cart loading down with them:
+            // this runs inside gesture handlers, and anything uncaught here
+            // surfaces as a page error overlay.
+            console.error("vex: audio setup failed:", err);
+        }
     }
 
     if (audioCtx.state === "suspended")
