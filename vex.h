@@ -51,56 +51,42 @@ VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (
 VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 
 // ---- audio -----------------------------------------------------------------
-// One import covers all synthesized sound: four independent voices rendered
-// by the console mixer. Time is measured in frames (1/60 s) -- the console
-// schedules the envelopes itself, so carts never need an audio clock.
-//
-//   - channels clamp to 0..3; retriggering a busy voice restarts it cleanly
-//     at phase 0 (attack > 0 makes retriggering click-free)
-//   - everything about a call is packed: slide target in the freq bits, ADSR
-//     in the duration bits, peak level in the volume bits, channel/duty/pan/
-//     waveform/note-mode in flags. Prefer the tone_* helpers over hand-
-//     packing.
-
+// One import, four independent voices. Time is in frames (1/60 s); the
+// console schedules envelopes itself, so carts never need an audio clock.
+// Channels clamp to 0..3; retriggering restarts a voice at phase 0
+// (attack > 0 makes it click-free).
 #define VEX_TONE_CHANNELS 4
 
-// tone(): play a tone at `freq` Hz (clamps to 1..20000), or as a MIDI note
-// number with TONE_NOTE_MODE (middle C = 60).
-//
-//   freq     low 16 bits: start frequency; high 16 bits: optional slide
-//            target reached linearly over the sustain duration
-//   duration four ADSR segment lengths in frames, each 0..255:
-//            sustain | release << 8 | decay << 16 | attack << 24 -- build
-//            with tone_duration()
-//   volume   low byte: sustain level 0..100; high byte: optional attack-time
-//            peak level, 0 meaning "use 100" -- build with tone_volume()
-//   flags    channel, duty cycle, panning, waveform, note mode; see the
-//            TONE_* constants and tone_flags()
+// tone(): play a tone at `freq` Hz (clamps to 1..20000), or a MIDI note
+// number with TONE_NOTE_MODE (middle C = 60). Argument layouts -- build
+// with the TONE_* helpers below:
+//   freq     low 16: start Hz; high 16: slide target over the sustain
+//   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
+//   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
+//   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
+//            bit 8 note mode
 VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
-// Waveform selection (bits 6..7). Persists on the channel until the next
-// call says otherwise; the default is a pulse wave.
-#define TONE_PULSE 0                 // value 0
-#define TONE_NOISE (1 << 6)          // 15-bit LFSR stepped at 2*freq Hz,
-                                     // so freq acts as noise color/pitch
+// Waveform (bits 6..7); persists per channel until changed.
+#define TONE_PULSE 0                 // default: pulse wave
+#define TONE_NOISE (1 << 6)          // LFSR stepped at 2*freq Hz
 #define TONE_TRI   (2 << 6)          // triangle; softer, good for bass
 
-// Duty cycle for pulse waves (bits 2..3). TONE_MODE0 is the classic square.
+// Duty cycle for pulses (bits 2..3).
 #define TONE_MODE0 0                 // 50%
 #define TONE_MODE1 (1 << 2)          // 25%
 #define TONE_MODE2 (2 << 2)          // 12.5%
 #define TONE_MODE3 (3 << 2)          // 75%
 
-// Panning (bits 4..5): constant-power gains, center by default.
+// Panning (bits 4..5); constant-power gains, center by default.
 #define TONE_PAN_LEFT  (1 << 4)
 #define TONE_PAN_RIGHT (2 << 4)
 
-// Note mode (bit 8): interpret the frequency parameter as a MIDI note
-// number instead of hertz for exact pitches (middle C = 60).
+// Note mode (bit 8): freq parameter is a MIDI note number.
 #define TONE_NOTE_MODE (1 << 8)
 
-// The helpers below are macros so they work in static initializers (cart
-// data tables); each argument is clamped and masked per byte.
+// Helpers are macros so they work in static initializers (cart tables);
+// each argument is clamped and masked per byte.
 
 // Slide from `freq` to `to` over the sustain duration (linear in Hz).
 #define TONE_SLIDE(freq, to) \
@@ -108,19 +94,13 @@ VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
 #define TONE_DUR_BYTE(v) ((v) < 0 ? 0 : (v) > 255 ? 255 : (v))
 
-// ADSR duration in frames:
-//   sustain: held at the sustain volume
-//   release: ramp back down to 0 afterwards
-//   decay:   ramp from peak down to sustain
-//   attack:  ramp from 0 up to peak
 #define TONE_DURATION(sustain, release, decay, attack) \
   (TONE_DUR_BYTE(sustain) | (TONE_DUR_BYTE(release) << 8) | \
    (TONE_DUR_BYTE(decay) << 16) | (TONE_DUR_BYTE(attack) << 24))
 
 #define TONE_VOL_BYTE(v) ((v) < 0 ? 0 : (v) > 100 ? 100 : (v))
 
-// Sustain volume 0..100 with optional attack-time peak;
-// peak == 0 means "use 100 during the attack".
+// Sustain volume 0..100 with optional attack-time peak (peak 0 = full).
 #define TONE_VOLUME(volume, peak) \
   (TONE_VOL_BYTE(volume) | (TONE_VOL_BYTE(peak) << 8))
 
