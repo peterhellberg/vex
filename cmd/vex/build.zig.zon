@@ -13,11 +13,12 @@
             .hash = "raylib-6.0.0-whq8uCSwLgWWeF3ec3dbG6Rr36SLFL-s2WJ1Q_2E22Bb",
             .lazy = true,
         },
-        .wasm3 = .{
-            .url = "https://github.com/wasm3/wasm3/archive/refs/tags/v0.5.0.tar.gz",
-            .hash = "N-V-__8AAPJTRwDyyZ7xBJrI5d3EG3JfvAPjPvNcdHLp0zqS",
-            .lazy = true,
-        },
+        // wasm3 is vendored into wasm3/ (pinned to the v0.9.0 release
+        // tag) instead of fetched: the
+        // project is dormant (no release since v0.5.0 in 2020, which lacks
+        // the bulk-memory ops modern Zig carts need) and its build.zig
+        // predates current Zig's Build API, so it can't load as a
+        // dependency. Re-vendor from a new tag if one ever lands.
         .xcode_frameworks = .{
             .url = "https://pkg.machengine.org/xcode-frameworks/8a1cfb373587ea4c9bb1468b7c986462d8d4e10e.tar.gz",
             .hash = "N-V-__8AALShqgXkvqYU6f__FrA22SMWmi2TXCJjNTO1m8XJ",
@@ -28,5 +29,7 @@
         "build.zig",
         "build.zig.zon",
         "main.c",
+        "test/tone_test.c",
+        "wasm3",
     },
 }
