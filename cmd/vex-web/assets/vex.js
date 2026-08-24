@@ -374,7 +374,7 @@ function mbtn(button)
     return mouseButtons[button] ? 1 : 0;
 }
 
-//// Part 3c: Audio (tone)
+//// Part 3c: Audio (tone/noise/vol/apos)
 
 // One shared AudioContext, created inside the first user gesture: browsers
 // start a lazily-created context suspended, and iOS only starts one created
@@ -384,14 +384,71 @@ function mbtn(button)
 // rather than queued on a frozen timeline where they would fire together.
 let audioCtx = null;
 
-// Per-channel oscillator + gain nodes, so up to four tones overlap (Web
-// Audio mixes them) while a fresh tone() on an occupied channel replaces
-// that channel's nodes. The pointers are cleared on onended so a tone()
-// that fires after the previous note has already finished doesn't try to
-// stop an already-stopped oscillator.
+// Per-channel node graphs, created once when the context unlocks and kept
+// forever: one square OscillatorNode + one looping noise AudioBufferSource
+// + per-source gain (event envelope) + one volume gain, always connected.
+// Events only schedule parameter ramps on the existing gains -- no node
+// allocation per call -- so steady-state wasm-to-audio traffic is bounded
+// by notes played, not frames, and there is no GC-click source.
 const TONE_CHANNELS = 4;
-let activeOsc = [null, null, null, null];
-let activeGain = [null, null, null, null];
+const TONE_PEAK = 8000 / 32768; // matches the C/Go hosts' ±8000 wave peaks
+let channelNodes = null;
+let noiseBuffer = null;
+let ctxStartTime = 0;
+
+// ~1 s of 16-bit LFSR output (taps 15/13 XNOR, matching the native hosts),
+// stepped at the context sample rate. The playbackRate of each channel's
+// source scales the step cadence so `freq` acts as the noise color/pitch.
+function makeNoiseBuffer(ctx)
+{
+    const len = Math.floor(ctx.sampleRate);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    let lfsr = 0xace1;
+    for (let i = 0; i < len; i++) {
+        const fb = 1 - (((lfsr >> 15) ^ (lfsr >> 13)) & 1);
+        lfsr = ((lfsr << 1) | fb) & 0xffff;
+        data[i] = (lfsr & 1) ? 1 : -1;
+    }
+    return buf;
+}
+
+function initChannelNodes()
+{
+    if (channelNodes) return;
+
+    noiseBuffer = makeNoiseBuffer(audioCtx);
+    ctxStartTime = audioCtx.currentTime;
+    channelNodes = [];
+
+    for (let ch = 0; ch < TONE_CHANNELS; ch++) {
+        const osc = audioCtx.createOscillator();
+        osc.type = "square";
+        osc.frequency.value = 440;
+
+        const oscGain = audioCtx.createGain();
+        oscGain.gain.value = 0;
+
+        const noiseSrc = audioCtx.createBufferSource();
+        noiseSrc.buffer = noiseBuffer;
+        noiseSrc.loop = true;
+
+        const noiseGain = audioCtx.createGain();
+        noiseGain.gain.value = 0;
+
+        const volGain = audioCtx.createGain();
+        volGain.gain.value = 1; // unity until vol() says otherwise
+
+        osc.connect(oscGain).connect(volGain);
+        noiseSrc.connect(noiseGain).connect(volGain);
+        volGain.connect(audioCtx.destination);
+
+        osc.start();
+        noiseSrc.start();
+
+        channelNodes.push({ osc, oscGain, noiseSrc, noiseGain, volGain });
+    }
+}
 
 function unlockAudio()
 {
@@ -414,8 +471,9 @@ function unlockAudio()
         src.start(0);
     }
 
-    if (audioCtx.state === "suspended")
-        audioCtx.resume();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+
+    initChannelNodes();
 }
 
 // touchstart/pointerdown/mousedown/keydown cover every unlock gesture across
@@ -429,71 +487,100 @@ window.addEventListener("keydown", unlockAudio);
 
 function tone(channel, freq, ms)
 {
-    if (!audioCtx || audioCtx.state !== "running")
+    scheduleEvent(channel, false, freq, ms);
+}
+
+function noise(channel, freq, ms)
+{
+    scheduleEvent(channel, true, freq, ms);
+}
+
+// Shared body of tone()/noise(). Out-of-range channels clamp onto 0..3 like
+// every other vex import silently coerces its ints.
+//
+//   freq <= 0 silences the channel; freq > 20000 clamps.
+//   ms > 0   decaying event (exponential to peak/256) over min(ms, 5000) ms
+//   ms == 0  sustains until the next event on the channel (no ramp down)
+//   ms < 0   legacy flat ~100 ms blip
+//
+// A new event crossfades: the old source ramps out over CROSSFADE while the
+// new one ramps in from its current value, replacing a busy voice cleanly
+// instead of clicking mid-cycle.
+const CROSSFADE = 0.005;
+
+function scheduleEvent(channel, isNoise, freq, ms)
+{
+    if (!audioCtx || !channelNodes || audioCtx.state !== "running")
         return; // not unlocked yet: dropping matches the C host's lost first note
 
-    // Out-of-range channels clamp onto 0..3 like every other vex import
-    // silently coerces its ints.
     channel = Math.max(0, Math.min(TONE_CHANNELS - 1, channel | 0));
+    const nodes = channelNodes[channel];
+    const t0 = audioCtx.currentTime;
 
-    const start = audioCtx.currentTime;
-
-    // Replace whatever this channel was playing. start <= currentTime here,
-    // so the stop() takes effect immediately; if the oscillator already
-    // finished on its own, onended has nulled activeOsc[channel] and stop()
-    // is a no-op (but it would throw InvalidStateError on a node that's
-    // been disconnected, so the try/catch also covers the case where a
-    // stray stop() races with garbage collection of the previous node).
-    if (activeOsc[channel]) {
-        try { activeOsc[channel].stop(start); } catch (e) { /* already stopped */ }
-        activeOsc[channel] = null;
-    }
-    if (activeGain[channel]) {
-        activeGain[channel].disconnect();
-        activeGain[channel] = null;
+    // freq 0 silences the channel: fade whatever sounds back to zero.
+    if (freq < 1) {
+        for (const g of [nodes.oscGain, nodes.noiseGain]) {
+            g.gain.cancelScheduledValues(t0);
+            g.gain.setValueAtTime(g.gain.value, t0);
+            g.gain.linearRampToValueAtTime(0, t0 + CROSSFADE);
+        }
+        return;
     }
 
-    // freq 0 silences the channel; nothing left to schedule.
-    if (freq < 1)
+    const srcGain = isNoise ? nodes.noiseGain : nodes.oscGain;
+    const otherGain = isNoise ? nodes.oscGain : nodes.noiseGain;
+
+    // Clamp so a bogus cart value can't drive nodes into NaN territory.
+    if (isNoise) {
+        nodes.noiseSrc.playbackRate.value =
+            (2 * Math.min(20000, freq)) / audioCtx.sampleRate;
+    } else {
+        nodes.osc.frequency.value = Math.min(20000, freq);
+    }
+
+    otherGain.gain.cancelScheduledValues(t0);
+    otherGain.gain.setValueAtTime(otherGain.gain.value, t0);
+    otherGain.gain.linearRampToValueAtTime(0, t0 + CROSSFADE);
+
+    srcGain.gain.cancelScheduledValues(t0);
+    srcGain.gain.setValueAtTime(srcGain.gain.value, t0);
+    srcGain.gain.linearRampToValueAtTime(TONE_PEAK, t0 + CROSSFADE);
+
+    if (ms > 0) {
+        const secs = Math.min(ms, 5000) / 1000;
+        srcGain.gain.setValueAtTime(TONE_PEAK, t0 + CROSSFADE);
+        srcGain.gain.exponentialRampToValueAtTime(
+            TONE_PEAK / 256, t0 + CROSSFADE + secs);
+        srcGain.gain.linearRampToValueAtTime(
+            0, t0 + CROSSFADE + secs + CROSSFADE);
+    } else if (ms === 0) {
+        // sustain: leave the ramp at peak; no scheduled end
+    } else {
+        const end = t0 + CROSSFADE + 0.1;
+        srcGain.gain.setValueAtTime(TONE_PEAK, end);
+        srcGain.gain.linearRampToValueAtTime(0, end + CROSSFADE);
+    }
+}
+
+function vol(channel, v)
+{
+    if (!audioCtx || !channelNodes || audioCtx.state !== "running")
         return;
 
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    channel = Math.max(0, Math.min(TONE_CHANNELS - 1, channel | 0));
 
-    osc.type = "square";
+    // setTargetAtTime avoids zipper noise; clamped to the documented range.
+    const VOL_MAX = 64; // tracker-native range top; 64 == unity
+    const v64 = Math.max(0, Math.min(VOL_MAX, v | 0));
+    channelNodes[channel].volGain.gain.setTargetAtTime(
+        v64 / VOL_MAX, audioCtx.currentTime, 0.005);
+}
 
-    // Clamp so a bogus cart value can't drive the oscillator into NaN territory.
-    osc.frequency.value = Math.min(20000, freq);
-
-    // ms <= 0: the legacy flat ~100ms blip (ported beep() call sites sound
-    // exactly like the old beep). A positive ms plays that long with an
-    // exponential decay to ~1/256 amplitude at the end, matching the C and
-    // Go hosts' envelopes. Peak gain is 8000/32768 ≈ 0.24 of full scale,
-    // matching their ±8000 wave peaks.
-    const legacy = ms <= 0;
-    const secs = legacy ? 0.1 : Math.max(1, Math.min(5000, ms)) / 1000;
-    const peak = 8000 / 32768;
-    gain.gain.setValueAtTime(peak, start);
-    if (!legacy)
-        gain.gain.exponentialRampToValueAtTime(peak / 256, start + secs);
-
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-
-    osc.start(start);
-    osc.stop(start + secs);
-
-    activeOsc[channel] = osc;
-    activeGain[channel] = gain;
-
-    // Once the note has actually played out, drop the references so the next
-    // tone() doesn't carry a stale oscillator that would need a try/catch to
-    // stop safely. Comparing against the captured node keeps a freshly-
-    // scheduled tone from clobbering the next note's cleanup.
-    osc.onended = () => {
-        if (activeOsc[channel] === osc) activeOsc[channel] = null;
-        if (activeGain[channel] === gain) activeGain[channel] = null;
-    };
+function apos()
+{
+    if (!audioCtx || !channelNodes)
+        return 0;
+    return ((audioCtx.currentTime - ctxStartTime) * audioCtx.sampleRate) | 0;
 }
 
 //// Part 4: WASM state and string helpers (C string reader)
@@ -1137,7 +1224,10 @@ const env =
     pal,
     palreset,
 
-    tone
+    tone,
+    noise,
+    vol,
+    apos
 };
 
 let rafId = null;
