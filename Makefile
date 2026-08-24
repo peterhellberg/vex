@@ -88,6 +88,30 @@ $(TEST_DIR)/node_modules/.package-lock.json: $(TEST_DIR)/package.json
 # Alias for "I just want the deps to be ready" — useful in CI.
 test-deps: $(TEST_DIR)/node_modules/.package-lock.json
 
+# Cross-host tone() behavior tests: the same semantics (channel clamp,
+# freq clamp/silence, legacy flat blip, decay envelope, retrigger/overlap)
+# are asserted against all three hosts' real audio code.
+#
+#   - Go:     cmd/vex-run/main_test.go drives toneEngine directly. ebiten's
+#             package init needs an X display even for headless tests, so
+#             run under `xvfb-run -a` where there is no display (the
+#             vex-run CI workflow does the same).
+#   - JS:     cmd/vex-web/test/tone_test.js runs vex.js's audio section in
+#             a VM with a mocked Web Audio API.
+#   - C:      cmd/vex/test/tone_test.c compiles main.c's audio section,
+#             extracted verbatim below, against recording stubs.
+.PHONY: test-hosts
+test-hosts:
+	cd cmd/vex-run && go test ./...
+	go test ./...
+	node cmd/vex-web/test/tone_test.js
+	awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
+		cmd/vex/main.c > cmd/vex/test/audio_section.inc
+	$(CC) -std=c2x -I cmd/vex/test -o cmd/vex/test/tone_test.bin \
+		cmd/vex/test/tone_test.c -lm
+	cmd/vex/test/tone_test.bin
+	rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
+
 # Regenerates everything under docs/ (index.html, main.js, main.wasm,
 # sources.tar) from vex.zig. The artifacts are committed for GitHub Pages --
 # don't hand-edit them, rerun this target instead.
