@@ -1,18 +1,19 @@
-// Audio test cart: plays a looping chiptune melody through beep(freq) so the
+// Audio test cart: plays a looping chiptune melody through tone(freq) so the
 // sound implementation can be compared across hosts (C console, vex-run,
 // vex-web). The melody spans a wide frequency range and note lengths, plus a
-// rapid-fire section that stresses the hosts' sound-buffer pooling.
+// rapid-fire section that stresses the hosts' voice mixing.
 //
-// beep() plays a fixed ~100ms blip, so held notes are sustained by
-// re-triggering it every RETRIGGER frames while the note is active. A note
-// with freq 0 is a rest (no beep). Frequencies are drawn on a log scale so
+// The cart is a mechanical port of the original beep() version: it still
+// sustains held notes by re-triggering a flat legacy blip every RETRIGGER
+// frames on channel 0 (tone's ms <= 0 shim keeps the old 100ms blip). A note
+// with freq 0 is a rest (no tone). Frequencies are drawn on a log scale so
 // octaves are evenly spaced.
 #include "vex.h"
 
 #define NORMAL 12  // frames per regular note (0.2s at 60fps)
 #define LONG   24  // frames for a held note (0.4s)
-#define SHORT   6  // frames for a quick note (0.1s = one beep)
-#define RETRIGGER 6 // re-beep every 0.1s while a note is held (sustain)
+#define SHORT   6  // frames for a quick note (0.1s = one blip)
+#define RETRIGGER 6 // re-tone every 0.1s while a note is held (sustain)
 #define TRACE_N 16 // notes kept in the recent-notes trace
 
 typedef struct {
@@ -93,9 +94,9 @@ static const Section SECTIONS[] = {
 
 static int idx;          // current note index
 static int frames_left;  // frames remaining in the current note
-static int retrigger;    // frames until the next sustain beep
+static int retrigger;    // frames until the next sustain tone
 static int flash;        // frames left showing the note flash
-static long beeps;       // total beep() calls
+static long tones;       // total tone() calls
 static int trace[TRACE_N]; // frequency factors of recent notes
 static int trace_i;
 
@@ -182,11 +183,11 @@ static void build_note_label(char* out, const Note* n) {
   str_cat(out, "Hz");
 }
 
-static void build_beep_label(char* out) {
+static void build_tone_label(char* out) {
   char tmp[12];
   out[0] = '\0';
-  str_cat(out, "beeps ");
-  itoa((int)beeps, tmp);
+  str_cat(out, "tones ");
+  itoa((int)tones, tmp);
   str_cat(out, tmp);
 }
 
@@ -224,7 +225,7 @@ VEX_EXPORT("boot") void boot(void) {
   frames_left = 0;
   retrigger = 0;
   flash = 0;
-  beeps = 0;
+  tones = 0;
   trace_i = 0;
   for (int i = 0; i < TRACE_N; i++) trace[i] = 0;
   title("vex - test_audio");
@@ -242,12 +243,12 @@ VEX_EXPORT("update") void update(void) {
 
   const Note* n = &MELODY[idx];
 
-  // Sustain: re-beep while the note is held; rests stay silent.
+  // Sustain: re-tone while the note is held; rests stay silent.
   if (retrigger <= 0) {
     retrigger = RETRIGGER;
     if (n->freq > 0) {
-      beep(n->freq);
-      beeps++;
+      tone(0, n->freq, 0);
+      tones++;
       flash = RETRIGGER;
     }
   }
@@ -275,6 +276,6 @@ VEX_EXPORT("update") void update(void) {
   draw_meter(freq_factor(n->freq));
   draw_trace();
 
-  build_beep_label(s);
+  build_tone_label(s);
   text(s, 4, VEX_HEIGHT - 10, 11);
 }

@@ -62,8 +62,12 @@ VEX_EXPORT("update") void update(void) {
   // Strings longer than the documented truncation point.
   text(LONG_TEXT, 0, 170, 8);
 
-  beep(0);
-  beep(-42);
-  beep(100000);
+  // tone: hostile freqs (0 silences, negatives clamp to silence, huge
+  // clamps) and out-of-range channels that must clamp onto 0..3.
+  tone(0, 0, 0);
+  tone(0, -42, 0);
+  tone(0, 100000, -5);
+  tone(-9, 440, 100);
+  tone(99, 440, 100000);
   palreset();
 }
