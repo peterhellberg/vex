@@ -374,25 +374,24 @@ function mbtn(button)
     return mouseButtons[button] ? 1 : 0;
 }
 
-//// Part 3c: Audio (beep)
+//// Part 3c: Audio (tone)
 
 // One shared AudioContext, created inside the first user gesture: browsers
 // start a lazily-created context suspended, and iOS only starts one created
 // (not just resumed) inside a gesture handler -- creating it from the game
 // loop left it suspended and audio only came up on the second tap. Until the
-// first gesture beeps are dropped (like the C host's lost opening note)
+// first gesture tones are dropped (like the C host's lost opening note)
 // rather than queued on a frozen timeline where they would fire together.
 let audioCtx = null;
 
-// The currently-playing oscillator and its gain node, so a fresh beep() can
-// stop the previous one and start a new one at currentTime. Without this,
-// the Web Audio API happily lets multiple oscillators overlap and the cart
-// would stack blips on top of each other in amplitude; with it, beep() is
-// monophonic and matches the C and Go hosts. The pointer is cleared on
-// onended so a beep() that fires after the previous blip has already
-// finished doesn't try to stop an already-stopped oscillator.
-let activeOsc = null;
-let activeGain = null;
+// Per-channel oscillator + gain nodes, so up to four tones overlap (Web
+// Audio mixes them) while a fresh tone() on an occupied channel replaces
+// that channel's nodes. The pointers are cleared on onended so a tone()
+// that fires after the previous note has already finished doesn't try to
+// stop an already-stopped oscillator.
+const TONE_CHANNELS = 4;
+let activeOsc = [null, null, null, null];
+let activeGain = [null, null, null, null];
 
 function unlockAudio()
 {
@@ -407,7 +406,7 @@ function unlockAudio()
 
         // A one-sample silent buffer within the gesture makes iOS start the
         // audio pipeline for real; otherwise it can defer actual rendering,
-        // and the first blips scheduled after resume() fire together.
+        // and the first notes scheduled after resume() fire together.
         const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
         const src = audioCtx.createBufferSource();
         src.buffer = buf;
@@ -428,27 +427,35 @@ window.addEventListener("pointerdown", unlockAudio);
 window.addEventListener("mousedown", unlockAudio);
 window.addEventListener("keydown", unlockAudio);
 
-function beep(freq)
+function tone(channel, freq, ms)
 {
     if (!audioCtx || audioCtx.state !== "running")
         return; // not unlocked yet: dropping matches the C host's lost first note
 
+    // Out-of-range channels clamp onto 0..3 like every other vex import
+    // silently coerces its ints.
+    channel = Math.max(0, Math.min(TONE_CHANNELS - 1, channel | 0));
+
     const start = audioCtx.currentTime;
 
-    // Cut the previous blip off, if any. start <= currentTime here, so the
-    // stop() takes effect immediately; if the oscillator already finished on
-    // its own, onended has nulled activeOsc and stop() is a no-op (but it
-    // would throw InvalidStateError on a node that's been disconnected, so
-    // the try/catch also covers the case where a stray stop() races with
-    // garbage collection of the previous node).
-    if (activeOsc) {
-        try { activeOsc.stop(start); } catch (e) { /* already stopped */ }
-        activeOsc = null;
+    // Replace whatever this channel was playing. start <= currentTime here,
+    // so the stop() takes effect immediately; if the oscillator already
+    // finished on its own, onended has nulled activeOsc[channel] and stop()
+    // is a no-op (but it would throw InvalidStateError on a node that's
+    // been disconnected, so the try/catch also covers the case where a
+    // stray stop() races with garbage collection of the previous node).
+    if (activeOsc[channel]) {
+        try { activeOsc[channel].stop(start); } catch (e) { /* already stopped */ }
+        activeOsc[channel] = null;
     }
-    if (activeGain) {
-        activeGain.disconnect();
-        activeGain = null;
+    if (activeGain[channel]) {
+        activeGain[channel].disconnect();
+        activeGain[channel] = null;
     }
+
+    // freq 0 silences the channel; nothing left to schedule.
+    if (freq < 1)
+        return;
 
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
@@ -456,31 +463,36 @@ function beep(freq)
     osc.type = "square";
 
     // Clamp so a bogus cart value can't drive the oscillator into NaN territory.
-    osc.frequency.value = Math.max(1, Math.min(20000, freq));
+    osc.frequency.value = Math.min(20000, freq);
 
-    // Full-amplitude 100ms square, matching the C host's ±8000 f32 wave and
-    // the Go host's ±8000 s16 wave (8000/32768 ≈ 0.24 of full scale). No decay
-    // envelope: the other hosts hard-cut at 100ms too, and a fresh oscillator
-    // starts at phase 0 so a frequency change retriggers cleanly instead of
-    // clicking mid-cycle.
-    gain.gain.value = 8000 / 32768;
+    // ms <= 0: the legacy flat ~100ms blip (ported beep() call sites sound
+    // exactly like the old beep). A positive ms plays that long with an
+    // exponential decay to ~1/256 amplitude at the end, matching the C and
+    // Go hosts' envelopes. Peak gain is 8000/32768 ≈ 0.24 of full scale,
+    // matching their ±8000 wave peaks.
+    const legacy = ms <= 0;
+    const secs = legacy ? 0.1 : Math.max(1, Math.min(5000, ms)) / 1000;
+    const peak = 8000 / 32768;
+    gain.gain.setValueAtTime(peak, start);
+    if (!legacy)
+        gain.gain.exponentialRampToValueAtTime(peak / 256, start + secs);
 
     osc.connect(gain);
     gain.connect(audioCtx.destination);
 
     osc.start(start);
-    osc.stop(start + 0.1);
+    osc.stop(start + secs);
 
-    activeOsc = osc;
-    activeGain = gain;
+    activeOsc[channel] = osc;
+    activeGain[channel] = gain;
 
-    // Once the blip has actually played out, drop the references so the next
-    // beep() doesn't carry a stale oscillator that would need a try/catch to
-    // stop safely. Comparing against the captured node keeps a freshly-scheduled
-    // beep from clobbering the next blip's cleanup.
+    // Once the note has actually played out, drop the references so the next
+    // tone() doesn't carry a stale oscillator that would need a try/catch to
+    // stop safely. Comparing against the captured node keeps a freshly-
+    // scheduled tone from clobbering the next note's cleanup.
     osc.onended = () => {
-        if (activeOsc === osc) activeOsc = null;
-        if (activeGain === gain) activeGain = null;
+        if (activeOsc[channel] === osc) activeOsc[channel] = null;
+        if (activeGain[channel] === gain) activeGain[channel] = null;
     };
 }
 
@@ -1125,7 +1137,7 @@ const env =
     pal,
     palreset,
 
-    beep
+    tone
 };
 
 let rafId = null;
