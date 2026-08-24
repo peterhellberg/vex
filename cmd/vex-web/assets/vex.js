@@ -374,25 +374,160 @@ function mbtn(button)
     return mouseButtons[button] ? 1 : 0;
 }
 
-//// Part 3c: Audio (beep)
+//// Part 3c: Audio (tone)
 
 // One shared AudioContext, created inside the first user gesture: browsers
 // start a lazily-created context suspended, and iOS only starts one created
 // (not just resumed) inside a gesture handler -- creating it from the game
 // loop left it suspended and audio only came up on the second tap. Until the
-// first gesture beeps are dropped (like the C host's lost opening note)
+// first gesture tones are dropped (like the C host's lost opening note)
 // rather than queued on a frozen timeline where they would fire together.
 let audioCtx = null;
 
-// The currently-playing oscillator and its gain node, so a fresh beep() can
-// stop the previous one and start a new one at currentTime. Without this,
-// the Web Audio API happily lets multiple oscillators overlap and the cart
-// would stack blips on top of each other in amplitude; with it, beep() is
-// monophonic and matches the C and Go hosts. The pointer is cleared on
-// onended so a beep() that fires after the previous blip has already
-// finished doesn't try to stop an already-stopped oscillator.
-let activeOsc = null;
-let activeGain = null;
+// The four-voice mixer runs in an AudioWorklet so envelopes render on the
+// audio thread exactly like the C and Go hosts' mixers, instead of being
+// approximated with oscillator/gain automation on the main thread. Triggers
+// are posted per channel; the worklet applies them at its next process()
+// call, quantizing starts to at most one render quantum like every host.
+let toneNode = null;
+let toneNodeReady = false;
+
+// Triggers that arrive before the worklet is up: latest per channel wins,
+// flushed when the node connects (matches dropping instead of queuing).
+const parkedTriggers = [null, null, null, null];
+
+
+// The mixer source loads from a Blob URL so both dev mode (vex.js served by
+// vex-web) and static bundles (vex.js inlined into index.html) work without
+// an extra file next to the page. It mirrors the C/Go mixers line for line.
+const TONE_WORKLET_SRC = String.raw`
+const SEG_SUSTAIN = 2, SEG_RELEASE = 3, SEG_IDLE = 4;
+
+class ToneMixer extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    const mk = () => ({ kind: 0, duty: 0.5, freq: 0, freqTo: 0,
+                        freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0xACE1,
+                        seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
+                        segLen: [0, 0, 0, 0], segEnd: [0, 0, 0, 0],
+                        gl: 0.70710678, gr: 0.70710678 });
+    this.voices = [mk(), mk(), mk(), mk()];
+    this.pending = [null, null, null, null];
+    this.dutyTable = [0.5, 0.25, 0.125, 0.75];
+    this.panL = [0.70710678, 1, 0];
+    this.panR = [0.70710678, 0, 1];
+    // Full-scale single-voice amplitude in s16 units, matching the C/Go
+    // hosts; the final write divides by 32768 like the C mixer.
+    this.fullAmp = 8000;
+    this.port.onmessage = e => {
+      const t = e.data;
+      this.pending[t.ch] = t;
+    };
+  }
+
+  nextSegment(v) {
+    // Advance into the next non-empty envelope segment, skipping zero-length
+    // ones by snapping to their end level. Enters idle when release ends.
+    for (;;) {
+      v.seg++;
+      if (v.seg > SEG_RELEASE) { v.seg = SEG_IDLE; v.level = 0; return; }
+      const n = v.segLen[v.seg];
+      if (n <= 0) { v.level = v.segEnd[v.seg]; continue; }
+      v.segLeft = n;
+      v.slope = (v.segEnd[v.seg] - v.level) / n;
+      if (v.seg === SEG_SUSTAIN && v.freqTo > 0) {
+        // The slide rides the sustain segment: linear in Hz from the
+        // start frequency to the target across its samples.
+        v.freqStep = (v.freqTo - v.freqStart) / n;
+      }
+      return;
+    }
+  }
+
+  apply(v, t) {
+    const spf = sampleRate / 60; // samples per frame at the context rate
+    v.kind = t.kind; v.duty = t.duty;
+    v.freqStart = t.f0; v.freqTo = t.f1; v.freq = t.f0; v.freqStep = 0;
+    v.ph = 0; v.nph = 0; v.lfsr = 0xACE1;
+    v.gl = t.gl; v.gr = t.gr;
+    const frames = t.frames;
+    const ends = [t.peak, t.sus, t.sus, 0];
+    let total = 0;
+    for (let i = 0; i < 4; i++) {
+      v.segLen[i] = frames[i] > 0 ? Math.round(frames[i] * spf) : 0;
+      v.segEnd[i] = ends[i];
+      total += v.segLen[i];
+    }
+    if (total <= 0) { v.seg = SEG_IDLE; v.level = 0; return; }
+    v.seg = -1; v.level = 0;
+    this.nextSegment(v);
+  }
+
+  process(inputs, outputs) {
+    void inputs;
+    const out = outputs[0];
+    const L = out[0], R = out.length > 1 ? out[1] : out[0];
+
+    for (let ch = 0; ch < 4; ch++) {
+      const t = this.pending[ch];
+      if (t) { this.pending[ch] = null; this.apply(this.voices[ch], t); }
+    }
+
+    // Soft clip each channel into the 16-bit range (linear below the knee),
+    // then scale like the C host's float output.
+    const knee = 24000, top = 32767;
+    const soft = x => x > knee ? knee + (top - knee) * Math.tanh((x - knee) / (top - knee))
+                  : x < -knee ? -knee + (-top + knee) * Math.tanh((x + knee) / (top - knee))
+                  : x;
+
+    for (let i = 0; i < L.length; i++) {
+      let l = 0, r = 0;
+      for (let ch = 0; ch < 4; ch++) {
+        const v = this.voices[ch];
+        if (v.seg === SEG_IDLE) continue;
+
+        let s;
+        if (v.kind === 1) { // noise: 15-bit LFSR stepped at 2*freq Hz
+          v.nph += 2 * v.freq / sampleRate;
+          while (v.nph >= 1) {
+            v.nph -= 1;
+            const fb = 1 - (((v.lfsr >> 15) ^ (v.lfsr >> 13)) & 1);
+            v.lfsr = ((v.lfsr << 1) | fb) & 0xFFFF;
+          }
+          s = (v.lfsr & 1) ? 1 : -1;
+        } else if (v.kind === 2) { // triangle
+          s = v.ph < 0.25 ? v.ph * 4
+            : v.ph < 0.75 ? 2 - v.ph * 4
+            : v.ph * 4 - 4;
+        } else { // pulse with duty cycle
+          s = v.ph < v.duty ? 1 : -1;
+        }
+
+        l += s * this.fullAmp * v.level * v.gl;
+        r += s * this.fullAmp * v.level * v.gr;
+
+        // Envelope advances after the sample that used this level.
+        if (v.segLeft > 0) v.segLeft--;
+        if (v.segLeft <= 0) {
+          v.level = v.segEnd[v.seg];
+          this.nextSegment(v);
+        } else {
+          v.level += v.slope;
+          if (v.seg === SEG_SUSTAIN && v.freqStep !== 0) v.freq += v.freqStep;
+        }
+
+        v.ph += v.freq / sampleRate;
+        if (v.ph >= 1) v.ph -= Math.floor(v.ph);
+      }
+
+      L[i] = soft(l) / 32768;
+      R[i] = soft(r) / 32768;
+    }
+    return true;
+  }
+}
+registerProcessor("tone-mixer", ToneMixer);
+`;
 
 function unlockAudio()
 {
@@ -413,6 +548,21 @@ function unlockAudio()
         src.buffer = buf;
         src.connect(audioCtx.destination);
         src.start(0);
+
+        const url = URL.createObjectURL(
+            new Blob([TONE_WORKLET_SRC], { type: "application/javascript" }));
+        audioCtx.audioWorklet.addModule(url).then(() => {
+            toneNode = new AudioWorkletNode(audioCtx, "tone-mixer",
+                                            { outputChannelCount: [2] });
+            toneNode.connect(audioCtx.destination);
+            toneNodeReady = true;
+            for (let ch = 0; ch < 4; ch++) {
+                if (parkedTriggers[ch]) {
+                    toneNode.port.postMessage(parkedTriggers[ch]);
+                    parkedTriggers[ch] = null;
+                }
+            }
+        }).catch(err => console.error("tone worklet:", err));
     }
 
     if (audioCtx.state === "suspended")
@@ -428,60 +578,51 @@ window.addEventListener("pointerdown", unlockAudio);
 window.addEventListener("mousedown", unlockAudio);
 window.addEventListener("keydown", unlockAudio);
 
-function beep(freq)
+function tone(freq, duration, volume, flags)
 {
-    if (!audioCtx || audioCtx.state !== "running")
+    if (!audioCtx || !toneNodeReady || audioCtx.state !== "running")
         return; // not unlocked yet: dropping matches the C host's lost first note
 
-    const start = audioCtx.currentTime;
+    const ch = flags & 3;
+    const mode = (flags >>> 2) & 3;
+    let pan = (flags >>> 4) & 3;
+    if (pan > 2) pan = 0;
+    let wave = (flags >>> 6) & 3;
+    if (wave === 3) wave = 0;
 
-    // Cut the previous blip off, if any. start <= currentTime here, so the
-    // stop() takes effect immediately; if the oscillator already finished on
-    // its own, onended has nulled activeOsc and stop() is a no-op (but it
-    // would throw InvalidStateError on a node that's been disconnected, so
-    // the try/catch also covers the case where a stray stop() races with
-    // garbage collection of the previous node).
-    if (activeOsc) {
-        try { activeOsc.stop(start); } catch (e) { /* already stopped */ }
-        activeOsc = null;
+    let f0, f1 = 0;
+    if (flags & 0x100) { // note mode: MIDI note number
+        f0 = 440 * Math.pow(2, (freq - 69) / 12);
+    } else {
+        f0 = freq & 0xFFFF;
+        f1 = (freq >>> 16) & 0xFFFF;
+        if (f0 < 1) f0 = 1;
     }
-    if (activeGain) {
-        activeGain.disconnect();
-        activeGain = null;
-    }
+    if (f0 > 20000) f0 = 20000;
+    if (f1 > 0 && f1 < 1) f1 = 0; // degenerate slide target: none
+    if (f1 > 20000) f1 = 20000;
 
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    const sus = duration & 0xFF;
+    const rel = (duration >>> 8) & 0xFF;
+    const dec = (duration >>> 16) & 0xFF;
+    const att = (duration >>> 24) & 0xFF;
 
-    osc.type = "square";
+    let vs = volume & 0xFF;
+    if (vs > 100) vs = 100;
+    let vp = (volume >>> 8) & 0xFF;
+    if (vp === 0 || vp > 100) vp = 100; // unset peak defaults to full
 
-    // Clamp so a bogus cart value can't drive the oscillator into NaN territory.
-    osc.frequency.value = Math.max(1, Math.min(20000, freq));
-
-    // Full-amplitude 100ms square, matching the C host's ±8000 f32 wave and
-    // the Go host's ±8000 s16 wave (8000/32768 ≈ 0.24 of full scale). No decay
-    // envelope: the other hosts hard-cut at 100ms too, and a fresh oscillator
-    // starts at phase 0 so a frequency change retriggers cleanly instead of
-    // clicking mid-cycle.
-    gain.gain.value = 8000 / 32768;
-
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-
-    osc.start(start);
-    osc.stop(start + 0.1);
-
-    activeOsc = osc;
-    activeGain = gain;
-
-    // Once the blip has actually played out, drop the references so the next
-    // beep() doesn't carry a stale oscillator that would need a try/catch to
-    // stop safely. Comparing against the captured node keeps a freshly-scheduled
-    // beep from clobbering the next blip's cleanup.
-    osc.onended = () => {
-        if (activeOsc === osc) activeOsc = null;
-        if (activeGain === gain) activeGain = null;
-    };
+    toneNode.port.postMessage({
+        ch,
+        kind: wave,
+        duty: [0.5, 0.25, 0.125, 0.75][mode],
+        f0, f1,
+        frames: [att, dec, sus, rel],
+        peak: vp / 100,
+        sus: vs / 100,
+        gl: [0.70710678, 1, 0][pan],
+        gr: [0.70710678, 0, 1][pan],
+    });
 }
 
 //// Part 4: WASM state and string helpers (C string reader)
@@ -1125,7 +1266,7 @@ const env =
     pal,
     palreset,
 
-    beep
+    tone
 };
 
 let rafId = null;
