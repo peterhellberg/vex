@@ -92,12 +92,37 @@ pub extern "env" fn mbtn(button: i32) i32;
 pub extern "env" fn pal(index: i32, rgb: i32) void;
 /// Restore the default SWEETIE-16 palette.
 pub extern "env" fn palreset() void;
-/// Play a square wave on voice `channel` (`0..3`, out-of-range clamps).
-/// `freq <= 0` silences the channel; `freq > 20000` clamps. `ms <= 0`
-/// plays the legacy ~100ms flat blip; a positive `ms` plays that long
-/// with an exponential decay.
+// Audio: four generic voices; any event is legal on any channel. All audio
+// semantics below are shared by every host (C console, vex-run, vex-web):
+//
+//   - channels clamp to 0..3 (TONE_CHANNELS); freq clamps to 1..20000,
+//     freq <= 0 silences the channel
+//   - retriggering a busy channel restarts it cleanly at phase 0, no click
+//   - ms > 0: decaying tone, exponential envelope to -48 dB over the
+//     duration (ms caps at 5000)
+//   - ms == 0: sustain at flat amplitude until the next event on the channel
+//   - ms < 0: legacy flat ~100 ms blip
 pub const TONE_CHANNELS = 4;
+
+/// Play a square wave on a voice.
 pub extern "env" fn tone(channel: i32, freq: i32, ms: i32) void;
+
+/// Switch the voice to a noise source for this event -- a 16-bit LFSR
+/// stepped at 2*freq Hz, so freq acts as noise color/pitch. Same ms
+/// semantics as tone(); the next tone() flips the voice back to square.
+pub extern "env" fn noise(channel: i32, freq: i32, ms: i32) void;
+
+/// Per-channel linear gain multiplier, `v` clamped to 0..`VOL_MAX` with
+/// `VOL_MAX` == unity (tracker-native range; the default). Applies live to
+/// whatever the channel is playing.
+pub const VOL_MAX = 64;
+pub extern "env" fn vol(channel: i32, v: i32) void;
+
+/// Audio clock -- sample frames produced by the output stream since console
+/// start (48 kHz count; unsigned-wrap safe for ~12 hours). Use it to derive
+/// note/row boundaries instead of a frame accumulator so tempo stays
+/// sample-accurate regardless of display drift or frame throttling.
+pub extern "env" fn apos() i32;
 
 /// `true` while the button is held — shorthand for `btn(button) != 0`.
 pub fn down(button: i32) bool {

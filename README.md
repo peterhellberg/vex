@@ -351,7 +351,16 @@ zig build-exe -target wasm32-freestanding \
 | `mbtn(button) -> int` | `1` if a mouse button is held (0 left, 1 right, 2 middle) |
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
 | `palreset()` | restore the default palette |
-| `tone(channel, freq, ms)` | play a square wave on voice `channel` (`0..3`, out-of-range clamps); `freq <= 0` silences the channel, `freq > 20000` clamps; `ms <= 0` plays the legacy ~100ms flat blip, `ms > 0` plays that long with an exponential decay (capped at 5s) |
+| `tone(channel, freq, ms)` | play a square wave on voice `channel` (`0..3`, out-of-range clamps); `freq <= 0` silences the channel, `freq > 20000` clamps; `ms > 0` plays a decaying tone (exponential to -48 dB) for that many ms (capped at 5000), `ms == 0` sustains until the next event on the channel, `ms < 0` is the legacy flat ~100ms blip |
+| `noise(channel, freq, ms)` | switch the voice to a noise source for this event: a 16-bit LFSR stepped at 2×`freq` Hz (freq acts as noise color/pitch); same `ms` semantics as `tone()`; the next `tone()` flips back to square |
+| `vol(channel, v)` | per-channel linear gain, `v` clamped to 0..64 with 64 = unity (tracker-native range; the default); applies live to what the channel is playing |
+| `apos() -> int` | audio clock: 48 kHz sample frames produced since console start (wrap-safe for ~12 h); use it instead of a frame accumulator for sample-accurate tempo |
+
+Audio semantics shared by every host:
+
+- Channels are generic — any event (`tone`, `noise`) is legal on any voice; there are no fixed roles.
+- Retriggering a busy channel restarts it cleanly at phase 0, click-free.
+- `ms caps at 5000`; the positive-ms envelope decays exponentially to -48 dB over the duration.
 
 `color` is a palette index `0..15`
 

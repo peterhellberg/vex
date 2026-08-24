@@ -50,10 +50,36 @@ VEX_IMPORT("mbtn") int mbtn(int button);     // 1 if mouse button held
 VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
 VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 
-// tone(): play a square wave on voice 0..3 (out-of-range channels clamp).
-// freq <= 0 silences the channel; freq > 20000 clamps. ms <= 0 plays the
-// legacy ~100ms flat blip; ms > 0 plays that long with an exponential decay.
+// Audio: four generic voices; any event is legal on any channel. All audio
+// semantics below are shared by every host (C console, vex-run, vex-web):
+//
+//   - channels clamp to 0..3 (VEX_TONE_CHANNELS); freq clamps to 1..20000,
+//     freq <= 0 silences the channel
+//   - retriggering a busy channel restarts it cleanly at phase 0, no click
+//   - ms > 0: decaying tone, exponential envelope to -48 dB over the
+//     duration (ms caps at 5000)
+//   - ms == 0: sustain at flat amplitude until the next event on the channel
+//   - ms < 0: legacy flat ~100 ms blip
 #define VEX_TONE_CHANNELS 4
+
+// tone(): play a square wave on a voice.
 VEX_IMPORT("tone") void tone(int channel, int freq, int ms);
+
+// noise(): switch the voice to a noise source for this event -- a 16-bit
+// LFSR stepped at 2*freq Hz, so freq acts as noise color/pitch. Same ms
+// semantics as tone(); the next tone() flips the voice back to square.
+VEX_IMPORT("noise") void noise(int channel, int freq, int ms);
+
+// vol(): per-channel linear gain multiplier, v clamped to 0..64 with 64 ==
+// unity (tracker-native range; the default). Applies live to whatever the
+// channel is playing.
+#define VEX_VOL_MAX 64
+VEX_IMPORT("vol") void vol(int channel, int v);
+
+// apos(): audio clock -- sample frames produced by the output stream since
+// console start (48 kHz count; unsigned-wrap safe for ~12 hours). Use it to
+// derive note/row boundaries instead of a frame accumulator so tempo stays
+// sample-accurate regardless of display drift or frame throttling.
+VEX_IMPORT("apos") int apos(void);
 
 #endif // VEX_H
