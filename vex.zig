@@ -92,8 +92,76 @@ pub extern "env" fn mbtn(button: i32) i32;
 pub extern "env" fn pal(index: i32, rgb: i32) void;
 /// Restore the default SWEETIE-16 palette.
 pub extern "env" fn palreset() void;
-/// Play a short blip at `freq` Hz.
-pub extern "env" fn beep(freq: i32) void;
+// ---- audio -----------------------------------------------------------------
+
+pub const TONE_CHANNELS = 4;
+
+/// Play a tone at `freq` Hz (clamps to 1..20000), or as a MIDI note number
+/// with `TONE_NOTE_MODE` (middle C = 60). See `Duration`, `Volume`, and
+/// `toneFlags` for the packed layouts; prefer the helpers over hand-packing.
+pub extern "env" fn tone(freq: i32, duration: i32, volume: i32, flags: i32) void;
+
+/// Waveform selection; persists on the channel until the next call says
+/// otherwise. The default is a pulse wave.
+pub const TONE_PULSE: i32 = 0;
+/// 15-bit LFSR stepped at 2*freq Hz, so freq acts as noise color/pitch.
+pub const TONE_NOISE: i32 = 1 << 6;
+/// Triangle; softer, good for bass.
+pub const TONE_TRI: i32 = 2 << 6;
+
+/// Duty cycle for pulse waves. TONE_MODE0 is the classic square.
+pub const TONE_MODE0: i32 = 0; // 50%
+pub const TONE_MODE1: i32 = 1 << 2; // 25%
+pub const TONE_MODE2: i32 = 2 << 2; // 12.5%
+pub const TONE_MODE3: i32 = 3 << 2; // 75%
+
+/// Panning: constant-power gains, center by default.
+pub const TONE_PAN_LEFT: i32 = 1 << 4;
+pub const TONE_PAN_RIGHT: i32 = 2 << 4;
+
+/// Interpret the frequency parameter as a MIDI note number (middle C = 60).
+pub const TONE_NOTE_MODE: i32 = 1 << 8;
+
+fn toneByte(v: i32) i32 {
+    return if (v < 0) 0 else if (v > 255) 255 else v;
+}
+
+/// Slide from `freq` to `to` over the sustain duration (linear in Hz).
+pub fn toneSlide(freq: i32, to: i32) i32 {
+    return (freq & 0xFFFF) | ((to & 0xFFFF) << 16);
+}
+
+/// ADSR duration in frames (each segment clamps to 0..255):
+/// sustain held at the sustain volume, release ramping back to 0,
+/// decay ramping peak down to sustain, attack ramping 0 up to peak.
+pub const ToneDuration = struct {
+    sustain: i32 = 0,
+    release: i32 = 0,
+    decay: i32 = 0,
+    attack: i32 = 0,
+
+    pub fn pack(d: ToneDuration) i32 {
+        return toneByte(d.sustain) | (toneByte(d.release) << 8) |
+            (toneByte(d.decay) << 16) | (toneByte(d.attack) << 24);
+    }
+};
+
+/// Sustain volume 0..100 with optional attack-time peak
+/// (`peak == 0` means "use 100 during the attack").
+pub const ToneVolume = struct {
+    level: i32,
+    peak: i32 = 0,
+
+    pub fn pack(v: ToneVolume) i32 {
+        return toneByte(v.level) | (toneByte(v.peak) << 8);
+    }
+};
+
+/// Channel 0..3, duty mode, plus any TONE_* extras ORed together.
+pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
+    return (channel & 3) | (mode & (3 << 2)) |
+        (extra & ~(3 | (3 << 2)));
+}
 
 /// `true` while the button is held — shorthand for `btn(button) != 0`.
 pub fn down(button: i32) bool {

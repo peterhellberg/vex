@@ -1,102 +1,101 @@
-// Audio test cart: plays a looping chiptune melody through beep(freq) so the
-// sound implementation can be compared across hosts (C console, vex-run,
-// vex-web). The melody spans a wide frequency range and note lengths, plus a
-// rapid-fire section that stresses the hosts' sound-buffer pooling.
-//
-// beep() plays a fixed ~100ms blip, so held notes are sustained by
-// re-triggering it every RETRIGGER frames while the note is active. A note
-// with freq 0 is a rest (no beep). Frequencies are drawn on a log scale so
-// octaves are evenly spaced.
+// Audio test cart: exercises tone() so the sound implementation can be
+// compared across hosts (C console, vex-run, vex-web). Each step triggers
+// up to three voices at once and holds for a few frames, walking through
+// melodies, polyphony, duty cycles, noise percussion, slides, note mode,
+// panning, rapid retriggers, and extreme frequencies.
 #include "vex.h"
 
-#define NORMAL 12  // frames per regular note (0.2s at 60fps)
-#define LONG   24  // frames for a held note (0.4s)
-#define SHORT   6  // frames for a quick note (0.1s = one beep)
-#define RETRIGGER 6 // re-beep every 0.1s while a note is held (sustain)
-#define TRACE_N 16 // notes kept in the recent-notes trace
+#define TRACE_N 16 // steps kept in the recent-steps trace
 
 typedef struct {
-  int freq;          // Hz; 0 means rest (silent)
-  int frames;        // how long the note lasts, in frames
-  const char* name;  // label, e.g. "C4"; "" shows frequency only
-} Note;
-
-static const Note MELODY[] = {
-  // -- arpeggio: rising and falling C major --------------------------------
-  {262, NORMAL, "C4"}, {330, NORMAL, "E4"}, {392, NORMAL, "G4"},
-  {523, NORMAL, "C5"}, {392, NORMAL, "G4"}, {330, NORMAL, "E4"},
-  {262, LONG,   "C4"},
-
-  // -- twinkle twinkle ------------------------------------------------------
-  {262, NORMAL, "C4"}, {262, NORMAL, "C4"}, {392, NORMAL, "G4"},
-  {392, NORMAL, "G4"}, {440, NORMAL, "A4"}, {440, NORMAL, "A4"},
-  {392, LONG,   "G4"}, {349, NORMAL, "F4"}, {349, NORMAL, "F4"},
-  {330, NORMAL, "E4"}, {330, NORMAL, "E4"}, {294, NORMAL, "D4"},
-  {294, NORMAL, "D4"}, {262, LONG,   "C4"},
-
-  // -- octaves: same pitch class across registers ---------------------------
-  {131, NORMAL, "C3"}, {262, NORMAL, "C4"}, {196, NORMAL, "G3"},
-  {392, NORMAL, "G4"}, {165, NORMAL, "E3"}, {330, NORMAL, "E4"},
-  {131, NORMAL, "C3"}, {262, LONG,   "C4"},
-
-  // -- sweep: log ramp up and down, low to high ------------------------------
-  {130, NORMAL, ""},  {146, NORMAL, ""},  {163, NORMAL, ""},
-  {183, NORMAL, ""},  {205, NORMAL, ""},  {230, NORMAL, ""},
-  {257, NORMAL, ""},  {288, NORMAL, ""},  {323, NORMAL, ""},
-  {361, NORMAL, ""},  {405, NORMAL, ""},  {453, NORMAL, ""},
-  {508, NORMAL, ""},  {569, NORMAL, ""},  {637, NORMAL, ""},
-  {714, NORMAL, ""},  {800, NORMAL, ""},  {896, NORMAL, ""},
-  {1003, NORMAL, ""}, {1124, NORMAL, ""}, {1259, NORMAL, ""},
-  {1410, NORMAL, ""}, {1579, NORMAL, ""}, {1769, NORMAL, ""},
-  {1981, NORMAL, ""},
-  {1769, NORMAL, ""}, {1579, NORMAL, ""}, {1410, NORMAL, ""},
-  {1259, NORMAL, ""}, {1124, NORMAL, ""}, {1003, NORMAL, ""},
-  {896, NORMAL, ""},  {800, NORMAL, ""},  {714, NORMAL, ""},
-  {637, NORMAL, ""},  {569, NORMAL, ""},  {508, NORMAL, ""},
-  {453, NORMAL, ""},  {405, NORMAL, ""},  {361, NORMAL, ""},
-  {323, NORMAL, ""},  {288, NORMAL, ""},  {257, NORMAL, ""},
-  {230, NORMAL, ""},  {205, NORMAL, ""},  {183, NORMAL, ""},
-  {163, NORMAL, ""},  {146, NORMAL, ""},
-
-  // -- rapid: quick alternating notes (stresses sound pooling) --------------
-  {440, SHORT, "A4"}, {659, SHORT, "E5"}, {440, SHORT, "A4"},
-  {659, SHORT, "E5"}, {440, SHORT, "A4"}, {659, SHORT, "E5"},
-  {440, SHORT, "A4"}, {659, SHORT, "E5"}, {440, SHORT, "A4"},
-  {659, SHORT, "E5"}, {440, SHORT, "A4"}, {659, SHORT, "E5"},
-  {440, SHORT, "A4"}, {659, SHORT, "E5"}, {440, SHORT, "A4"},
-  {659, SHORT, "E5"}, {440, SHORT, "A4"}, {659, SHORT, "E5"},
-  {440, SHORT, "A4"}, {659, SHORT, "E5"}, {440, SHORT, "A4"},
-  {659, SHORT, "E5"}, {440, SHORT, "A4"}, {659, SHORT, "E5"},
-
-  // -- range: extreme frequencies plus a rest --------------------------------
-  {55,   SHORT, "A1"},
-  {1975, SHORT, "B6"},
-  {0,    LONG,  "REST"},
-};
+  int freq;   // Hz, or MIDI note with TONE_NOTE_MODE, or slide-packed
+  int dur;    // packed via tone_duration
+  int vol;    // packed via tone_volume
+  int flags;  // built via tone_flags
+} Voice;
 
 typedef struct {
-  int start;
   const char* name;
-} Section;
+  int frames;      // how long this step lasts, in frames
+  Voice voice[3];  // simultaneous voices (freq 0 entries are skipped)
+} Step;
 
-static const Section SECTIONS[] = {
-  {0,   "arpeggio"},
-  {7,   "twinkle"},
-  {21,  "octaves"},
-  {29,  "sweep"},
-  {77,  "rapid"},
-  {101, "range"},
+#define V(ch, f, d, v, x) {f, d, v, TONE_FLAGS(ch, 0, x)}
+#define NOTE_LEN(dur) (TONE_DURATION(dur, 6, 3, 1)) // musical default envelope
+
+static const Step STEPS[] = {
+  // -- arpeggio: rising and falling C major on a square lead ----------------
+  {"arpeggio", 14, {V(0, 262, NOTE_LEN(12), 100, TONE_MODE0)}},
+  {"arpeggio", 14, {V(0, 330, NOTE_LEN(12), 100, TONE_MODE0)}},
+  {"arpeggio", 14, {V(0, 392, NOTE_LEN(12), 100, TONE_MODE0)}},
+  {"arpeggio", 14, {V(0, 523, NOTE_LEN(12), 100, TONE_MODE0)}},
+  {"arpeggio", 20, {V(0, 392, NOTE_LEN(18), 100, TONE_MODE0)}},
+
+  // -- twinkle: classic melody ----------------------------------------------
+  {"twinkle", 14, {V(0, 262, NOTE_LEN(12), 100, TONE_MODE0)}},
+  {"twinkle", 14, {V(0, 262, NOTE_LEN(12), 100, TONE_MODE0)}},
+  {"twinkle", 14, {V(0, 392, NOTE_LEN(12), 100, TONE_MODE0)}},
+  {"twinkle", 14, {V(0, 440, NOTE_LEN(12), 90, TONE_MODE0)}},
+  {"twinkle", 22, {V(0, 392, NOTE_LEN(20), 100, TONE_MODE0)}},
+
+  // -- polyphony: triangle bass under a square lead --------------------------
+  {"polyphony", 40,
+    {V(0, 330, NOTE_LEN(38), 80, TONE_MODE0),
+     V(1, 131, TONE_DURATION(36, 8, 6, 2), 90, TONE_TRI)}},
+  {"polyphony", 40,
+    {V(0, 392, NOTE_LEN(38), 80, TONE_MODE0),
+     V(1, 165, TONE_DURATION(36, 8, 6, 2), 90, TONE_TRI)}},
+
+  // -- duty: same pitch at each pulse width ----------------------------------
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE0)}},
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE1)}},
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE2)}},
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE3)}},
+
+  // -- noise: kick and hats ---------------------------------------------------
+  {"noise", 10, {V(2, 120, TONE_DURATION(2, 10, 0, 0), 100, TONE_NOISE)}},
+  {"noise", 6,  {V(2, 6000, TONE_DURATION(1, 5, 0, 0), 60, TONE_NOISE)}},
+  {"noise", 6,  {V(2, 6000, TONE_DURATION(1, 5, 0, 0), 60, TONE_NOISE)}},
+  {"noise", 10, {V(2, 120, TONE_DURATION(2, 10, 0, 0), 100, TONE_NOISE)}},
+  {"noise", 6,  {V(2, 6000, TONE_DURATION(1, 5, 0, 0), 60, TONE_NOISE)}},
+
+  // -- slide: linear frequency glides -----------------------------------------
+  {"slide", 30, {V(0, TONE_SLIDE(200, 800), TONE_DURATION(28, 8, 0, 0), 90, TONE_MODE0)}},
+  {"slide", 30, {V(0, TONE_SLIDE(800, 200), TONE_DURATION(28, 8, 0, 0), 90, TONE_MODE0)}},
+
+  // -- notes: MIDI note numbers (C4 E4 G4 C5) ----------------------------------
+  {"notes", 14, {V(0, 60, NOTE_LEN(12), 100, TONE_NOTE_MODE)}},
+  {"notes", 14, {V(0, 64, NOTE_LEN(12), 100, TONE_NOTE_MODE)}},
+  {"notes", 14, {V(0, 67, NOTE_LEN(12), 100, TONE_NOTE_MODE)}},
+  {"notes", 20, {V(0, 72, NOTE_LEN(18), 100, TONE_NOTE_MODE)}},
+
+  // -- pan: left, center, right -------------------------------------------------
+  {"pan", 14, {V(0, 440, NOTE_LEN(12), 100, TONE_PAN_LEFT)}},
+  {"pan", 14, {V(0, 494, NOTE_LEN(12), 100, 0)}},
+  {"pan", 14, {V(0, 554, NOTE_LEN(12), 100, TONE_PAN_RIGHT)}},
+
+  // -- rapid: quick alternating notes (stresses retriggering) ------------------
+  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, TONE_MODE0)}},
+  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, TONE_MODE0)}},
+  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, TONE_MODE0)}},
+  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, TONE_MODE0)}},
+  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, TONE_MODE0)}},
+  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, TONE_MODE0)}},
+
+  // -- range: extremes plus an explicit kill ------------------------------------
+  {"range", 10, {V(0, 55, NOTE_LEN(9), 100, TONE_MODE0)}},
+  {"range", 10, {V(0, 1975, NOTE_LEN(9), 100, TONE_MODE0)}},
+  {"range", 14, {}},                 // rest: nothing triggered
+  {"range", 10, {V(0, 262, 0, 0, 0), // kill idiom: zero duration
+                 V(1, 131, TONE_DURATION(8, 4, 0, 0), 80, TONE_TRI)}},
 };
 
-#define NUM_SECTIONS (int)(sizeof(SECTIONS) / sizeof(SECTIONS[0]))
-#define NUM_NOTES    (int)(sizeof(MELODY) / sizeof(MELODY[0]))
+#define NUM_STEPS (int)(sizeof(STEPS) / sizeof(STEPS[0]))
+#define NUM_VOICES (int)(sizeof(((Step*)0)->voice) / sizeof(Voice))
 
-static int idx;          // current note index
-static int frames_left;  // frames remaining in the current note
-static int retrigger;    // frames until the next sustain beep
-static int flash;        // frames left showing the note flash
-static long beeps;       // total beep() calls
-static int trace[TRACE_N]; // frequency factors of recent notes
+static int idx;          // current step index
+static int frames_left;  // frames remaining in the current step
+static int trace[TRACE_N]; // recent step indices for the strip chart
 static int trace_i;
 
 // ---- fixed-point log2 (8 fractional bits), no libm -------------------------
@@ -120,9 +119,10 @@ static int flog2(int x) {
   return r + f;
 }
 
-// Map a frequency to a 0..100 pitch level on a log scale, so the sweep and
-// melody look evenly spaced instead of squashed at the low end.
+// Map a frequency to a 0..100 pitch level on a log scale, so meters look
+// evenly spaced instead of squashed at the low end.
 static int freq_factor(int freq) {
+  if ((unsigned)freq > 65535 || freq <= 0) return 50;
   int lo = flog2(64);
   int hi = flog2(2048);
   int v = flog2(freq);
@@ -151,60 +151,16 @@ static void itoa(int v, char* out) {
   out[n] = '\0';
 }
 
-static const char* section_name(int i) {
-  const char* name = "";
-  for (int s = 0; s < NUM_SECTIONS; s++)
-    if (i >= SECTIONS[s].start) name = SECTIONS[s].name;
-  return name;
-}
-
-static void build_section_label(char* out, int i) {
-  char tmp[12];
-  out[0] = '\0';
-  str_cat(out, section_name(i));
-  str_cat(out, " ");
-  itoa(i + 1, tmp);
-  str_cat(out, tmp);
-  str_cat(out, "/");
-  itoa(NUM_NOTES, tmp);
-  str_cat(out, tmp);
-}
-
-static void build_note_label(char* out, const Note* n) {
-  char tmp[12];
-  out[0] = '\0';
-  if (n->name[0]) {
-    str_cat(out, n->name);
-    str_cat(out, " ");
-  }
-  itoa(n->freq, tmp);
-  str_cat(out, tmp);
-  str_cat(out, "Hz");
-}
-
-static void build_beep_label(char* out) {
-  char tmp[12];
-  out[0] = '\0';
-  str_cat(out, "beeps ");
-  itoa((int)beeps, tmp);
-  str_cat(out, tmp);
-}
-
-// ---- drawing helpers --------------------------------------------------------
-
-static void trace_push(int factor) {
-  trace[trace_i] = factor;
-  trace_i = (trace_i + 1) % TRACE_N;
-}
+// ---- drawing helpers ---------------------------------------------------------
 
 static void draw_trace(void) {
   int x0 = 8;
   int w = (VEX_WIDTH - 16 - 24) / TRACE_N;
   int base = VEX_HEIGHT - 16;
   for (int i = 0; i < TRACE_N; i++) {
-    int f = trace[(trace_i + i) % TRACE_N];
-    int h = f * 24 / 100;
-    rect(x0 + i * w, base - h, w - 1, h, 8);
+    int s = trace[(trace_i + i) % TRACE_N];
+    int h = s ? 24 : 0;
+    rect(x0 + i * w, base - h, w - 1, h, s % 15 + 1);
   }
 }
 
@@ -217,43 +173,35 @@ static void draw_meter(int factor) {
   rect(x + 1, base - h, 18, h, factor < 30 ? 10 : factor < 60 ? 9 : 3);
 }
 
-// ---- cart entry points --------------------------------------------------------
+// ---- cart entry points -------------------------------------------------------
 
 VEX_EXPORT("boot") void boot(void) {
   idx = 0;
   frames_left = 0;
-  retrigger = 0;
-  flash = 0;
-  beeps = 0;
   trace_i = 0;
   for (int i = 0; i < TRACE_N; i++) trace[i] = 0;
   title("vex - test_audio");
 }
 
 VEX_EXPORT("update") void update(void) {
-  // Advance to the next note when the current one has run its frames.
+  // Advance to the next step when the current one has run its frames.
   if (frames_left <= 0) {
-    frames_left = MELODY[idx].frames;
-    retrigger = 0;
-    trace_push(freq_factor(MELODY[idx].freq));
-    idx++;
-    if (idx >= NUM_NOTES) idx = 0;
-  }
+    idx = (idx + 1) % NUM_STEPS;
+    frames_left = STEPS[idx].frames;
+    trace[trace_i] = idx;
+    trace_i = (trace_i + 1) % TRACE_N;
 
-  const Note* n = &MELODY[idx];
-
-  // Sustain: re-beep while the note is held; rests stay silent.
-  if (retrigger <= 0) {
-    retrigger = RETRIGGER;
-    if (n->freq > 0) {
-      beep(n->freq);
-      beeps++;
-      flash = RETRIGGER;
+    // Trigger this step's voices. freq == 0 entries are rests.
+    for (int v = 0; v < NUM_VOICES; v++) {
+      const Voice* vc = &STEPS[idx].voice[v];
+      if (vc->freq == 0 && vc->dur == 0 && vc->vol == 0 && vc->flags == 0)
+        continue;
+      tone(vc->freq, vc->dur, vc->vol, vc->flags);
     }
   }
-  retrigger--;
   frames_left--;
-  if (flash > 0) flash--;
+
+  const Step* st = &STEPS[idx];
 
   // ---- draw ----
   cls(0);
@@ -261,20 +209,26 @@ VEX_EXPORT("update") void update(void) {
 
   text("vex - test_audio", 4, 4, 12);
 
-  char s[40];
-  build_section_label(s, idx);
+  char s[48];
+  s[0] = '\0';
+  str_cat(s, st->name);
+  str_cat(s, " ");
+  char tmp[12];
+  itoa(idx + 1, tmp);
+  str_cat(s, tmp);
+  str_cat(s, "/");
+  itoa(NUM_STEPS, tmp);
+  str_cat(s, tmp);
   text(s, 4, 14, 10);
 
-  if (flash > 0) rect(4, 24, 200, 14, 1);
-  build_note_label(s, n);
-  text(s, 6, 26, 7);
+  int elapsed = st->frames - frames_left;
+  rect(4, 42, (VEX_WIDTH - 24) * elapsed / st->frames, 4, 6);
 
-  int elapsed = n->frames - frames_left;
-  rect(4, 42, (VEX_WIDTH - 24) * elapsed / n->frames, 4, 6);
-
-  draw_meter(freq_factor(n->freq));
+  int meter = 0;
+  for (int v = 0; v < NUM_VOICES; v++)
+    if (st->voice[v].freq != 0) meter = freq_factor(st->voice[v].freq & 0xFFFF);
+  draw_meter(meter);
   draw_trace();
 
-  build_beep_label(s);
-  text(s, 4, VEX_HEIGHT - 10, 11);
+  text("tone()", 4, VEX_HEIGHT - 10, 11);
 }
