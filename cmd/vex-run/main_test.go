@@ -150,7 +150,7 @@ func readFrames(t *testing.T, e *toneEngine, frames int) []byte {
 	return buf
 }
 
-func sampleAt(buf []byte, i int) int16 {
+func s16At(buf []byte, i int) int16 {
 	return int16(binary.LittleEndian.Uint16(buf[i*4:]))
 }
 
@@ -161,7 +161,7 @@ func TestToneEngineReadPhaseAndLegacyBlip(t *testing.T) {
 
 	buf := readFrames(t, e, 16)
 	for i := range 16 {
-		if s := sampleAt(buf, i); s != 8000 {
+		if s := s16At(buf, i); s != 8000 {
 			t.Fatalf("frame %d: L = %d, want 8000 (phase must start positive)", i, s)
 		}
 		if l := int16(binary.LittleEndian.Uint16(buf[i*4+2:])); l != 8000 {
@@ -174,7 +174,7 @@ func TestToneEngineReadPhaseAndLegacyBlip(t *testing.T) {
 	e.tone(0, 1, -1) // retrigger: new tone spans [pos, pos+legacyBlipFrames)
 	whole := readFrames(t, e, legacyBlipFrames)
 	for i := range legacyBlipFrames {
-		s := sampleAt(whole, i)
+		s := s16At(whole, i)
 		if s != 8000 && s != -8000 {
 			t.Fatalf("frame %d inside flat blip: %d, want ±8000", i, s)
 		}
@@ -198,7 +198,7 @@ func TestToneEngineSustainHoldsUntilReplaced(t *testing.T) {
 	// Well past the legacy blip length the voice must still be going.
 	buf := readFrames(t, e, legacyBlipFrames*3+64)
 	last := legacyBlipFrames*3 + 60
-	if s := sampleAt(buf, last); s != 8000 && s != -8000 {
+	if s := s16At(buf, last); s != 8000 && s != -8000 {
 		t.Fatalf("sustained frame %d: %d, want ±8000", last, s)
 	}
 
@@ -206,7 +206,7 @@ func TestToneEngineSustainHoldsUntilReplaced(t *testing.T) {
 	e.tone(0, 0, 0)
 	tail := readFrames(t, e, 16)
 	for i := range 16 {
-		if s := sampleAt(tail, i); s != 0 {
+		if s := s16At(tail, i); s != 0 {
 			t.Fatalf("frame %d after silencing sustained voice: %d, want 0", i, s)
 		}
 	}
@@ -221,7 +221,7 @@ func TestToneEngineChannelsOverlapAndClamp(t *testing.T) {
 	e.tone(1, 440, 0)
 
 	buf := readFrames(t, e, 16)
-	if s := sampleAt(buf, 0); s != 16000 {
+	if s := s16At(buf, 0); s != 16000 {
 		t.Fatalf("two voices in phase: %d, want 16000", s)
 	}
 
@@ -232,7 +232,7 @@ func TestToneEngineChannelsOverlapAndClamp(t *testing.T) {
 	// Channel 0 is silent now, but channel 1 and the clamped channel 3 are
 	// both live and in phase.
 	buf = readFrames(t, e, 16)
-	if s := sampleAt(buf, 0); s != 16000 {
+	if s := s16At(buf, 0); s != 16000 {
 		t.Fatalf("after silencing ch0 (clamped from -7): %d, want 16000 (ch1 + clamped ch3)", s)
 	}
 
@@ -241,7 +241,7 @@ func TestToneEngineChannelsOverlapAndClamp(t *testing.T) {
 	e.tone(1, 0, 0)
 	buf = readFrames(t, e, 16)
 	for i := range 16 {
-		if s := sampleAt(buf, i); s != 0 {
+		if s := s16At(buf, i); s != 0 {
 			t.Fatalf("frame %d after silencing all channels: %d, want 0", i, s)
 		}
 	}
@@ -254,7 +254,7 @@ func TestToneEngineDecayEndsSilent(t *testing.T) {
 
 	buf := readFrames(t, e, toneRate/20)
 	for i := range 8 {
-		if s := sampleAt(buf, i); s == 0 {
+		if s := s16At(buf, i); s == 0 {
 			t.Fatalf("frame %d of decaying tone is silent", i)
 		}
 	}
@@ -265,7 +265,7 @@ func TestToneEngineDecayEndsSilent(t *testing.T) {
 		t.Fatalf("tail Read: %v", err)
 	}
 	for i := range 16 {
-		if s := sampleAt(tail, i); s != 0 {
+		if s := s16At(tail, i); s != 0 {
 			t.Fatalf("frame %d after decay end: %d, want 0", i, s)
 		}
 	}
@@ -278,7 +278,7 @@ func TestToneEngineVolumeScalesLinearly(t *testing.T) {
 	e.tone(0, 440, -1)
 
 	buf := readFrames(t, e, 16)
-	if s := sampleAt(buf, 0); s != 4000 {
+	if s := s16At(buf, 0); s != 4000 {
 		t.Fatalf("half-volume sample: %d, want 4000", s)
 	}
 
@@ -288,12 +288,12 @@ func TestToneEngineVolumeScalesLinearly(t *testing.T) {
 	readFrames(t, e, 16)
 	e.setVol(1, 99) // clamps to unity
 	buf = readFrames(t, e, 16)
-	if s := sampleAt(buf, 0); s != 8000 {
+	if s := s16At(buf, 0); s != 8000 {
 		t.Fatalf("clamped vol(99) sample: %d, want 8000", s)
 	}
 	e.setVol(1, -3) // clamps to silence
 	buf = readFrames(t, e, 16)
-	if s := sampleAt(buf, 0); s != 0 {
+	if s := s16At(buf, 0); s != 0 {
 		t.Fatalf("clamped vol(-3) sample: %d, want 0", s)
 	}
 }
@@ -303,7 +303,7 @@ func TestToneEngineNoiseDistinctFromSquare(t *testing.T) {
 		buf := readFrames(t, e, frames)
 		flips := 0
 		for i := 1; i < frames; i++ {
-			a, b := sampleAt(buf, i-1), sampleAt(buf, i)
+			a, b := s16At(buf, i-1), s16At(buf, i)
 			if (a > 0) != (b > 0) && a != b {
 				flips++
 			}
@@ -339,6 +339,113 @@ func TestToneEngineAposAdvancesWithStream(t *testing.T) {
 	readFrames(t, e, 123)
 	if got := e.apos(); got != 603 {
 		t.Fatalf("apos after 603 frames = %d", got)
+	}
+}
+
+func TestToneEnginePitchRetunesWithoutRestart(t *testing.T) {
+	e := &toneEngine{}
+
+	// Sustained square at 250 Hz (half = 96 samples); let it settle into its
+	// cycle, then retune mid-note to 500 Hz.
+	e.tone(0, 250, 0)
+	buf := readFrames(t, e, 200)
+	if s := s16At(buf, 0); s != 8000 {
+		t.Fatalf("voice must start positive, got %d", s)
+	}
+	e.pitch(0, 500) // half = 48
+
+	// Post-pitch cadence: polarity must toggle every 48 output frames.
+	// The exact count over 480 frames depends on where in the old cycle the
+	// retune landed, so allow one toggle of slack either way.
+	toggles := countToggles(t, e, 480)
+	if toggles < 9 || toggles > 11 {
+		t.Fatalf("post-pitch toggles over 480 frames = %d, want ~10 (500 Hz)", toggles)
+	}
+
+	// Pitch on a silent channel is a no-op.
+	e.tone(0, 0, 0) // retire ch0 first
+	e.tone(1, 0, 0)
+	e.pitch(1, 440) // must not panic or resurrect anything
+	buf = readFrames(t, e, 16)
+	for i := range 16 {
+		if s := s16At(buf, i); s != 0 {
+			t.Fatalf("pitch on silent channel produced sound: %d", s)
+		}
+	}
+}
+
+func countToggles(t *testing.T, e *toneEngine, frames int) int {
+	t.Helper()
+	buf := readFrames(t, e, frames)
+	toggles := 0
+	prev := s16At(buf, 0) > 0
+	for i := 1; i < frames; i++ {
+		pos := s16At(buf, i) > 0
+		if pos != prev {
+			toggles++
+			prev = pos
+		}
+	}
+	return toggles
+}
+
+func TestToneEngineSamplePlayback(t *testing.T) {
+	e := &toneEngine{}
+
+	// 48 bytes of ramp PCM played at 96000 Hz = 24 output frames per pass;
+	// values are signed 8-bit.
+	pcm := make([]byte, 48)
+	for i := range pcm {
+		pcm[i] = byte(int8(i*2 - 48)) // quiet ramp: stays below the soft-clip knee
+	}
+
+	e.Sample(0, pcm, 96000, 0)
+	buf := readFrames(t, e, 24)
+
+	// First frame renders PCM[0] exactly (-48 * 256, linear region).
+	if s := s16At(buf, 0); s != -48*256 {
+		t.Fatalf("first sample = %d, want %d", s, -48*256)
+	}
+
+	// One-shot: after len/rate seconds the channel is silent again.
+	tail := readFrames(t, e, 8)
+	for i := range 8 {
+		if s := s16At(tail, i); s != 0 {
+			t.Fatalf("one-shot sample still sounding %d frames later: %d", i, s)
+		}
+	}
+
+	// Tail loop sustains indefinitely.
+	e.Sample(1, pcm, toneRate, 12) // 48-byte sample looping its last 12 bytes
+	readFrames(t, e, 60)
+	buf = readFrames(t, e, 64)
+	live := false
+	for i := range 64 {
+		if s := s16At(buf, i); s != 0 {
+			live = true
+		}
+	}
+	if !live {
+		t.Fatal("looped sample went silent")
+	}
+	// ...and a zero-freq event silences it.
+	e.tone(1, 0, 0)
+	tail = readFrames(t, e, 16)
+	for i := range 16 {
+		if s := s16At(tail, i); s != 0 {
+			t.Fatalf("looped sample survived silencing: %d", s)
+		}
+	}
+
+	// Caps: oversized len truncates to sampleMaxLen; rate clamps.
+	big := make([]byte, sampleMaxLen+100)
+	for i := range big {
+		big[i] = 127
+	}
+	e.Sample(2, big, 999999, -5)
+	buf = readFrames(t, e, 4)
+	if s := s16At(buf, 0); s <= 0 {
+		t.Fatalf("clamped sample should sound, got %d", s)
 	}
 }
 

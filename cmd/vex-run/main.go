@@ -838,39 +838,66 @@ const (
 	clipKnee = 24000.0
 )
 
-// voice kinds: every channel is generic and can hold either at any time.
+// voice kinds: every channel is generic and can hold any of them at any time.
 const (
 	kindSquare uint8 = iota
 	kindNoise
+	kindSample
 )
 
-// sustainEnd is the `end` of a sustained voice (ms == 0): it stops only via
-// an explicit event on its channel, never by expiry.
-const sustainEnd = math.MaxInt64
+const (
+	// sustainEnd is the `end` of a sustained voice (ms == 0): it stops only
+	// via an explicit event on its channel, never by expiry.
+	sustainEnd = math.MaxInt64
 
-// toneVoice is one oscillator or noise source: a square wave whose sign
-// toggles every `half` samples (or an LFSR stepped on the same cadence),
-// with an amplitude that decays multiplicatively (step == 1 for flat events)
-// until `end`.
+	// sampleMaxLen bounds one copied PCM payload (per channel); worst case
+	// is 4 x sampleMaxLen bytes of host-side audio data.
+	sampleMaxLen = 64 * 1024
+
+	// sampleMaxRate caps playback frequency (resample ratio <= 2 at the
+	// 48 kHz output rate).
+	sampleMaxRate = 96000
+
+	// sampleAmp maps full-scale 8-bit PCM (-128..127) into the s16 mix
+	// domain; samples play near full scale like they do on Paula.
+	sampleAmp = 256.0
+)
+
+// toneVoice is one oscillator, noise source, or PCM sample. Square and
+// noise track position with a fractional half-period accumulator (`ph`
+// counts 0..1 within the current half-period), so pitch() rewriting `half`
+// continues from the current wave position instead of jumping. Samples keep
+// a fractional byte position and interpolate.
 type toneVoice struct {
-	kind  uint8
-	half  int     // samples per half-period / per LFSR step (toneRate / (2*freq))
-	phase int     // position within the current half-period
-	lfsr  uint16  // 16-bit noise state (kind == kindNoise)
-	end   int64   // exclusive last frame; sustainEnd until replaced/silenced
-	amp   float64 // current envelope amplitude
-	step  float64 // per-sample multiplier (exp(-ln(1/decayEnd)/frames))
+	kind uint8
+	half int // samples per half-period / per LFSR step (toneRate / (2*freq))
+	ph   float64
+	sign int // square polarity
+
+	lfsr uint16 // 16-bit noise state (kind == kindNoise)
+
+	data    []byte  // 8-bit signed PCM (kind == kindSample)
+	rate    float64 // playback Hz
+	pos     float64 // fractional position in data[]
+	loopLen int     // tail loop in bytes; 0 = one-shot
+
+	end  int64   // exclusive last frame; sustainEnd until replaced/silenced
+	amp  float64 // current envelope amplitude
+	step float64 // per-sample multiplier (exp(-ln(1/decayEnd)/frames))
 }
 
-// pendingEvent is a tone()/noise() call waiting to be picked up at the next
-// Read. Both primitives share one pending slot per channel.
+// pendingEvent is a tone()/noise()/sample() call waiting to be picked up at
+// the next Read. All primitives share one pending slot per channel.
 type pendingEvent struct {
 	set     bool
 	freq    uint32 // 0 = silence the channel
 	frames  int64
 	kind    uint8
-	sustain bool // ms == 0: no scheduled end
-	flat    bool // ms < 0: legacy blip, constant amplitude
+	sustain bool   // ms == 0: no scheduled end
+	flat    bool   // ms < 0: legacy blip, constant amplitude
+	data    []byte // kindSample: borrowed view of the channel scratch buffer
+	rate    int32
+	loopLen int32
 }
 
 // toneEngine synthesizes up to four independent voices into one long-lived
@@ -887,6 +914,13 @@ type toneEngine struct {
 	voices  [4]*toneVoice
 	pending [4]pendingEvent
 	atten   [4]int32 // per-channel attenuation 0..64 (0 == unity, so the zero value is usable)
+
+	// per-channel PCM scratch: sample() copies bytes in here on the wasm
+	// thread and hands the view to the pending event. Overwriting the
+	// scratch between schedule and apply only ever happens when the cart
+	// retriggered the same channel, and the newest content is the correct
+	// one to apply.
+	scratch [4][]byte
 }
 
 // schedule is the shared body of tone() and noise(): clamp arguments and
@@ -945,6 +979,55 @@ func (e *toneEngine) noise(channel, freq, ms int32) {
 	e.schedule(channel, freq, ms, kindNoise)
 }
 
+// Sample stages an 8-bit signed PCM payload as a pending event: the bytes
+// are copied into the channel's scratch buffer on the wasm thread and the
+// audio thread applies the view at its next Read.
+func (e *toneEngine) Sample(channel int32, pcm []byte, rate, loopLen int32) {
+	ch := channel
+	if ch < 0 {
+		ch = 0
+	}
+	if ch > 3 {
+		ch = 3
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if len(pcm) == 0 {
+		e.pending[ch] = pendingEvent{set: true, freq: 0} // nothing to play: silence
+		return
+	}
+
+	buf := e.scratch[ch]
+	if cap(buf) < len(pcm) {
+		buf = make([]byte, len(pcm))
+	}
+	copy(buf[:cap(buf)], pcm[:min(len(pcm), cap(buf))])
+	e.scratch[ch] = buf[:len(pcm)]
+
+	if rate < 1 {
+		rate = 1
+	}
+	if rate > sampleMaxRate {
+		rate = sampleMaxRate
+	}
+	if loopLen < 0 {
+		loopLen = 0
+	}
+	if loopLen > int32(len(pcm)) {
+		loopLen = int32(len(pcm))
+	}
+
+	e.pending[ch] = pendingEvent{
+		set:     true,
+		kind:    kindSample,
+		data:    e.scratch[ch],
+		rate:    rate,
+		loopLen: loopLen,
+	}
+}
+
 // volMax is the vol() range top: tracker-native 0..64, with 64 == unity.
 const volMax = 64
 
@@ -976,6 +1059,45 @@ func (e *toneEngine) apos() int32 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return int32(e.pos)
+}
+
+// pitch retunes the voice currently sounding on channel ch without
+// restarting it: phase, envelope, volume, and end time are kept. Applies to
+// all voice kinds -- square/noise half-period divisor and sample playback
+// rate alike. No-op when the channel is silent.
+func (e *toneEngine) pitch(channel, freq int32) {
+	ch := channel
+	if ch < 0 {
+		ch = 0
+	}
+	if ch > 3 {
+		ch = 3
+	}
+	if freq < 1 {
+		freq = 1
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	v := e.voices[ch]
+	if v == nil {
+		return
+	}
+	switch v.kind {
+	case kindSample:
+		// Samples may exceed tone's 20 kHz ceiling: their base rate can be
+		// up to sampleMaxRate, and pitching above it must stay reachable.
+		if freq > sampleMaxRate {
+			freq = sampleMaxRate
+		}
+		v.rate = float64(freq)
+	default:
+		if freq > 20000 {
+			freq = 20000
+		}
+		v.half = max(1, toneRate/(2*int(freq)))
+	}
 }
 
 // advance pushes the audio clock forward without rendering samples -- the
@@ -1011,27 +1133,43 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			continue
 		}
 
-		if p.freq < 1 {
+		if p.freq < 1 && p.kind != kindSample {
 			e.voices[ch] = nil
 			continue
 		}
 
-		v := &toneVoice{
-			kind: p.kind,
-			half: max(1, toneRate/(2*int(p.freq))),
-			lfsr: 0xACE1,
-			amp:  voicePeak,
-			end:  sustainEnd,
-		}
-		switch {
-		case p.sustain:
+		v := &toneVoice{kind: p.kind, sign: 1, amp: voicePeak, end: sustainEnd}
+		switch p.kind {
+		case kindSample:
+			n := len(p.data)
+			loop := int(p.loopLen)
+			if loop < 0 {
+				loop = 0
+			}
+			if loop > n {
+				loop = n
+			}
+			v.data = p.data
+			v.rate = float64(p.rate)
+			v.loopLen = loop
 			v.step = 1
-		case p.flat:
-			v.step = 1
-			v.end = e.pos + p.frames
+			if loop == 0 {
+				frames := int64(float64(n) * toneRate / v.rate)
+				v.end = e.pos + max(1, frames)
+			} // else: tail loop sustains until replaced
 		default:
-			v.step = math.Exp(-math.Log(1/decayEnd) / float64(p.frames))
-			v.end = e.pos + p.frames
+			v.half = max(1, toneRate/(2*int(p.freq)))
+			v.lfsr = 0xACE1
+			switch {
+			case p.sustain:
+				v.step = 1
+			case p.flat:
+				v.step = 1
+				v.end = e.pos + p.frames
+			default:
+				v.step = math.Exp(-math.Log(1/decayEnd) / float64(p.frames))
+				v.end = e.pos + p.frames
+			}
 		}
 		e.voices[ch] = v
 	}
@@ -1047,10 +1185,23 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				e.voices[ch] = nil
 				continue
 			}
+
 			sample := voicePeak
-			if v.kind == kindNoise {
-				if v.phase >= v.half {
-					v.phase = 0
+			switch v.kind {
+			case kindSample:
+				sample = sampleAt(v, v.pos)
+				v.pos += v.rate / toneRate
+				wrap := float64(len(v.data) - v.loopLen)
+				if v.pos >= float64(len(v.data)) {
+					if v.loopLen > 0 {
+						v.pos = wrap + math.Mod(v.pos-float64(len(v.data)), float64(v.loopLen))
+					} else {
+						v.pos = float64(len(v.data)) - 1 // clamp until retired
+					}
+				}
+			case kindNoise:
+				if v.ph >= 1 {
+					v.ph--
 					// XNOR feedback over taps 15/13, like the Game Boy's
 					// noise channel minus its divisor table.
 					fb := uint16(1) - ((v.lfsr >> 15) ^ (v.lfsr>>13)&1)
@@ -1059,13 +1210,19 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				if v.lfsr&1 == 0 {
 					sample = -voicePeak
 				}
-			} else {
-				if (v.phase/v.half)&1 == 1 {
+				v.ph += 1 / float64(v.half)
+			default:
+				if v.sign < 0 {
 					sample = -voicePeak
 				}
+				v.ph += 1 / float64(v.half)
+				if v.ph >= 1 {
+					v.ph--
+					v.sign = -v.sign
+				}
 			}
-			acc += sample * v.amp / voicePeak * gain[ch]
-			v.phase++
+
+			acc += sample * (v.amp / voicePeak) * gain[ch]
 			v.amp *= v.step
 		}
 		e.pos++
@@ -1079,6 +1236,20 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 	}
 
 	return n, nil
+}
+
+// sampleAt returns the interpolated 8-bit PCM value at fractional position
+// pos in the voice's data, scaled into the s16 mix domain.
+func sampleAt(v *toneVoice, pos float64) float64 {
+	i0 := int(pos)
+	if i0 >= len(v.data) {
+		i0 = len(v.data) - 1
+	}
+	i1 := min(i0+1, len(v.data)-1)
+	frac := pos - math.Floor(pos)
+	a := float64(int8(v.data[i0]))
+	b := float64(int8(v.data[i1]))
+	return (a + (b-a)*frac) * sampleAmp
 }
 
 // softClip maps the mixed sample into the 16-bit range: linear below the
@@ -1149,6 +1320,54 @@ func (g *Game) vol(channel, v int32) {
 	}
 	g.ensureAudio()
 	g.audio.setVol(channel, v)
+}
+
+// pitch(channel, freq): retune the sounding voice without restarting it.
+func (g *Game) pitch(channel, freq int32) {
+	if g.audioCtx == nil {
+		return
+	}
+	g.ensureAudio()
+	g.audio.pitch(channel, freq)
+}
+
+// sample(channel, ptr, len, rate, loopLen): trigger 8-bit PCM from wasm
+// memory. The bytes are copied out at trigger time; later cart-side edits
+// of linear memory do not affect the playing voice.
+func (g *Game) sample(m api.Module, channel, ptr, ln, rate, loopLen int32) {
+	if g.audioCtx == nil {
+		return
+	}
+	g.ensureAudio()
+
+	n := ln
+	if n < 0 {
+		n = 0
+	}
+	if n > sampleMaxLen {
+		n = sampleMaxLen
+	}
+
+	mem := m.Memory()
+	size := mem.Size()
+	if uint64(uint32(ptr)) >= uint64(size) {
+		n = 0
+	} else if avail := int64(size) - int64(ptr); avail < int64(n) {
+		n = int32(avail) // truncate at the end of linear memory
+	}
+
+	pcm := []byte(nil)
+	if n > 0 {
+		data, ok := mem.Read(uint32(ptr), uint32(n))
+		if !ok {
+			n = 0
+		}
+		pcm = data
+	}
+	if pcm == nil {
+		pcm = []byte{}
+	}
+	g.audio.Sample(channel, pcm, rate, loopLen)
 }
 
 // apos(): audio clock in 48 kHz frames since console start.
@@ -1352,6 +1571,10 @@ func buildEnvModule(ctx context.Context, g *Game, r wazero.Runtime) error {
 		{"noise", func(_ context.Context, _ api.Module, channel, freq, ms int32) { g.noise(channel, freq, ms) }},
 		{"vol", func(_ context.Context, _ api.Module, channel, v int32) { g.vol(channel, v) }},
 		{"apos", func(_ context.Context, _ api.Module) uint32 { return uint32(g.apos()) }},
+		{"pitch", func(_ context.Context, _ api.Module, channel, freq int32) { g.pitch(channel, freq) }},
+		{"sample", func(_ context.Context, m api.Module, channel, ptr, ln, rate, loopLen int32) {
+			g.sample(m, channel, ptr, ln, rate, loopLen)
+		}},
 	}
 
 	b := r.NewHostModuleBuilder("env")
