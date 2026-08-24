@@ -96,30 +96,34 @@ pub extern "env" fn palreset() void;
 
 pub const TONE_CHANNELS = 4;
 
-/// Play a tone at `freq` Hz (clamps to 1..20000), or as a MIDI note number
-/// with `TONE_NOTE_MODE` (middle C = 60). See `Duration`, `Volume`, and
-/// `toneFlags` for the packed layouts; prefer the helpers over hand-packing.
+/// Play a tone at `freq` Hz (clamps to 1..20000), or a MIDI note number with
+/// `TONE_NOTE_MODE` (middle C = 60). Build arguments with `toneSlide`,
+/// `ToneDuration`, `ToneVolume`, and `toneFlags` -- layouts:
+///   freq     low 16: start Hz; high 16: slide target over the sustain
+///   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
+///   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
+///   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
+///            bit 8 note mode
 pub extern "env" fn tone(freq: i32, duration: i32, volume: i32, flags: i32) void;
 
-/// Waveform selection; persists on the channel until the next call says
-/// otherwise. The default is a pulse wave.
+/// Waveform (bits 6..7); persists per channel until changed.
 pub const TONE_PULSE: i32 = 0;
-/// 15-bit LFSR stepped at 2*freq Hz, so freq acts as noise color/pitch.
+/// LFSR stepped at 2*freq Hz.
 pub const TONE_NOISE: i32 = 1 << 6;
 /// Triangle; softer, good for bass.
 pub const TONE_TRI: i32 = 2 << 6;
 
-/// Duty cycle for pulse waves. TONE_MODE0 is the classic square.
+/// Duty cycle for pulses (bits 2..3).
 pub const TONE_MODE0: i32 = 0; // 50%
 pub const TONE_MODE1: i32 = 1 << 2; // 25%
 pub const TONE_MODE2: i32 = 2 << 2; // 12.5%
 pub const TONE_MODE3: i32 = 3 << 2; // 75%
 
-/// Panning: constant-power gains, center by default.
+/// Panning (bits 4..5); constant-power gains, center by default.
 pub const TONE_PAN_LEFT: i32 = 1 << 4;
 pub const TONE_PAN_RIGHT: i32 = 2 << 4;
 
-/// Interpret the frequency parameter as a MIDI note number (middle C = 60).
+/// Interpret the frequency parameter as a MIDI note number.
 pub const TONE_NOTE_MODE: i32 = 1 << 8;
 
 fn toneByte(v: i32) i32 {
@@ -131,9 +135,7 @@ pub fn toneSlide(freq: i32, to: i32) i32 {
     return (freq & 0xFFFF) | ((to & 0xFFFF) << 16);
 }
 
-/// ADSR duration in frames (each segment clamps to 0..255):
-/// sustain held at the sustain volume, release ramping back to 0,
-/// decay ramping peak down to sustain, attack ramping 0 up to peak.
+/// ADSR duration in frames (each segment clamps to 0..255).
 pub const ToneDuration = struct {
     sustain: i32 = 0,
     release: i32 = 0,
