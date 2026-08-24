@@ -14,6 +14,7 @@
 #include <string.h>
 #include <errno.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <time.h>
 
 #include "raylib.h"
@@ -609,58 +610,70 @@ m3ApiRawFunction(host_palreset) {
     m3ApiSuccess();
 }
 
-// ---- audio (tone) ---------------------------------------------------------
-// Four independent voices (VEX_TONE_CHANNELS), one persistent Sound per
-// channel whose f32 buffer is rewritten per call. A tone() on a channel
-// overwrites that channel's Sound with a fresh square wave and restarts it,
-// so a new note on an occupied channel cuts the old one off at frame 0,
-// while notes on different channels overlap: raylib/miniaudio sums the four
-// Sounds into the device output, where the sum clips softly at full scale.
-// The Sounds are created lazily on first use per channel (so headless runs
-// that never tone() don't touch the audio device) and unloaded on shutdown.
+// ---- audio (tone/noise/vol/apos) ------------------------------------------
+// Four generic voices mixed continuously into one streaming AudioStream via
+// raylib's audio-callback API. The old per-channel Sound-rewrite model could
+// not express a sustained note (a pre-rendered buffer has no "until"), so
+// events now publish small voice descriptors that the audio thread's mixer
+// consumes; the cart thread never touches the mix path directly.
 //
-// Each voice's buffer grows to fit the longest tone played on it so far
-// (doubling), so carts cycling through a few durations don't thrash
-// allocations. ms is clamped to TONE_MAX_MS; the whole capacity is rewritten
-// on every call (the tail as silence) because UpdateSound() can only
-// overwrite the buffer, never shrink it.
+// Synchronization: cart thread and audio callback run on different threads.
+// Each channel's event is published through a seqlock (an atomic sequence
+// counter made odd while the plain-data event fields are written); the
+// callback retries its read if it caught a half-published event. Volume is a
+// single atomic int per channel, applied live so volume slides affect the
+// currently sounding voice. g_apos -- the audio clock apos() returns -- is
+// owned by the callback and only read elsewhere.
+//
+// Semantics shared with the Go/JS hosts:
+//   channels clamp to 0..3; freq <= 0 silences, freq > 20000 clamps;
+//   ms > 0   decaying tone (exponential to -48 dB) for min(ms, 5000) ms
+//   ms == 0  sustain until the next event on the channel
+//   ms < 0   legacy flat ~100 ms blip
+// A new event replaces a busy voice at phase 0 (click-free).
 #define VEX_TONE_CHANNELS 4 // keep in sync with vex.h / vex.zig / README
 #define TONE_MAX_MS       5000
+#define TONE_LEGACY_MS    100
+#define TONE_SUSTAIN      UINT64_MAX // end of a sustained voice
 
 typedef struct {
-    Sound  snd;
-    bool   loaded;
-    float* buf;        // mono f32, cap_frames long
-    int    cap_frames;
-} ToneVoice;
+    _Atomic uint8_t  kind;       // 0 square, 1 noise
+    _Atomic uint32_t half;       // samples per half-period / LFSR step
+    _Atomic uint32_t decay_len;  // envelope length in frames, 0 = flat
+    _Atomic uint64_t start;      // absolute frame of onset (event version)
+    _Atomic uint64_t end;        // absolute frame of stop; TONE_SUSTAIN = never
+} VoiceEvent;
 
-static ToneVoice g_voices[VEX_TONE_CHANNELS];
-static int g_tone_rate = 0;
-static bool g_audio_ready = false;
+typedef struct {
+    // published event (seqlock-protected)
+    VoiceEvent ev;
+    // callback-private runtime state
+    bool     seen;
+    uint64_t last_start; // identifies the event the runtime state belongs to
+    uint8_t  kind;       // snapshot of ev.kind for the running voice
+    uint32_t half;       // snapshot of ev.half
+    uint64_t end;        // snapshot of ev.end
+    uint32_t phase;      // position within current half-period / LFSR interval
+    uint16_t lfsr;       // 16-bit noise state
+    float    env;        // envelope amplitude
+    float    step;       // per-sample multiplier
+} MixVoice;
 
-static void tone_cleanup(void) {
-    for (int c = 0; c < VEX_TONE_CHANNELS; c++) {
-        ToneVoice* v = &g_voices[c];
-        if (v->loaded) {
-            UnloadSound(v->snd);
-            v->snd = (Sound){0};
-            v->loaded = false;
-        }
-        RL_FREE(v->buf);
-        v->buf = NULL;
-        v->cap_frames = 0;
-    }
-    if (g_audio_ready) {
-        g_audio_ready = false;
-        CloseAudioDevice();
-    }
-}
+static MixVoice g_mix[VEX_TONE_CHANNELS];
+static _Atomic uint64_t g_seq;                // seqlock: odd while publishing
+static _Atomic int      g_vol[VEX_TONE_CHANNELS]; // attenuation 0..VOL_MAX, 0 = unity
+#define VOL_MAX 64 // tracker-native vol() range top; VOL_MAX == unity
+static _Atomic uint64_t g_apos;               // frames produced by the mixer
+static AudioStream g_stream;
+static bool        g_stream_ready;
+static bool        g_audio_ready;
 
 // Discover the device sample rate via a 1-frame placeholder Sound (raylib
 // doesn't expose a public getter). Any rate we pass to LoadSoundFromWave is
 // resampled to the device rate anyway, so the placeholder's rate is irrelevant.
 static int tone_device_rate(void) {
-    if (g_tone_rate > 0) return g_tone_rate;
+    static int cached = 0;
+    if (cached > 0) return cached;
     float ph[2] = {0.0f, 0.0f};
     Wave pw = {
         .frameCount = 1,
@@ -673,96 +686,221 @@ static int tone_device_rate(void) {
     int rate = (int)ps.stream.sampleRate;
     UnloadSound(ps);
     if (rate <= 0) rate = 44100;
-    g_tone_rate = rate;
+    cached = rate;
     return rate;
 }
 
-// tone(channel, freq, ms): play a square wave on voice 0..3 (out-of-range
-// channels clamp). freq <= 0 silences the channel; freq > 20000 clamps.
-// ms <= 0 plays the legacy flat ~100ms blip -- the compatibility shim for
-// beep() call sites being ported, sounding exactly like the old beep(). A
-// positive ms plays that many milliseconds (clamped to TONE_MAX_MS) with an
-// exponential decay envelope reaching ~1/256 amplitude at the last sample,
-// so held notes fade out instead of clicking off.
+static void mix_callback(void* buffer, unsigned int frames);
+
+// ensure_stream lazily opens the streaming AudioStream on the first event so
+// headless runs that never make sound don't touch the device.
+static void ensure_audio_stream(void) {
+    if (g_stream_ready || !g_audio_ready) return;
+    int rate = tone_device_rate();
+    g_stream = LoadAudioStream((unsigned int)rate, 32, 2);
+    SetAudioStreamCallback(g_stream, mix_callback);
+    PlayAudioStream(g_stream);
+    g_stream_ready = true;
+}
+
+static void tone_cleanup(void) {
+    if (g_stream_ready) {
+        StopAudioStream(g_stream);
+        UnloadAudioStream(g_stream);
+        g_stream = (AudioStream){0};
+        g_stream_ready = false;
+    }
+    if (g_audio_ready) {
+        g_audio_ready = false;
+        CloseAudioDevice();
+    }
+}
+
+// publish installs an event for channel ch under the seqlock. Runs on the
+// cart thread.
+static void publish_event(int ch, const VoiceEvent* ev) {
+    uint64_t s = atomic_load_explicit(&g_seq, memory_order_relaxed);
+    atomic_store_explicit(&g_seq, s + 1, memory_order_relaxed); // odd: writing
+
+    atomic_store_explicit(&g_mix[ch].ev.kind,      ev->kind,      memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.half,      ev->half,      memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.decay_len, ev->decay_len, memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.start,     ev->start,     memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.end,       ev->end,       memory_order_relaxed);
+
+    atomic_store_explicit(&g_seq, s + 2, memory_order_release); // even: stable
+}
+
+// schedule is the shared body of tone() and noise(): clamp arguments and
+// publish an event. Runs on the cart thread.
+static void schedule_voice(int ch_in, bool is_noise, int32_t freq, int32_t ms) {
+    if (!g_audio_ready) return;
+
+    int ch = ch_in < 0 ? 0 : ch_in;
+    if (ch >= VEX_TONE_CHANNELS) ch = VEX_TONE_CHANNELS - 1;
+
+    ensure_audio_stream();
+
+    VoiceEvent ev = {0};
+    uint64_t now = atomic_load_explicit(&g_apos, memory_order_relaxed);
+    ev.start = now;
+
+    // freq <= 0 silences the channel right away.
+    if (freq < 1) {
+        ev.end = now;
+        publish_event(ch, &ev);
+        return;
+    }
+
+    ev.kind = is_noise ? 1 : 0;
+    if (freq > 20000) freq = 20000;
+    int rate = tone_device_rate();
+    ev.half = (uint32_t)(rate / (2 * freq));
+    if (ev.half < 1) ev.half = 1;
+
+    if (ms > 0) {
+        int dur_ms = ms > TONE_MAX_MS ? TONE_MAX_MS : ms;
+        uint64_t len = (uint64_t)rate * (uint64_t)dur_ms / 1000;
+        if (len < 1) len = 1;
+        ev.decay_len = (uint32_t)len;
+        ev.end = now + len;
+    } else if (ms == 0) {
+        ev.end = TONE_SUSTAIN;
+    } else {
+        ev.end = now + (uint64_t)rate * TONE_LEGACY_MS / 1000;
+    }
+
+    publish_event(ch, &ev);
+}
+
 m3ApiRawFunction(host_tone) {
     m3ApiGetArg(int32_t, channel)
     m3ApiGetArg(int32_t, freq)
     m3ApiGetArg(int32_t, ms)
+    schedule_voice(channel, false, freq, ms);
+    m3ApiSuccess();
+}
+
+m3ApiRawFunction(host_noise) {
+    m3ApiGetArg(int32_t, channel)
+    m3ApiGetArg(int32_t, freq)
+    m3ApiGetArg(int32_t, ms)
+    schedule_voice(channel, true, freq, ms);
+    m3ApiSuccess();
+}
+
+// vol(channel, v): per-channel linear gain, v clamped to 0..VOL_MAX with
+// VOL_MAX == unity (the zero value of the attenuation store means "no
+// attenuation"). Applied live: scales whatever the channel is playing.
+m3ApiRawFunction(host_vol) {
+    m3ApiGetArg(int32_t, channel)
+    m3ApiGetArg(int32_t, v)
     if (!g_audio_ready) m3ApiSuccess();
 
     int ch = channel < 0 ? 0 : channel;
     if (ch >= VEX_TONE_CHANNELS) ch = VEX_TONE_CHANNELS - 1;
-    ToneVoice* v = &g_voices[ch];
-
-    // Silence this channel now; nothing else to do.
-    if (freq < 1) {
-        if (v->loaded && IsSoundPlaying(v->snd)) StopSound(v->snd);
-        m3ApiSuccess();
-    }
-
-    // Grow the voice's buffer to fit this tone (doubling from the legacy
-    // blip size). The Sound is (re)created whenever the buffer moves, since
-    // its internal audio buffer aliases our memory.
-    int rate = tone_device_rate();
-    int dur_ms = ms <= 0 ? 100 : ms;
-    if (dur_ms > TONE_MAX_MS) dur_ms = TONE_MAX_MS;
-    long long need = (long long)rate * dur_ms / 1000;
-    if (need < 1) need = 1;
-
-    if ((long long)v->cap_frames < need) {
-        int cap = rate / 10; // start at the legacy blip size, grow by doubling
-        while ((long long)cap < need) cap *= 2;
-
-        RL_FREE(v->buf);
-        v->buf = RL_MALLOC((size_t)cap * sizeof(float));
-        if (!v->buf) {
-            v->cap_frames = 0;
-            v->loaded = false;
-            m3ApiSuccess();
-        }
-        memset(v->buf, 0, (size_t)cap * sizeof(float));
-
-        if (v->loaded) UnloadSound(v->snd);
-        Wave wave = {
-            .frameCount = (unsigned int)cap,
-            .sampleRate = (unsigned int)rate,
-            .sampleSize = 32,
-            .channels = 1,
-            .data = v->buf,
-        };
-        v->snd = LoadSoundFromWave(wave);
-        v->loaded = true;
-        v->cap_frames = cap;
-    }
-
-    // Square wave at the device rate, ±8000/32768 ≈ ±0.24 of full scale to
-    // match the Go host's s16 peak (8000) and the JS host's 8000/32768 gain.
-    // Phase starts at sign=+1 on sample 0 and toggles every `half` samples,
-    // so a retrigger after a different frequency restarts the new note at a
-    // known phase instead of clicking mid-half-period. The decay envelope
-    // steps down multiplicatively so it needs no per-sample expf().
-    const float amp = 8000.0f / 32768.0f;
-    const bool decay = ms > 0;
-    const float step = decay ? expf(-5.545f / (float)need) : 1.0f; // ~1/256 at the end
-    const int half = rate / (2 * freq); // samples per square half-period
-    float env = amp;
-    int sign = 1;
-    for (int i = 0; i < (int)need; i++) {
-        if (half > 0 && i > 0 && i % half == 0) sign = -sign;
-        v->buf[i] = (float)sign * env;
-        env *= step;
-    }
-
-    // The tail beyond `need` must be silence: UpdateSound() overwrites the
-    // whole capacity buffer and older samples would otherwise linger.
-    for (int i = (int)need; i < v->cap_frames; i++) v->buf[i] = 0.0f;
-
-    // UpdateSound() stops the buffer and memcpys our f32 mono data in place
-    // (miniaudio converts mono -> device stereo during mixing). The following
-    // PlaySound() then restarts from frame 0, which is the retrigger.
-    UpdateSound(v->snd, v->buf, v->cap_frames);
-    PlaySound(v->snd);
+    int att = VOL_MAX - (v < 0 ? 0 : v > VOL_MAX ? VOL_MAX : v);
+    atomic_store_explicit(&g_vol[ch], att, memory_order_relaxed);
     m3ApiSuccess();
+}
+
+// apos(): sample frames produced by the output stream since console start
+// (48 kHz count; wraps after ~12.4 hours). Safe in headless runs: returns 0.
+m3ApiRawFunction(host_apos) {
+    m3ApiReturnType(int32_t)
+    uint64_t pos = atomic_load_explicit(&g_apos, memory_order_relaxed);
+    m3ApiReturn((int32_t)(uint32_t)pos);
+}
+
+// mix_callback runs on the audio thread: pull the latest events, then render
+// `frames` interleaved stereo f32 samples as the sum of all active voices,
+// soft-clipped at the 16-bit range like the Go host's mixer.
+static void mix_callback(void* buffer, unsigned int frames) {
+    float* out = buffer;
+
+    // Poll every channel's event slot; a changed start marks a new event.
+    for (int c = 0; c < VEX_TONE_CHANNELS; c++) {
+        MixVoice* v = &g_mix[c];
+        uint64_t seq = atomic_load_explicit(&g_seq, memory_order_acquire);
+        if (seq & 1) continue; // publisher mid-write: keep previous voice
+
+        VoiceEvent ev;
+        ev.kind      = atomic_load_explicit(&v->ev.kind,      memory_order_relaxed);
+        ev.half      = atomic_load_explicit(&v->ev.half,      memory_order_relaxed);
+        ev.decay_len = atomic_load_explicit(&v->ev.decay_len, memory_order_relaxed);
+        ev.start     = atomic_load_explicit(&v->ev.start,     memory_order_relaxed);
+        ev.end       = atomic_load_explicit(&v->ev.end,       memory_order_acquire);
+
+        if (atomic_load_explicit(&g_seq, memory_order_acquire) != seq) continue;
+
+        if (!v->seen || ev.start != v->last_start) {
+            v->seen = true;
+            v->last_start = ev.start;
+            v->kind = ev.kind;
+            v->half = ev.half < 1 ? 1 : ev.half;
+            v->end = ev.end;
+            v->phase = 0;
+            v->lfsr = 0xACE1;
+            v->env = 1.0f;
+            v->step = ev.decay_len > 0
+                ? expf(-5.545f / (float)ev.decay_len) // ~1/256 at the end
+                : 1.0f;
+        }
+    }
+
+    unsigned int f = 0;
+    uint64_t pos = atomic_load_explicit(&g_apos, memory_order_relaxed);
+    while (f < frames) {
+        float acc = 0.0f;
+        for (int c = 0; c < VEX_TONE_CHANNELS; c++) {
+            MixVoice* v = &g_mix[c];
+            if (!v->seen || pos >= v->end) continue;
+
+            float gain = (float)(VOL_MAX - atomic_load_explicit(
+                             &g_vol[c], memory_order_relaxed)) /
+                         (float)VOL_MAX;
+            if (gain <= 0.0f) {
+                v->env *= v->step;
+                v->phase++;
+                continue;
+            }
+
+            float s;
+            if (v->kind == 1) {
+                if (v->phase >= v->half) {
+                    v->phase = 0;
+                    // XNOR feedback over taps 15/13 (Game Boy-style noise)
+                    uint16_t fb = (uint16_t)(1u - (((v->lfsr >> 15)
+                                                   ^ (v->lfsr >> 13)) & 1));
+                    v->lfsr = (uint16_t)(v->lfsr << 1 | fb);
+                }
+                s = (v->lfsr & 1) ? 8000.0f : -8000.0f;
+            } else {
+                if ((v->phase / v->half) & 1) s = -8000.0f; else s = 8000.0f;
+            }
+
+            // Mix in the s16 domain so the soft-clip constants match the
+            // Go host's exactly; normalize once at the write below.
+            acc += s * v->env * gain;
+            v->env *= v->step;
+            v->phase++;
+        }
+        pos++;
+
+        // Soft clip the sum into the 16-bit range (linear below the knee),
+        // matching the Go host's clipKnee/top constants.
+        const float knee = 24000.0f, top = 32767.0f;
+        if (acc > knee) {
+            acc = knee + (top - knee) * tanhf((acc - knee) / (top - knee));
+        } else if (acc < -knee) {
+            acc = -knee + (-top + knee) * tanhf((acc + knee) / (top - knee));
+        }
+
+        out[f * 2] = acc / 32768.0f;
+        out[f * 2 + 1] = acc / 32768.0f;
+        f++;
+    }
+    atomic_store_explicit(&g_apos, pos, memory_order_release);
 }
 
 static M3Result link_host(IM3Module mod) {
@@ -796,6 +934,9 @@ static M3Result link_host(IM3Module mod) {
     LINK("pal",      "v(ii)",    &host_pal);
     LINK("palreset", "v()",      &host_palreset);
     LINK("tone",     "v(iii)",   &host_tone);
+    LINK("noise",    "v(iii)",   &host_noise);
+    LINK("vol",      "v(ii)",    &host_vol);
+    LINK("apos",     "i()",      &host_apos);
     #undef LINK
     return first_err;
 }

@@ -105,7 +105,7 @@ test-hosts:
 	cd cmd/vex-run && go test ./...
 	go test ./...
 	node cmd/vex-web/test/tone_test.js
-	awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
+	awk '/^\/\/ ---- audio/{on=1} /^static M3Result link_host/{on=0} on' \
 		cmd/vex/main.c > cmd/vex/test/audio_section.inc
 	$(CC) -std=c2x -I cmd/vex/test -o cmd/vex/test/tone_test.bin \
 		cmd/vex/test/tone_test.c -lm

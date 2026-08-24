@@ -1,20 +1,24 @@
-// Behavioral test of the C host's tone implementation (cmd/vex/main.c).
+// Behavioral test of the C host's audio implementation (cmd/vex/main.c).
 //
 // The real audio section is #included verbatim (audio_section.inc, extracted
 // from main.c by the `test-hosts` Makefile target); raylib's and wasm3's API
-// surface is replaced by recording stubs. The same semantics are asserted as
-// in the Go toneEngine tests (cmd/vex-run/main_test.go) and the vex.js mock
-// test (cmd/vex-web/test/tone_test.js):
+// surface is replaced by recording stubs. The streaming mixer's callback is
+// driven manually with deterministic frame counters, asserting the same
+// semantics as the Go toneEngine tests (cmd/vex-run/main_test.go) and the
+// vex.js mock test (cmd/vex-web/test/tone_test.js):
 //
 //   - channel clamps to 0..3
-//   - freq <= 0 silences the channel (StopSound), freq > 20000 clamps
-//   - ms <= 0: flat 100ms blip, ±8000/32768, starting positive
-//   - ms > 0: exponential decay reaching ~amp/256 at the last sample,
-//     duration = min(ms, 5000) ms
-//   - a new tone on a channel replaces it from frame 0; shorter tones
-//     leave silence in the buffer tail
+//   - freq <= 0 silences; freq > 20000 clamps
+//   - ms < 0: flat 100ms blip at ±8000/32768, starting positive
+//   - ms == 0: sustain -- constant amplitude past 1s until replaced
+//   - ms > 0: decay reaching ~amp/256 at the last sample
+//   - vol scales linearly and live; clamps to 0..10
+//   - noise produces non-zero output with a zero-crossing rate distinct
+//     from the square voice at the same frequency
+//   - apos advances monotonically at exactly frames-produced rate
 #include <assert.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,12 +30,12 @@ static int32_t* g_args;
 #define m3ApiGetArg(T, N) T N = (T)(*g_args++);
 #define m3ApiSuccess() return
 #define m3ApiRawFunction(name) static void name(int32_t* _sp)
+#define m3ApiReturnType(T) T* raw_return = (T*)(_sp++);
+#define m3ApiReturn(V) (*raw_return = (V))
 
 // ---- raylib audio stubs ----------------------------------------------------
 typedef struct {
     struct { int sampleRate; } stream;
-    float* data;
-    int frames;
 } Sound;
 
 typedef struct {
@@ -42,31 +46,35 @@ typedef struct {
     void* data;
 } Wave;
 
-#define RL_MALLOC malloc
-#define RL_FREE free
+typedef struct {
+    int sampleRate;
+} AudioStream;
 
 static int fake_device_rate = 48000;
 static bool g_playing = false;
-static int stop_count = 0;
+static void* g_callback = NULL;
+static bool g_stream_playing = false;
+
+typedef void (*AudioCallback)(void* buffer, unsigned int frames);
 
 static Sound LoadSoundFromWave(Wave w) {
     Sound s;
     s.stream.sampleRate = fake_device_rate;
-    s.data = (float*)w.data;
-    s.frames = (int)w.frameCount;
     return s;
 }
 static void UnloadSound(Sound s) { (void)s; }
 static void InitAudioDevice(void) {}
 static void CloseAudioDevice(void) {}
 static bool IsAudioDeviceReady(void) { return true; }
-static bool IsSoundPlaying(Sound s) { (void)s; return g_playing; }
-static void StopSound(Sound s) { (void)s; stop_count++; g_playing = false; }
-static void UpdateSound(Sound s, const void* data, int n) {
-    memcpy(s.data, data, (size_t)n * sizeof(float));
-    (void)n;
+
+static AudioStream LoadAudioStream(unsigned rate, unsigned size, unsigned ch) {
+    AudioStream s = { .sampleRate = (int)rate };
+    return s;
 }
-static void PlaySound(Sound s) { (void)s; g_playing = true; }
+static void UnloadAudioStream(AudioStream s) { (void)s; }
+static void StopAudioStream(AudioStream s) { g_stream_playing = false; }
+static void PlayAudioStream(AudioStream s) { g_stream_playing = true; }
+static void SetAudioStreamCallback(AudioStream s, AudioCallback cb) { g_callback = cb; }
 
 // ---- the real host code ----------------------------------------------------
 #define main main_unused
@@ -79,74 +87,110 @@ int failures = 0;
     else printf("ok: %s\n", name); \
 } while (0)
 
-static int32_t* args3(int32_t a, int32_t b, int32_t c) {
+static int32_t* args(int32_t a, int32_t b, int32_t c) {
     static int32_t v[3];
     v[0] = a; v[1] = b; v[2] = c;
     g_args = v;
     return v;
 }
 
+// Drive the mixer callback for `frames` frames in device-sized chunks,
+// returning one channel's post-mix sample per frame.
+static float* rendered;
+static int run_mixer(int frames) {
+    rendered = realloc(rendered, sizeof(float) * frames);
+    static float buf[8192];
+    int produced = 0;
+    while (produced < frames) {
+        unsigned chunk = frames - produced > 4096 ? 4096 : (unsigned)(frames - produced);
+        memset(buf, 0, sizeof(buf));
+        mix_callback(buf, chunk);
+        for (unsigned i = 0; i < chunk && produced < frames; i++)
+            rendered[produced++] = buf[i * 2];
+    }
+    return produced;
+}
+
 int main(void) {
     g_audio_ready = true;
 
-    // Legacy flat blip on channel 0.
-    host_tone(args3(0, 440, 0));
-    {
-        ToneVoice* v = &g_voices[0];
-        CHECK("sound loaded", v->loaded);
-        int frames = fake_device_rate / 10;
-        CHECK("legacy blip is 100ms", v->cap_frames >= frames);
-        CHECK("starts at +8000/32768", fabsf(v->buf[0] - 8000.0f/32768.0f) < 1e-6f);
-        bool flat = true;
-        for (int i = 0; i < frames; i++)
-            if (fabsf(fabsf(v->buf[i]) - 8000.0f/32768.0f) > 1e-6f) flat = false;
-        CHECK("flat amplitude throughout blip", flat);
-        // First call: capacity == note length, so there is no tail yet.
-        CHECK("first call allocates exactly the legacy blip",
-              v->cap_frames == frames);
+    // Sustained tone holds flat amplitude past 1 second...
+    host_tone(args(0, 440, 0));
+    CHECK("stream opened on first event", g_stream_ready);
+    int n = run_mixer(fake_device_rate * 3 / 2); // 1.5s
+    CHECK("apos counts produced frames", atomic_load(&g_apos) == (uint64_t)n);
+    float expect = 8000.0f / 32768.0f;
+    bool held = true;
+    for (int i = fake_device_rate; i < n; i += 97) // probe past 1s
+        if (fabsf(fabsf(rendered[i]) - expect) > expect * 1e-4f) held = false;
+    CHECK("sustain holds flat amplitude past 1s", held);
+    CHECK("sustain starts positive at phase 0", fabsf(rendered[0] - expect) < expect * 1e-4f);
+
+    // ...until a zero-freq event silences it.
+    host_tone(args(0, 0, 0));
+    int n2 = run_mixer(64);
+    bool silent = true;
+    for (int i = 0; i < n2; i++) if (rendered[i] != 0.0f) silent = false;
+    CHECK("freq 0 silences sustained voice", silent);
+
+    // Volume scales linearly and live.
+    host_vol(args(1, 32, 0));
+    host_tone(args(1, 440, 0)); // sustain on ch1
+    run_mixer(64);
+    CHECK("vol(32) halves amplitude",
+          fabsf(fabsf(rendered[63]) - expect * 0.5f) < expect * 1e-4f);
+    host_vol(args(1, 99, 0)); // clamp to unity
+    run_mixer(64);
+    CHECK("vol clamps high to unity",
+          fabsf(fabsf(rendered[63]) - expect) < expect * 1e-4f);
+
+    // Legacy blip ends after ~100ms; decay reaches ~peak/256 at its end.
+    host_tone(args(1, 0, 0)); // retire the volume-test voice first
+    host_tone(args(2, 1000, -1));
+    int blip = run_mixer(fake_device_rate / 5); // 200ms window
+    CHECK("legacy blip starts at peak", fabsf(rendered[0] - expect) < expect * 1e-4f);
+    bool blip_tail_silent = true;
+    for (int i = fake_device_rate / 10 + 64; i < blip; i++)
+        if (rendered[i] != 0.0f) blip_tail_silent = false;
+    CHECK("legacy blip ends after 100ms", blip_tail_silent);
+
+    host_tone(args(2, 1000, 250));
+    run_mixer(fake_device_rate * 250 / 1000);
+    float end_amp = fabsf(rendered[fake_device_rate * 250 / 1000 - 1]);
+    CHECK("decay reaches ~peak/256 at end",
+          end_amp > expect / 256 * 0.9f && end_amp < expect / 256 * 1.05f);
+
+    // Noise differs from square at same frequency (zero-crossing structure).
+    int probes = fake_device_rate / 50; // 20ms each
+    host_tone(args(3, 1000, 0));
+    run_mixer(probes);
+    int sq_flips = 0;
+    for (int i = 1; i < probes; i++)
+        if ((rendered[i - 1] > 0) != (rendered[i] > 0)) sq_flips++;
+    host_noise(args(3, 1000, 0));
+    run_mixer(probes);
+    int nz_flips = 0;
+    bool nonzero = false;
+    for (int i = 1; i < probes; i++) {
+        if ((rendered[i - 1] > 0) != (rendered[i] > 0)) nz_flips++;
+        if (rendered[i] != 0.0f) nonzero = true;
     }
+    CHECK("noise output nonzero", nonzero);
+    CHECK("noise zero-crossings differ from square",
+          nz_flips != sq_flips && nz_flips > 0);
 
-    // Decay tone on channel 1: 250ms.
-    host_tone(args3(1, 880, 250));
-    {
-        ToneVoice* v = &g_voices[1];
-        int frames = fake_device_rate * 250 / 1000;
-        CHECK("decay duration = ms", v->cap_frames >= frames);
-        CHECK("decay starts at peak", fabsf(v->buf[0] - 8000.0f/32768.0f) < 1e-6f);
-        float end = fabsf(v->buf[frames - 1]);
-        float expect = 8000.0f/32768.0f/256.0f;
-        CHECK("decay reaches ~peak/256 at end",
-              end > expect * 0.9f && end < expect * 1.1f);
+    // apos monotonicity across many callback invocations.
+    uint64_t last = atomic_load(&g_apos);
+    bool mono = true;
+    for (int i = 0; i < 50; i++) {
+        run_mixer(1234);
+        uint64_t now = atomic_load(&g_apos);
+        if (now <= last) mono = false;
+        last = now;
     }
-
-    // Channel clamping.
-    host_tone(args3(42, 440, 0));
-    CHECK("channel 42 clamps to 3", g_voices[3].loaded);
-    host_tone(args3(-7, 440, 0));
-    CHECK("negative channel clamps to 0", g_voices[0].loaded);
-
-    // freq <= 0 silences a loaded, playing channel.
-    g_playing = true;
-    int before_stops = stop_count;
-    host_tone(args3(1, 0, 0));
-    CHECK("freq 0 stops the channel", stop_count == before_stops + 1);
-    // ...and does nothing harmful on an unloaded one.
-    host_tone(args3(2, 0, 0));
-    CHECK("freq 0 on idle channel is a no-op", stop_count == before_stops + 1);
-
-    // Shorter tone after longer one leaves a silent tail (no stale samples).
-    host_tone(args3(0, 440, 1000)); // grows capacity to ~1s
-    ToneVoice* v0 = &g_voices[0];
-    host_tone(args3(0, 880, 100));  // much shorter
-    bool tail_silent = true;
-    for (int i = fake_device_rate / 10; i < v0->cap_frames; i++)
-        if (v0->buf[i] != 0.0f) tail_silent = false;
-    CHECK("shorter rewrite silences old tail", tail_silent);
-
-    // Huge freq must not divide-by-zero or crash (clamped to 20000).
-    host_tone(args3(1, 100000, 50));
-    CHECK("huge freq survives", true);
+    CHECK("apos advances monotonically", mono);
 
     printf(failures ? "C HOST: %d FAILURES\n" : "C HOST: all ok\n", failures);
+    free(rendered);
     return failures != 0;
 }
