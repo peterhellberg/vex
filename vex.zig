@@ -92,8 +92,12 @@ pub extern "env" fn mbtn(button: i32) i32;
 pub extern "env" fn pal(index: i32, rgb: i32) void;
 /// Restore the default SWEETIE-16 palette.
 pub extern "env" fn palreset() void;
-/// Play a short blip at `freq` Hz.
-pub extern "env" fn beep(freq: i32) void;
+/// Play a square wave on voice `channel` (`0..3`, out-of-range clamps).
+/// `freq <= 0` silences the channel; `freq > 20000` clamps. `ms <= 0`
+/// plays the legacy ~100ms flat blip; a positive `ms` plays that long
+/// with an exponential decay.
+pub const TONE_CHANNELS = 4;
+pub extern "env" fn tone(channel: i32, freq: i32, ms: i32) void;
 
 /// `true` while the button is held — shorthand for `btn(button) != 0`.
 pub fn down(button: i32) bool {

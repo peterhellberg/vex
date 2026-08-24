@@ -351,7 +351,7 @@ zig build-exe -target wasm32-freestanding \
 | `mbtn(button) -> int` | `1` if a mouse button is held (0 left, 1 right, 2 middle) |
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
 | `palreset()` | restore the default palette |
-| `beep(freq)` | play a short blip at `freq` Hz |
+| `tone(channel, freq, ms)` | play a square wave on voice `channel` (`0..3`, out-of-range clamps); `freq <= 0` silences the channel, `freq > 20000` clamps; `ms <= 0` plays the legacy ~100ms flat blip, `ms > 0` plays that long with an exponential decay (capped at 5s) |
 
 `color` is a palette index `0..15`
 

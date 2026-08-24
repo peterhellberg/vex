@@ -50,6 +50,10 @@ VEX_IMPORT("mbtn") int mbtn(int button);     // 1 if mouse button held
 VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
 VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 
-VEX_IMPORT("beep") void beep(int freq);              // play a short blip at freq Hz
+// tone(): play a square wave on voice 0..3 (out-of-range channels clamp).
+// freq <= 0 silences the channel; freq > 20000 clamps. ms <= 0 plays the
+// legacy ~100ms flat blip; ms > 0 plays that long with an exponential decay.
+#define VEX_TONE_CHANNELS 4
+VEX_IMPORT("tone") void tone(int channel, int freq, int ms);
 
 #endif // VEX_H
