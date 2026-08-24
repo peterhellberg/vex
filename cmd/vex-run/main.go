@@ -799,7 +799,7 @@ const (
 	// straight through and matches the C host's clean square.
 	toneRate = 48000
 
-	// legacyBlipFrames is the length of the flat blip played for ms <= 0
+	// legacyBlipFrames is the length of the flat blip played for ms < 0
 	// (the compatibility shim for ported beep() call sites): 100ms, exactly
 	// what the old monophonic beepEngine produced.
 	legacyBlipFrames = toneRate / 10
@@ -838,49 +838,62 @@ const (
 	clipKnee = 24000.0
 )
 
-// toneVoice is one sustained oscillator: a square wave whose sign toggles
-// every `half` samples, with an amplitude that decays multiplicatively
-// (step == 1 for the flat legacy blip) until `end`.
+// voice kinds: every channel is generic and can hold either at any time.
+const (
+	kindSquare uint8 = iota
+	kindNoise
+)
+
+// sustainEnd is the `end` of a sustained voice (ms == 0): it stops only via
+// an explicit event on its channel, never by expiry.
+const sustainEnd = math.MaxInt64
+
+// toneVoice is one oscillator or noise source: a square wave whose sign
+// toggles every `half` samples (or an LFSR stepped on the same cadence),
+// with an amplitude that decays multiplicatively (step == 1 for flat events)
+// until `end`.
 type toneVoice struct {
-	half  int     // samples per square half-period (toneRate / (2*freq))
+	kind  uint8
+	half  int     // samples per half-period / per LFSR step (toneRate / (2*freq))
 	phase int     // position within the current half-period
-	end   int64   // exclusive last frame of the current tone
+	lfsr  uint16  // 16-bit noise state (kind == kindNoise)
+	end   int64   // exclusive last frame; sustainEnd until replaced/silenced
 	amp   float64 // current envelope amplitude
 	step  float64 // per-sample multiplier (exp(-ln(1/decayEnd)/frames))
 }
 
-// pendingTone is a tone() call waiting to be picked up at the next Read.
-type pendingTone struct {
-	set    bool
-	freq   uint32 // 0 = silence the channel
-	frames int64
-	flat   bool // legacy blip: constant amplitude, legacyBlipFrames long
+// pendingEvent is a tone()/noise() call waiting to be picked up at the next
+// Read. Both primitives share one pending slot per channel.
+type pendingEvent struct {
+	set     bool
+	freq    uint32 // 0 = silence the channel
+	frames  int64
+	kind    uint8
+	sustain bool // ms == 0: no scheduled end
+	flat    bool // ms < 0: legacy blip, constant amplitude
 }
 
-// toneEngine synthesizes up to four independent square-wave voices into one
-// long-lived audio.Player. Each channel sustains its own oscillator; starting
-// a new tone on a channel replaces its previous one at the next sample the
-// device pulls (phase 0, matching the C host's freshly rewritten Sound buffer
-// and the JS host's fresh oscillator). Notes on different channels overlap;
-// their sum runs through a soft clipper with a linear passband below
-// clipKnee, so a single voice is untouched and stacked voices saturate
-// gently instead of hard-clipping.
-//
-// Like the old beepEngine it never chains notes into the future or stacks
-// copies of the same wave: every channel holds at most one voice.
+// toneEngine synthesizes up to four independent voices into one long-lived
+// audio.Player. Channels are generic: any event kind is legal on any channel.
+// A new event replaces a channel's previous one at the next sample the device
+// pulls (phase 0, click-free). Notes on different channels overlap; their sum
+// runs through a soft clipper with a linear passband below clipKnee, so a
+// single voice is untouched and stacked voices saturate gently instead of
+// hard-clipping. Every channel holds at most one voice, and nothing ever
+// chains into the future.
 type toneEngine struct {
 	mu      sync.Mutex
-	pos     int64 // total frames produced (write head)
+	pos     int64 // total frames produced (write head); the apos() clock
 	voices  [4]*toneVoice
-	pending [4]pendingTone
+	pending [4]pendingEvent
+	atten   [4]int32 // per-channel attenuation 0..64 (0 == unity, so the zero value is usable)
 }
 
-// tone schedules a tone on channel ch (clamped to 0..3). freq <= 0 silences
-// the channel; freq > 20000 clamps. ms <= 0 plays the flat 100ms legacy blip;
-// a positive ms plays that many milliseconds (capped at toneMaxMs) with an
-// exponential decay envelope. The cart-side call is non-blocking (just sets a
-// flag); the audio thread picks it up on its next Read.
-func (e *toneEngine) tone(channel, freq, ms int32) {
+// schedule is the shared body of tone() and noise(): clamp arguments and
+// park an event for the audio thread. freq <= 0 silences the channel;
+// freq > 20000 clamps. ms > 0 decays over min(ms, toneMaxMs), ms == 0
+// sustains until the channel's next event, ms < 0 is the flat legacy blip.
+func (e *toneEngine) schedule(channel, freq, ms int32, kind uint8) {
 	ch := channel
 	if ch < 0 {
 		ch = 0
@@ -893,7 +906,7 @@ func (e *toneEngine) tone(channel, freq, ms int32) {
 	defer e.mu.Unlock()
 
 	if freq < 1 {
-		e.pending[ch] = pendingTone{set: true, freq: 0}
+		e.pending[ch] = pendingEvent{set: true, freq: 0}
 		return
 	}
 
@@ -901,11 +914,9 @@ func (e *toneEngine) tone(channel, freq, ms int32) {
 		freq = 20000
 	}
 
-	p := pendingTone{set: true, freq: uint32(freq)}
-	if ms <= 0 {
-		p.flat = true
-		p.frames = legacyBlipFrames
-	} else {
+	p := pendingEvent{set: true, freq: uint32(freq), kind: kind}
+	switch {
+	case ms > 0:
 		dur := ms
 		if dur > toneMaxMs {
 			dur = toneMaxMs
@@ -914,23 +925,80 @@ func (e *toneEngine) tone(channel, freq, ms int32) {
 		if p.frames < 1 {
 			p.frames = 1
 		}
+	case ms == 0:
+		p.sustain = true
+	default:
+		p.flat = true
+		p.frames = legacyBlipFrames
 	}
 	e.pending[ch] = p
 }
 
+// tone schedules a square-wave event on channel ch.
+func (e *toneEngine) tone(channel, freq, ms int32) {
+	e.schedule(channel, freq, ms, kindSquare)
+}
+
+// noise switches the channel's voice to a 16-bit LFSR noise source stepped
+// at 2*freq Hz for this event; the next tone() flips it back to square.
+func (e *toneEngine) noise(channel, freq, ms int32) {
+	e.schedule(channel, freq, ms, kindNoise)
+}
+
+// volMax is the vol() range top: tracker-native 0..64, with 64 == unity.
+const volMax = 64
+
+// vol sets the per-channel linear gain multiplier, v clamped to 0..volMax
+// with volMax == unity. Applied live: it scales whatever the channel is
+// playing right now, which is what volume slides need.
+func (e *toneEngine) setVol(channel, v int32) {
+	ch := channel
+	if ch < 0 {
+		ch = 0
+	}
+	if ch > 3 {
+		ch = 3
+	}
+	if v < 0 {
+		v = 0
+	}
+	if v > volMax {
+		v = volMax
+	}
+
+	e.mu.Lock()
+	e.atten[ch] = volMax - v
+	e.mu.Unlock()
+}
+
+// apos returns the audio clock: sample frames produced since start.
+func (e *toneEngine) apos() int32 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return int32(e.pos)
+}
+
 // Read implements io.Reader with 16-bit stereo interleaved PCM and never
 // returns io.EOF. Idle stream is silence; each active voice contributes a
-// square wave starting at +voicePeak, and the summed voices are soft-clipped.
+// ±voicePeak wave scaled by its channel's volume, and the summed voices are
+// soft-clipped.
 func (e *toneEngine) Read(p []byte) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Apply pending tone() calls as retriggers: start a fresh voice or, if
-	// one is already playing on the channel, replace it so the new note
-	// starts cleanly at phase 0 instead of clicking mid-cycle.
+	gain := [4]float64{
+		float64(volMax-e.atten[0]) / volMax,
+		float64(volMax-e.atten[1]) / volMax,
+		float64(volMax-e.atten[2]) / volMax,
+		float64(volMax-e.atten[3]) / volMax,
+	}
+
+	// Apply pending events as retriggers: start a fresh voice or, if one is
+	// already playing on the channel, replace it so the new note starts
+	// cleanly at phase 0 instead of clicking mid-cycle.
 	for ch := range e.pending {
 		p := e.pending[ch]
-		e.pending[ch] = pendingTone{}
+		e.pending[ch] = pendingEvent{}
 		if !p.set {
 			continue
 		}
@@ -940,12 +1008,22 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			continue
 		}
 
-		half := toneRate / (2 * int(p.freq))
-		v := &toneVoice{half: half, end: e.pos + p.frames, amp: voicePeak}
-		if p.flat {
+		v := &toneVoice{
+			kind: p.kind,
+			half: max(1, toneRate/(2*int(p.freq))),
+			lfsr: 0xACE1,
+			amp:  voicePeak,
+			end:  sustainEnd,
+		}
+		switch {
+		case p.sustain:
 			v.step = 1
-		} else {
+		case p.flat:
+			v.step = 1
+			v.end = e.pos + p.frames
+		default:
 			v.step = math.Exp(-math.Log(1/decayEnd) / float64(p.frames))
+			v.end = e.pos + p.frames
 		}
 		e.voices[ch] = v
 	}
@@ -961,11 +1039,24 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				e.voices[ch] = nil
 				continue
 			}
-			if (v.phase/v.half)&1 == 0 {
-				acc += v.amp
+			sample := voicePeak
+			if v.kind == kindNoise {
+				if v.phase >= v.half {
+					v.phase = 0
+					// XNOR feedback over taps 15/13, like the Game Boy's
+					// noise channel minus its divisor table.
+					fb := uint16(1) - ((v.lfsr >> 15) ^ (v.lfsr>>13)&1)
+					v.lfsr = v.lfsr<<1 | fb
+				}
+				if v.lfsr&1 == 0 {
+					sample = -voicePeak
+				}
 			} else {
-				acc -= v.amp
+				if (v.phase/v.half)&1 == 1 {
+					sample = -voicePeak
+				}
 			}
+			acc += sample * v.amp / voicePeak * gain[ch]
 			v.phase++
 			v.amp *= v.step
 		}
@@ -1032,6 +1123,32 @@ func (g *Game) tone(channel, freq, ms int32) {
 	}
 	g.ensureAudio()
 	g.audio.tone(channel, freq, ms)
+}
+
+// noise(channel, freq, ms): switch the channel's voice to a noise source.
+func (g *Game) noise(channel, freq, ms int32) {
+	if g.audioCtx == nil {
+		return
+	}
+	g.ensureAudio()
+	g.audio.noise(channel, freq, ms)
+}
+
+// vol(channel, v): per-channel volume, 0..10 with 10 == unity.
+func (g *Game) vol(channel, v int32) {
+	if g.audioCtx == nil {
+		return
+	}
+	g.ensureAudio()
+	g.audio.setVol(channel, v)
+}
+
+// apos(): audio clock in 48 kHz frames since console start.
+func (g *Game) apos() int32 {
+	if g.audioCtx == nil {
+		return 0
+	}
+	return g.audio.apos()
 }
 
 // initCart resets the palette, clears the framebuffer, and runs the cart's
@@ -1210,6 +1327,9 @@ func buildEnvModule(ctx context.Context, g *Game, r wazero.Runtime) error {
 		{"pal", func(_ context.Context, _ api.Module, index, rgb int32) { g.pal(uint32(index), uint32(rgb)) }},
 		{"palreset", func(_ context.Context, _ api.Module) { g.palreset() }},
 		{"tone", func(_ context.Context, _ api.Module, channel, freq, ms int32) { g.tone(channel, freq, ms) }},
+		{"noise", func(_ context.Context, _ api.Module, channel, freq, ms int32) { g.noise(channel, freq, ms) }},
+		{"vol", func(_ context.Context, _ api.Module, channel, v int32) { g.vol(channel, v) }},
+		{"apos", func(_ context.Context, _ api.Module) uint32 { return uint32(g.apos()) }},
 	}
 
 	b := r.NewHostModuleBuilder("env")

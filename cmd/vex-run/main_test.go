@@ -139,10 +139,10 @@ func sampleAt(buf []byte, i int) int16 {
 	return int16(binary.LittleEndian.Uint16(buf[i*4:]))
 }
 
-func TestToneEngineReadPhaseAndEnd(t *testing.T) {
+func TestToneEngineReadPhaseAndLegacyBlip(t *testing.T) {
 	e := &toneEngine{}
 
-	e.tone(0, 100, 0) // half period = 48000/(2*100) = 240 samples
+	e.tone(0, 100, -1) // half period = 48000/(2*100) = 240 samples
 
 	buf := readFrames(t, e, 16)
 	for i := range 16 {
@@ -154,9 +154,9 @@ func TestToneEngineReadPhaseAndEnd(t *testing.T) {
 		}
 	}
 
-	// The flat legacy blip ends after legacyBlipFrames (48000/10); past the
-	// end the stream is silence and never returns io.EOF.
-	e.tone(0, 1, 0) // retrigger: new tone spans [pos, pos+legacyBlipFrames)
+	// The flat legacy blip (ms < 0) ends after legacyBlipFrames (48000/10);
+	// past the end the stream is silence and never returns io.EOF.
+	e.tone(0, 1, -1) // retrigger: new tone spans [pos, pos+legacyBlipFrames)
 	whole := readFrames(t, e, legacyBlipFrames)
 	for i := range legacyBlipFrames {
 		s := sampleAt(whole, i)
@@ -175,10 +175,33 @@ func TestToneEngineReadPhaseAndEnd(t *testing.T) {
 	}
 }
 
+func TestToneEngineSustainHoldsUntilReplaced(t *testing.T) {
+	e := &toneEngine{}
+
+	e.tone(0, 440, 0) // ms == 0: sustain at flat amplitude
+
+	// Well past the legacy blip length the voice must still be going.
+	buf := readFrames(t, e, legacyBlipFrames*3+64)
+	last := legacyBlipFrames*3 + 60
+	if s := sampleAt(buf, last); s != 8000 && s != -8000 {
+		t.Fatalf("sustained frame %d: %d, want ±8000", last, s)
+	}
+
+	// A zero-freq event is what silences a sustained voice.
+	e.tone(0, 0, 0)
+	tail := readFrames(t, e, 16)
+	for i := range 16 {
+		if s := sampleAt(tail, i); s != 0 {
+			t.Fatalf("frame %d after silencing sustained voice: %d, want 0", i, s)
+		}
+	}
+}
+
 func TestToneEngineChannelsOverlapAndClamp(t *testing.T) {
 	e := &toneEngine{}
 
 	// Two channels in phase sum to double amplitude (linear below the knee).
+	// Sustained voices (ms == 0) keep the overlap going indefinitely.
 	e.tone(0, 440, 0)
 	e.tone(1, 440, 0)
 
@@ -188,7 +211,7 @@ func TestToneEngineChannelsOverlapAndClamp(t *testing.T) {
 	}
 
 	// Out-of-range channels clamp onto 0..3 instead of erroring or panicking.
-	e.tone(-7, 0, 0)   // silences channel 0
+	e.tone(-7, 0, -1)  // silences channel 0
 	e.tone(42, 440, 0) // plays on channel 3
 
 	// Channel 0 is silent now, but channel 1 and the clamped channel 3 are
@@ -230,5 +253,76 @@ func TestToneEngineDecayEndsSilent(t *testing.T) {
 		if s := sampleAt(tail, i); s != 0 {
 			t.Fatalf("frame %d after decay end: %d, want 0", i, s)
 		}
+	}
+}
+
+func TestToneEngineVolumeScalesLinearly(t *testing.T) {
+	e := &toneEngine{}
+
+	e.setVol(0, 32) // half volume
+	e.tone(0, 440, -1)
+
+	buf := readFrames(t, e, 16)
+	if s := sampleAt(buf, 0); s != 4000 {
+		t.Fatalf("half-volume sample: %d, want 4000", s)
+	}
+
+	// Volume applies live to an already-sustaining voice (volume slides).
+	e.tone(0, 0, 0) // retire the half-volume blip first
+	e.tone(1, 440, 0)
+	readFrames(t, e, 16)
+	e.setVol(1, 99) // clamps to unity
+	buf = readFrames(t, e, 16)
+	if s := sampleAt(buf, 0); s != 8000 {
+		t.Fatalf("clamped vol(99) sample: %d, want 8000", s)
+	}
+	e.setVol(1, -3) // clamps to silence
+	buf = readFrames(t, e, 16)
+	if s := sampleAt(buf, 0); s != 0 {
+		t.Fatalf("clamped vol(-3) sample: %d, want 0", s)
+	}
+}
+
+func TestToneEngineNoiseDistinctFromSquare(t *testing.T) {
+	countFlips := func(e *toneEngine, frames int) int {
+		buf := readFrames(t, e, frames)
+		flips := 0
+		for i := 1; i < frames; i++ {
+			a, b := sampleAt(buf, i-1), sampleAt(buf, i)
+			if (a > 0) != (b > 0) && a != b {
+				flips++
+			}
+		}
+		return flips
+	}
+
+	sq := &toneEngine{}
+	sq.tone(0, 1000, 0) // half = 24 samples -> a flip every 24 frames
+	squareFlips := countFlips(sq, toneRate/100)
+
+	ns := &toneEngine{}
+	ns.noise(0, 1000, 0) // LFSR stepped at the same cadence...
+	ns.setVol(0, 3)      // ...and exercising the per-channel gain path
+	noiseFlips := countFlips(ns, toneRate/100)
+
+	if noiseFlips == 0 || noiseFlips == squareFlips {
+		t.Fatalf("noise zero-crossings %d must differ from square's %d and be nonzero",
+			noiseFlips, squareFlips)
+	}
+}
+
+func TestToneEngineAposAdvancesWithStream(t *testing.T) {
+	e := &toneEngine{}
+
+	if got := e.apos(); got != 0 {
+		t.Fatalf("fresh apos = %d, want 0", got)
+	}
+	readFrames(t, e, 480)
+	if got := e.apos(); got != 480 {
+		t.Fatalf("apos after 480 frames = %d", got)
+	}
+	readFrames(t, e, 123)
+	if got := e.apos(); got != 603 {
+		t.Fatalf("apos after 603 frames = %d", got)
 	}
 }
