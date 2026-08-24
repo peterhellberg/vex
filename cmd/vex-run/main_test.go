@@ -122,10 +122,14 @@ func TestTriFixture(t *testing.T) {
 	g.tri(0, -6000, 6000, 6000, -6000, 6000, 3)
 }
 
-func TestBeepEngineReadPhaseAndEnd(t *testing.T) {
-	e := &beepEngine{}
+func TestToneEngineReadPhaseAndEnd(t *testing.T) {
+	e := &toneEngine{}
 
-	e.beep(100) // half period = 48000/(2*100) = 240 samples
+	// Sustain 5 frames (400 samples at 48kHz) with no attack/decay/release:
+	// zero-length segments snap straight to the sustain level, so the very
+	// first sample is a full-volume positive pulse sample. flags 0 selects
+	// channel 0, 50% duty, and center panning (constant-power ~0.707).
+	e.tone(100, 5, 100, 0)
 
 	buf := make([]byte, 4*16)
 	n, err := e.Read(buf)
@@ -136,20 +140,21 @@ func TestBeepEngineReadPhaseAndEnd(t *testing.T) {
 		t.Fatalf("Read returned %d bytes, want %d", n, len(buf))
 	}
 
+	want := int16(5656) // 8000 * constant-power center gain, truncated
 	for i := range 16 {
-		s := int16(binary.LittleEndian.Uint16(buf[i*4:]))
-		l := int16(binary.LittleEndian.Uint16(buf[i*4+2:]))
-		if s != 8000 || l != 8000 {
-			t.Fatalf("frame %d: L/R = %d/%d, want 8000/8000 (phase must start positive)", i, l, s)
+		l := int16(binary.LittleEndian.Uint16(buf[i*4:]))
+		r := int16(binary.LittleEndian.Uint16(buf[i*4+2:]))
+		if l != want || r != want {
+			t.Fatalf("frame %d: L/R = %d/%d, want %d/%d", i, l, r, want, want)
 		}
 	}
 
-	// A blip ends after beepFrames (48000/10); past the end the stream is
-	// silence and never returns io.EOF.
-	e.beep(1) // retrigger: new blip spans [pos, pos+beepFrames)
-	whole := make([]byte, 4*beepFrames)
+	// The voice ends after sustain+release frames; past the end the stream
+	// is silence and never returns io.EOF.
+	e.tone(1, 1, 100, 0) // retrigger: 1 frame of sustain, no release
+	whole := make([]byte, 4*(toneRate/60))
 	if n, err := e.Read(whole); err != nil || n != len(whole) {
-		t.Fatalf("blip-length Read = (%d, %v)", n, err)
+		t.Fatalf("voice-length Read = (%d, %v)", n, err)
 	}
 	tail := make([]byte, 8)
 	if n, err := e.Read(tail); err != nil || n != 8 {
@@ -157,7 +162,184 @@ func TestBeepEngineReadPhaseAndEnd(t *testing.T) {
 	}
 	for i := range 8 {
 		if tail[i] != 0 {
-			t.Fatalf("expected silence after blip end, byte %d = %d", i, tail[i])
+			t.Fatalf("expected silence after voice end, byte %d = %d", i, tail[i])
 		}
+	}
+}
+
+func TestToneEngineKillAndClamps(t *testing.T) {
+	e := &toneEngine{}
+
+	// A sustained voice silenced by the kill idiom on another channel's
+	// trigger must not keep sounding: kill only affects its own channel.
+	e.tone(440, 10, 100, 0) // channel 0 sustains for 10 frames
+	e.tone(262, 0, 0, 3)    // channel 3: all-zero duration is a no-op
+	buf := make([]byte, 4*16)
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	l := int16(binary.LittleEndian.Uint16(buf[0:]))
+	if l == 0 {
+		t.Fatal("channel 0 should still sound; kill on channel 3 leaked")
+	}
+
+	// Extreme arguments clamp instead of misbehaving.
+	e.tone(0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF)
+	if _, err := e.Read(make([]byte, 4*800)); err != nil {
+		t.Fatalf("hostile Read: %v", err)
+	}
+}
+
+func TestToneEngineDutyFlipsAtQuarter(t *testing.T) {
+	e := &toneEngine{}
+	// 1000 Hz pulse, 25% duty (MODE1), sustained flat: phase advances
+	// freq/rate per sample, so the flip lands at sample 12 (0.25*48000/1000).
+	e.tone(1000, 4, 100, 1<<2)
+
+	buf := make([]byte, 4*32)
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	sample := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
+	for i := 0; i < 12; i++ {
+		if sample(i) <= 0 {
+			t.Fatalf("sample %d should be high before the 25%% flip point", i)
+		}
+	}
+	if sample(12) >= 0 {
+		t.Fatal("sample 12 should be low after the 25% flip point")
+	}
+}
+
+func TestToneEnvelopeRampsAreLinear(t *testing.T) {
+	e := &toneEngine{}
+	// attack=8, decay=0, sustain=8, release=8 frames at 48000 Hz => 640
+	// samples per segment; zero-length decay snaps peak->sustain instantly.
+	const att, susFrames, rel = 8, 8, 8
+	e.tone(440, susFrames|(rel<<8)|(att<<24), 100, 0)
+
+	const spf = float64(toneRate) / 60.0 // 800 samples/frame
+	attSamples := int(att * spf)
+	susSamples := int(susFrames * spf)
+	total := attSamples + susSamples + int(rel*spf)
+
+	buf := make([]byte, 4*(total+64))
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	sample := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
+
+	amp := func(i int) int {
+		v := int(sample(i))
+		if v < 0 {
+			return -v
+		}
+		return v
+	}
+	// Mid-attack is roughly half full scale (linear ramp from 0); signs are
+	// waveform phase, so compare magnitudes.
+	if m := amp(attSamples / 2); m < 2000 || m > 3600 {
+		t.Fatalf("mid-attack magnitude %d, want ~half of 5656", m)
+	}
+	// End of attack ~= full scale (center pan).
+	full := amp(attSamples - 1)
+	if full < 5400 || full > 5656 {
+		t.Fatalf("post-attack magnitude %d, want ~5656", full)
+	}
+	// Sustain holds the same level (1 LSB truncation jitter allowed).
+	if s := amp(attSamples + susSamples - 1); s-full > 1 && s < full-1 {
+		t.Fatalf("sustain end magnitude %d, want ~%d", s, full)
+	}
+	// Release decays back toward silence.
+	if s := amp(total - 1); s > 600 {
+		t.Fatalf("release tail magnitude %d, want near zero", s)
+	}
+	// And after the release the voice is silent for good.
+	for i := total; i < total+60; i++ {
+		if sample(i) != 0 {
+			t.Fatalf("voice still sounding %d frames past release", i-total)
+		}
+	}
+}
+
+func TestToneSlideReachesTarget(t *testing.T) {
+	e := &toneEngine{}
+	// Slide 220 -> 880 Hz over 20 frames of sustain; measure the average
+	// period over the last 240 samples (one nominal cycle at 880 Hz) via
+	// zero crossings and require it to land near the target octave.
+	e.tone(220|(880<<16), 20, 100, 0)
+
+	n := int(20 * toneRate / 60)
+	buf := make([]byte, 4*n)
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	get := func(i int) float64 { return float64(int16(binary.LittleEndian.Uint16(buf[i*4:]))) }
+	cross := func(from, to int) float64 {
+		count := 0
+		for i := from + 1; i < to; i++ {
+			if get(i-1) <= 0 && get(i) > 0 {
+				count++
+			}
+		}
+		return float64(count) * float64(toneRate) / float64(to-from)
+	}
+	endHz := cross(n-2400, n-1)
+	if endHz < 700 || endHz > 1060 {
+		t.Fatalf("slide ended near %.0f Hz, want approaching 880", endHz)
+	}
+}
+
+func TestToneNoiseMatchesLFSR(t *testing.T) {
+	e := &toneEngine{}
+	e.tone(8000, 8, 100, 1<<6) // noise on channel 0
+
+	buf := make([]byte, 4*300)
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	get := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
+	// Stepped at 2*freq = 16000 Hz: one LFSR step every third sample. The
+	// reference mirrors that cadence while independently reproducing the
+	// tap/bit0 math, so any drift in either shows up as a sign flip.
+	lfsr := uint16(0xACE1)
+	nph := 0.0
+	for i := range 300 {
+		nph += 2 * 8000.0 / toneRate
+		for nph >= 1 {
+			nph--
+			fb := uint16(1 - (((lfsr >> 15) ^ (lfsr >> 13)) & 1))
+			lfsr = lfsr<<1 | fb
+		}
+		want := int16(5656) // 8000 * constant-power center gain
+		if lfsr&1 == 0 {
+			want = -want
+		}
+		if get(i) != want {
+			t.Fatalf("sample %d = %d, want %d", i, get(i), want)
+		}
+	}
+}
+
+func TestToneNoteModeIsConcertPitch(t *testing.T) {
+	e := &toneEngine{}
+	// MIDI note 69 = A4 = 440 Hz.
+	e.tone(69, 8, 100, 1<<8)
+
+	const win = 4800 // ~22 cycles at 440 Hz: crossing resolution ~10 Hz
+	buf := make([]byte, 4*win)
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	get := func(i int) float64 { return float64(int16(binary.LittleEndian.Uint16(buf[i*4:]))) }
+	crossings := 0
+	for i := 1; i < win; i++ {
+		if get(i-1) <= 0 && get(i) > 0 {
+			crossings++
+		}
+	}
+	hz := float64(crossings) * toneRate / win
+	if hz < 420 || hz > 462 {
+		t.Fatalf("note 69 measured %.1f Hz, want ~440", hz)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -259,10 +260,10 @@ type Game struct {
 	triL []int32
 	triR []int32
 
-	// Audio for beep(): one shared context and a single persistent mixer
-	// player that synthesizes the beeps (see beepEngine).
+	// Audio for tone(): one shared context and a single persistent mixer
+	// player that renders the four-voice software mixer (see toneEngine).
 	audioCtx   *audio.Context
-	audio      *beepEngine
+	audio      *toneEngine
 	audioPl    *audio.Player
 	audioOn    bool // the persistent player has been created
 	audioReady bool // the device has started consuming the stream
@@ -274,8 +275,8 @@ func NewGame() *Game {
 	g := &Game{
 		pixels:    pixels,
 		frame:     unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
-		audioCtx:  audio.NewContext(beepRate),
-		audio:     &beepEngine{},
+		audioCtx:  audio.NewContext(toneRate),
+		audio:     &toneEngine{},
 		startedAt: time.Now(),
 	}
 	g.palreset()
@@ -788,19 +789,15 @@ func (g *Game) palreset() {
 	}
 }
 
-// ---- audio (beep) ------------------------------------------------------
+// ---- audio (tone) ------------------------------------------------------
+
+// toneRate is the synthesis rate. 48000 matches typical devices so the
+// host's resampler doesn't have to up-convert from a low rate.
+const toneRate = 48000
 
 const (
-	// The beep is synthesized at the device's native rate (48000 Hz) so the
-	// host's resampler doesn't have to up-convert from a low rate. A 22050 Hz
-	// stream gets sinc-resampled by PipeWire/ALSA on its way to the 48000 Hz
-	// device and every square-wave edge rings audibly; 48000 passes straight
-	// through and matches the C host's clean square.
-	beepRate   = 48000
-	beepFrames = beepRate / 10 // 100ms
-
 	// audioBufferSize bounds the persistent player's latency. oto's default
-	// buffer is 0.5s of audio, which would postpone every new beep; a short
+	// buffer is 0.5s of audio, which would postpone every trigger; a short
 	// buffer keeps the device pulling the stream within a few milliseconds.
 	audioBufferSize = 40 * time.Millisecond
 
@@ -810,112 +807,312 @@ const (
 	audioReadyTimeout = 2 * time.Second
 
 	// audioReadyPosition is how much of the stream the device must have
-	// consumed before the cart clock starts. Position() > 0 fires as soon as
-	// ALSA starts draining the mux, but the PipeWire sink swallows the first
-	// few hundred milliseconds of output during its pre-roll, so beeps placed
-	// that early are inaudible. Waiting for ~800ms of consumed audio puts the
-	// first beep well past the pre-roll (the C host's first note is lost to
-	// device warm-up the same way).
+	// consumed before the cart clock starts (see audioFlowStarted).
 	audioReadyPosition = 800 * time.Millisecond
 )
 
-// beepEngine synthesizes 100ms square-wave blips into one long-lived
-// audio.Player. beep(freq) is monophonic: if a previous blip is still playing,
-// it is cut off and the new one starts at the next sample (phase 0, matching
-// the C host's freshly loaded sound wave and the JS host's fresh oscillator).
-// This matches the typical "beep" semantics in retro consoles and keeps
-// rapid-fire beeps from chaining into the future or stacking on top of each
-// other. The earlier 16-voice pool design produced the latter: a cart that
-// calls beep() in a tight loop piled up multiple in-phase copies of the same
-// blip, hard-clipped, and dropped the 17th; a cart that called beep() across
-// frames instead anchored every blip to the previous one's end and silently
-// delayed the rest by 100ms each. Monophonic retrigger avoids both.
-type beepEngine struct {
-	mu      sync.Mutex
-	pos     int64      // total frames produced (write head)
-	voice   *beepVoice // nil = no active blip
-	pending *uint32    // pending freq from a beep() call, applied at next Read
+// Envelope segments, in trigger order.
+const (
+	segAttack = iota
+	segDecay
+	segSustain
+	segRelease
+	segIdle // past release: silent until retriggered
+)
+
+// Full-scale single-voice amplitude in s16 output units, matching the C
+// host's TONE_BASE_AMP * 32768 (the C mixer writes acc/32768 floats; this
+// one writes int16 samples directly).
+const toneFullAmp = 8000.0
+
+// toneVoice is one channel of the four-voice software mixer. It walks a
+// linear ADSR envelope whose segment lengths are laid out at trigger time
+// in samples; zero-length segments are skipped by snapping to their end
+// level, so an all-zero duration silences the channel immediately (the
+// kill idiom).
+type toneVoice struct {
+	kind      int // 0 pulse, 1 noise, 2 triangle
+	duty      float64
+	freq      float64 // current Hz (slides toward freqTo during sustain)
+	freqTo    float64
+	freqStart float64
+	freqStep  float64 // per-sample slide delta while in sustain
+	ph        float64 // phase accumulator, 0..1
+	nph       float64 // noise step accumulator
+	lfsr      uint16
+
+	seg     int
+	segLeft int64
+	level   float64 // envelope level 0..1
+	slope   float64 // level change per sample in this segment
+	segLen  [4]int64
+	segEnd  [4]float64
+
+	gl, gr float64 // constant-power pan gains
 }
 
-type beepVoice struct {
-	freq  uint32
-	half  int   // samples per square half-period (beepRate / (2*freq))
-	phase int   // position within the current half-period
-	end   int64 // exclusive last frame of the current blip
+// nextSegment advances into the next non-empty envelope segment, skipping
+// zero-length ones by snapping to their end level. Enters segIdle when the
+// release finishes.
+func (v *toneVoice) nextSegment() {
+	for {
+		v.seg++
+		if v.seg > segRelease {
+			v.seg = segIdle
+			v.level = 0
+			return
+		}
+		n := v.segLen[v.seg]
+		if n <= 0 {
+			v.level = v.segEnd[v.seg]
+			continue
+		}
+		v.segLeft = n
+		v.slope = (v.segEnd[v.seg] - v.level) / float64(n)
+		if v.seg == segSustain && v.freqTo > 0 {
+			// The slide rides the sustain segment: linear in Hz from the
+			// start frequency to the target across its samples.
+			v.freqStep = (v.freqTo - v.freqStart) / float64(n)
+		}
+		return
+	}
 }
 
-// beep schedules a 100ms blip at freq Hz, starting at phase 0. The blip
-// replaces whatever is currently playing: a beep() arriving while a previous
-// blip is still active cuts the previous one off and starts a new one at the
-// next sample the audio device pulls. The cart-side call is non-blocking
-// (just sets a flag); the audio thread picks it up on its next Read.
-func (e *beepEngine) beep(freq uint32) {
-	if freq < 1 || freq > 20000 {
+// apply resets the oscillator and lays out the four envelope segments in
+// samples at the stream rate.
+func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
+	v.kind = t.kind
+	v.duty = t.duty
+	v.freqStart = t.f0
+	v.freqTo = t.f1
+	v.freq = t.f0
+	v.freqStep = 0
+	v.ph = 0
+	v.nph = 0
+	v.lfsr = 0xACE1
+	v.gl = t.gl
+	v.gr = t.gr
+
+	frames := [4]int32{t.frames[0], t.frames[1], t.frames[2], t.frames[3]}
+	ends := [4]float64{t.peak, t.sus, t.sus, 0}
+	total := int64(0)
+	for i := range frames {
+		if frames[i] > 0 {
+			v.segLen[i] = int64(float64(frames[i])*samplesPerFrame + 0.5)
+		} else {
+			v.segLen[i] = 0
+		}
+		v.segEnd[i] = ends[i]
+		total += v.segLen[i]
+	}
+	if total <= 0 {
+		v.seg = segIdle
+		v.level = 0
 		return
 	}
 
+	v.seg = -1
+	v.level = 0
+	v.nextSegment()
+}
+
+// toneTrigger is the parsed form of one cart-side tone() call.
+type toneTrigger struct {
+	kind      int
+	duty      float64
+	f0, f1    float64
+	frames    [4]int32 // attack, decay, sustain, release
+	peak, sus float64
+	gl, gr    float64
+}
+
+// toneEngine renders four tone voices into the persistent audio player.
+// Cart calls land on the game goroutine and park a pending trigger; Read
+// applies them when the device pulls, which quantizes starts to at most
+// one buffer -- the same seam every host exposes.
+type toneEngine struct {
+	mu      sync.Mutex
+	pos     int64 // total frames produced (write head)
+	voices  [4]toneVoice
+	pending [4]*toneTrigger
+}
+
+var (
+	toneDutyTable = [4]float64{0.5, 0.25, 0.125, 0.75}
+	tonePanL      = [3]float64{0.70710678, 1, 0}
+	tonePanR      = [3]float64{0.70710678, 0, 1}
+)
+
+// tone parses a cart's tone(freq, duration, volume, flags) call and parks
+// it for the audio side. See vex.h for the packed argument layouts.
+func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	f := freq
-	e.pending = &f
+
+	ch := flags & 3
+	mode := (flags >> 2) & 3
+	pan := (flags >> 4) & 3
+	if pan > 2 {
+		pan = 0
+	}
+	wave := (flags >> 6) & 3
+	if wave == 3 {
+		wave = 0
+	}
+
+	var f0, f1 float64
+	if flags&(1<<8) != 0 { // note mode: MIDI note number
+		f0 = 440 * math.Pow(2, (float64(int32(freq))-69)/12)
+	} else {
+		f0 = float64(freq & 0xFFFF)
+		f1 = float64((freq >> 16) & 0xFFFF)
+		if f0 < 1 {
+			f0 = 1
+		}
+	}
+	if f0 > 20000 {
+		f0 = 20000
+	}
+	if f1 > 0 && f1 < 1 {
+		f1 = 0 // degenerate slide target: none
+	}
+	if f1 > 20000 {
+		f1 = 20000
+	}
+
+	sus := duration & 0xFF
+	rel := (duration >> 8) & 0xFF
+	dec := (duration >> 16) & 0xFF
+	att := (duration >> 24) & 0xFF
+
+	vs := volume & 0xFF
+	if vs > 100 {
+		vs = 100
+	}
+	vp := (volume >> 8) & 0xFF
+	if vp == 0 || vp > 100 {
+		vp = 100 // unset peak defaults to full
+	}
+
+	e.pending[ch] = &toneTrigger{
+		kind:   int(wave),
+		duty:   toneDutyTable[mode],
+		f0:     f0,
+		f1:     f1,
+		frames: [4]int32{int32(att), int32(dec), int32(sus), int32(rel)},
+		peak:   float64(vp) / 100,
+		sus:    float64(vs) / 100,
+		gl:     tonePanL[pan],
+		gr:     tonePanR[pan],
+	}
 }
 
 // Read implements io.Reader with 16-bit stereo interleaved PCM and never
-// returns io.EOF. Idle stream is silence; the active voice (if any) is a
-// square wave starting at +8000, hard-clipped at the 16-bit range.
-func (e *beepEngine) Read(p []byte) (int, error) {
+// returns io.EOF. Idle channels contribute silence; the sum is soft-clipped
+// exactly like the C host (linear below the knee, tanh above).
+func (e *toneEngine) Read(p []byte) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Apply the most recent pending freq as a retrigger: start a fresh blip
-	// or, if one is already playing, replace its frequency and reset its
-	// phase so the new note starts cleanly instead of clicking mid-cycle.
-	if e.pending != nil {
-		freq := *e.pending
-		e.pending = nil
-		half := beepRate / (2 * int(freq))
-		if e.voice == nil {
-			e.voice = &beepVoice{freq: freq, half: half, phase: 0, end: e.pos + beepFrames}
-		} else {
-			e.voice.freq = freq
-			e.voice.half = half
-			e.voice.phase = 0
-			e.voice.end = e.pos + beepFrames
+	for ch := range e.pending {
+		if t := e.pending[ch]; t != nil {
+			e.pending[ch] = nil
+			e.voices[ch].apply(t, float64(toneRate)/60.0)
 		}
 	}
 
+	const knee, top = 24000.0, 32767.0
 	n := 0
 	for n+4 <= len(p) {
-		if e.voice != nil && e.pos >= e.voice.end {
-			e.voice = nil
-		}
-
-		acc := 0
-		if e.voice != nil {
-			if (e.voice.phase/e.voice.half)&1 == 0 {
-				acc += 8000
-			} else {
-				acc -= 8000
+		var l, r float64
+		for ci := range e.voices {
+			v := &e.voices[ci]
+			if v.seg == segIdle {
+				continue
 			}
-			e.voice.phase++
-		}
-		e.pos++
 
-		s := int16(acc)
-		p[n] = byte(s)
-		p[n+1] = byte(uint16(s) >> 8)
-		p[n+2] = byte(s)
-		p[n+3] = byte(uint16(s) >> 8)
+			// Oscillator value in -1..1.
+			var s float64
+			switch v.kind {
+			case 1: // noise: 15-bit LFSR stepped at 2*freq Hz
+				v.nph += 2 * v.freq / toneRate
+				for v.nph >= 1 {
+					v.nph--
+					fb := uint16(1 - (((v.lfsr >> 15) ^ (v.lfsr >> 13)) & 1))
+					v.lfsr = v.lfsr<<1 | fb
+				}
+				if v.lfsr&1 == 1 {
+					s = 1
+				} else {
+					s = -1
+				}
+			case 2: // triangle
+				switch {
+				case v.ph < 0.25:
+					s = v.ph * 4
+				case v.ph < 0.75:
+					s = 2 - v.ph*4
+				default:
+					s = v.ph*4 - 4
+				}
+			default: // pulse with duty cycle
+				if v.ph < v.duty {
+					s = 1
+				} else {
+					s = -1
+				}
+			}
+
+			l += s * toneFullAmp * v.level * v.gl
+			r += s * toneFullAmp * v.level * v.gr
+
+			// Envelope advances after the sample that used this level.
+			if v.segLeft > 0 {
+				v.segLeft--
+			}
+			if v.segLeft <= 0 {
+				v.level = v.segEnd[v.seg]
+				v.nextSegment()
+			} else {
+				v.level += v.slope
+				if v.seg == segSustain && v.freqStep != 0 {
+					v.freq += v.freqStep
+				}
+			}
+
+			v.ph += v.freq / toneRate
+			if v.ph >= 1 {
+				v.ph -= math.Floor(v.ph)
+			}
+		}
+
+		soft := func(x float64) float64 {
+			if x > knee {
+				return knee + (top-knee)*math.Tanh((x-knee)/(top-knee))
+			}
+			if x < -knee {
+				return -knee + (-top+knee)*math.Tanh((x+knee)/(top-knee))
+			}
+			return x
+		}
+		ls := int16(soft(l))
+		rs := int16(soft(r))
+		p[n] = byte(ls)
+		p[n+1] = byte(uint16(ls) >> 8)
+		p[n+2] = byte(rs)
+		p[n+3] = byte(uint16(rs) >> 8)
 		n += 4
+		e.pos++
 	}
 
 	return n, nil
 }
 
-// ensureAudio creates and starts the persistent beep player on first use, so
-// the audio device begins warming up before the cart's first beep. If the
-// player can't be created (no audio device, headless/CI), audio is considered
-// ready immediately so the cart clock isn't held back by the warm-up gate.
+// ensureAudio creates and starts the persistent mixer player on first use,
+// so the audio device begins warming up before the cart's first tone(). If
+// the player can't be created (no audio device, headless/CI), audio is
+// considered ready immediately so the cart clock isn't held back by the
+// warm-up gate.
 func (g *Game) ensureAudio() {
 	if g.audioOn {
 		return
@@ -934,8 +1131,8 @@ func (g *Game) ensureAudio() {
 
 // audioFlowStarted reports whether the audio device has started consuming the
 // persistent stream. The player is "playing" from the moment Play() is called,
-// but the device needs a few frames to spin up; beeps queued before that are
-// inaudible, which is how the C host's very first note mostly gets lost too.
+// but the device needs a few frames to spin up; triggers queued before that
+// are inaudible, which is how the C host's very first note mostly gets lost.
 func (g *Game) audioFlowStarted() bool {
 	if g.audioPl == nil {
 		return false
@@ -943,13 +1140,13 @@ func (g *Game) audioFlowStarted() bool {
 	return g.audioPl.Position() > audioReadyPosition || time.Since(g.startedAt) > audioReadyTimeout
 }
 
-// beep(freq): play a short square-wave blip at freq Hz.
-func (g *Game) beep(freq uint32) {
+// tone(freq, duration, volume, flags): trigger a voice on the mixer.
+func (g *Game) tone(freq, duration, volume, flags uint32) {
 	if g.audioCtx == nil {
 		return
 	}
 	g.ensureAudio()
-	g.audio.beep(freq)
+	g.audio.tone(freq, duration, volume, flags)
 }
 
 // initCart resets the palette, clears the framebuffer, and runs the cart's
@@ -983,10 +1180,10 @@ func (g *Game) Update() error {
 		return nil
 	}
 
-	// Start the audio player immediately (not on the first beep) so the
+	// Start the audio player immediately (not on the first tone) so the
 	// device warms up while the cart is loading, then hold the cart clock
 	// until the device is actually consuming the stream. Otherwise the first
-	// beep lands before the device produces sound and the opening note is
+	// tone lands before the device produces sound and the opening note is
 	// lost -- exactly the ~150ms of inaudible startup the C host suffers.
 	g.ensureAudio()
 	if !g.audioReady {
@@ -1127,7 +1324,9 @@ func buildEnvModule(ctx context.Context, g *Game, r wazero.Runtime) error {
 		{"mbtn", func(_ context.Context, _ api.Module, button uint32) uint32 { return g.mbtn(button) }},
 		{"pal", func(_ context.Context, _ api.Module, index, rgb int32) { g.pal(uint32(index), uint32(rgb)) }},
 		{"palreset", func(_ context.Context, _ api.Module) { g.palreset() }},
-		{"beep", func(_ context.Context, _ api.Module, freq uint32) { g.beep(freq) }},
+		{"tone", func(_ context.Context, _ api.Module, freq, duration, volume, flags uint32) {
+			g.tone(freq, duration, volume, flags)
+		}},
 	}
 
 	b := r.NewHostModuleBuilder("env")
