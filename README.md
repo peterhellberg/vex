@@ -351,11 +351,43 @@ zig build-exe -target wasm32-freestanding \
 | `mbtn(button) -> int` | `1` if a mouse button is held (0 left, 1 right, 2 middle) |
 | `pal(index, rgb)` | override palette entry `index` (0..15) with a packed `0xRRGGBB` color |
 | `palreset()` | restore the default palette |
-| `beep(freq)` | play a short blip at `freq` Hz |
 
 `color` is a palette index `0..15`
 
 Strings passed to `text()` and `title()` are truncated at 127 characters.
+
+#### Audio
+
+`tone(freq, duration, volume, flags)` plays on one of four independent
+voices. Time is measured in frames (1/60 s) and the console schedules the
+envelopes itself, so carts never need an audio clock:
+
+| argument | contents |
+|---|---|
+| `freq` | low 16 bits: start frequency in Hz (clamps to 1..20000); high 16 bits: optional slide target reached linearly over the sustain |
+| `duration` | four ADSR segment lengths in frames, each 0..255: `sustain \| release << 8 \| decay << 16 \| attack << 24` |
+| `volume` | low byte: sustain level 0..100; high byte: optional attack-time peak (`0` means 100 during the attack) |
+| `flags` | channel (0..3), duty cycle, panning, waveform, note mode |
+
+Waveforms: pulse (default; duty cycles via `TONE_MODE0`-`TONE_MODE3`),
+`TONE_NOISE` (an LFSR stepped at 2x freq), and `TONE_TRI`. `TONE_NOTE_MODE`
+interprets the frequency parameter as a MIDI note number instead of Hz.
+Use the SDK helpers (`tone_duration`, `tone_volume`, `tone_flags`,
+`tone_slide` in C / `ToneDuration`, `ToneVolume`, `toneFlags`, `toneSlide`
+in Zig) rather than packing by hand.
+
+```c
+// Middle C for one second on channel 0:
+tone(262, tone_duration(60, 0, 0, 0), 100, tone_flags(0, TONE_MODE0, 0));
+
+// Slide 262 -> 523 Hz over half a second, releasing over 15 frames:
+tone(tone_slide(262, 523), tone_duration(30, 15, 0, 0), 100,
+     tone_flags(0, 0, 0));
+
+// Kill whatever is sounding on channel 2:
+tone(262, 0, 0, tone_flags(2, 0, 0));
+```
+
 
 Buttons: 
  - `0` left
