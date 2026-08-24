@@ -397,10 +397,14 @@ let toneNodeReady = false;
 const parkedTriggers = [null, null, null, null];
 
 
-// The mixer source loads from a Blob URL so both dev mode (vex.js served by
-// vex-web) and static bundles (vex.js inlined into index.html) work without
-// an extra file next to the page. It mirrors the C/Go mixers line for line.
-const TONE_WORKLET_SRC = String.raw`
+// The mixer runs on the audio thread. Defining it as a real function keeps
+// it syntax-highlighted, lintable, and free of string-escaping constraints;
+// its serialized source loads through a Blob URL so both dev mode (vex.js
+// served by vex-web) and static bundles (vex.js inlined into index.html)
+// work without an extra file next to the page. It mirrors the C/Go mixers
+// line for line.
+/* global AudioWorkletProcessor, registerProcessor */
+function toneWorkletMain() {
 const SEG_SUSTAIN = 2, SEG_RELEASE = 3, SEG_IDLE = 4;
 
 class ToneMixer extends AudioWorkletProcessor {
@@ -527,7 +531,13 @@ class ToneMixer extends AudioWorkletProcessor {
   }
 }
 registerProcessor("tone-mixer", ToneMixer);
-`;
+}
+
+// Serialize as an IIFE: the worklet scope sees only what's inside.
+const TONE_WORKLET_URL = URL.createObjectURL(new Blob(
+    ["(", toneWorkletMain.toString(), ")();"],
+    { type: "application/javascript" }));
+
 
 function unlockAudio()
 {
@@ -549,9 +559,7 @@ function unlockAudio()
         src.connect(audioCtx.destination);
         src.start(0);
 
-        const url = URL.createObjectURL(
-            new Blob([TONE_WORKLET_SRC], { type: "application/javascript" }));
-        audioCtx.audioWorklet.addModule(url).then(() => {
+        audioCtx.audioWorklet.addModule(TONE_WORKLET_URL).then(() => {
             toneNode = new AudioWorkletNode(audioCtx, "tone-mixer",
                                             { outputChannelCount: [2] });
             toneNode.connect(audioCtx.destination);
