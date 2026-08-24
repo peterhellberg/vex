@@ -122,12 +122,9 @@ func TestTriFixture(t *testing.T) {
 	g.tri(0, -6000, 6000, 6000, -6000, 6000, 3)
 }
 
-func TestBeepEngineReadPhaseAndEnd(t *testing.T) {
-	e := &beepEngine{}
-
-	e.beep(100) // half period = 48000/(2*100) = 240 samples
-
-	buf := make([]byte, 4*16)
+func readFrames(t *testing.T, e *toneEngine, frames int) []byte {
+	t.Helper()
+	buf := make([]byte, 4*frames)
 	n, err := e.Read(buf)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
@@ -135,21 +132,37 @@ func TestBeepEngineReadPhaseAndEnd(t *testing.T) {
 	if n != len(buf) {
 		t.Fatalf("Read returned %d bytes, want %d", n, len(buf))
 	}
+	return buf
+}
 
+func sampleAt(buf []byte, i int) int16 {
+	return int16(binary.LittleEndian.Uint16(buf[i*4:]))
+}
+
+func TestToneEngineReadPhaseAndEnd(t *testing.T) {
+	e := &toneEngine{}
+
+	e.tone(0, 100, 0) // half period = 48000/(2*100) = 240 samples
+
+	buf := readFrames(t, e, 16)
 	for i := range 16 {
-		s := int16(binary.LittleEndian.Uint16(buf[i*4:]))
-		l := int16(binary.LittleEndian.Uint16(buf[i*4+2:]))
-		if s != 8000 || l != 8000 {
-			t.Fatalf("frame %d: L/R = %d/%d, want 8000/8000 (phase must start positive)", i, l, s)
+		if s := sampleAt(buf, i); s != 8000 {
+			t.Fatalf("frame %d: L = %d, want 8000 (phase must start positive)", i, s)
+		}
+		if l := int16(binary.LittleEndian.Uint16(buf[i*4+2:])); l != 8000 {
+			t.Fatalf("frame %d: R = %d, want 8000", i, l)
 		}
 	}
 
-	// A blip ends after beepFrames (48000/10); past the end the stream is
-	// silence and never returns io.EOF.
-	e.beep(1) // retrigger: new blip spans [pos, pos+beepFrames)
-	whole := make([]byte, 4*beepFrames)
-	if n, err := e.Read(whole); err != nil || n != len(whole) {
-		t.Fatalf("blip-length Read = (%d, %v)", n, err)
+	// The flat legacy blip ends after legacyBlipFrames (48000/10); past the
+	// end the stream is silence and never returns io.EOF.
+	e.tone(0, 1, 0) // retrigger: new tone spans [pos, pos+legacyBlipFrames)
+	whole := readFrames(t, e, legacyBlipFrames)
+	for i := range legacyBlipFrames {
+		s := sampleAt(whole, i)
+		if s != 8000 && s != -8000 {
+			t.Fatalf("frame %d inside flat blip: %d, want ±8000", i, s)
+		}
 	}
 	tail := make([]byte, 8)
 	if n, err := e.Read(tail); err != nil || n != 8 {
@@ -157,7 +170,65 @@ func TestBeepEngineReadPhaseAndEnd(t *testing.T) {
 	}
 	for i := range 8 {
 		if tail[i] != 0 {
-			t.Fatalf("expected silence after blip end, byte %d = %d", i, tail[i])
+			t.Fatalf("expected silence after tone end, byte %d = %d", i, tail[i])
+		}
+	}
+}
+
+func TestToneEngineChannelsOverlapAndClamp(t *testing.T) {
+	e := &toneEngine{}
+
+	// Two channels in phase sum to double amplitude (linear below the knee).
+	e.tone(0, 440, 0)
+	e.tone(1, 440, 0)
+
+	buf := readFrames(t, e, 16)
+	if s := sampleAt(buf, 0); s != 16000 {
+		t.Fatalf("two voices in phase: %d, want 16000", s)
+	}
+
+	// Out-of-range channels clamp onto 0..3 instead of erroring or panicking.
+	e.tone(-7, 0, 0)   // silences channel 0
+	e.tone(42, 440, 0) // plays on channel 3
+
+	// Channel 0 is silent now, but channel 1 and the clamped channel 3 are
+	// both live and in phase.
+	buf = readFrames(t, e, 16)
+	if s := sampleAt(buf, 0); s != 16000 {
+		t.Fatalf("after silencing ch0 (clamped from -7): %d, want 16000 (ch1 + clamped ch3)", s)
+	}
+
+	// freq <= 0 silences a channel; all channels idle -> silence.
+	e.tone(3, 0, 0)
+	e.tone(1, 0, 0)
+	buf = readFrames(t, e, 16)
+	for i := range 16 {
+		if s := sampleAt(buf, i); s != 0 {
+			t.Fatalf("frame %d after silencing all channels: %d, want 0", i, s)
+		}
+	}
+}
+
+func TestToneEngineDecayEndsSilent(t *testing.T) {
+	e := &toneEngine{}
+
+	e.tone(0, 1000, 50) // decaying 50ms tone
+
+	buf := readFrames(t, e, toneRate/20)
+	for i := range 8 {
+		if s := sampleAt(buf, i); s == 0 {
+			t.Fatalf("frame %d of decaying tone is silent", i)
+		}
+	}
+
+	// Past the duration the channel is silent again.
+	tail := make([]byte, 64)
+	if _, err := e.Read(tail); err != nil {
+		t.Fatalf("tail Read: %v", err)
+	}
+	for i := range 16 {
+		if s := sampleAt(tail, i); s != 0 {
+			t.Fatalf("frame %d after decay end: %d, want 0", i, s)
 		}
 	}
 }

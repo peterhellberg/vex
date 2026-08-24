@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -259,10 +260,10 @@ type Game struct {
 	triL []int32
 	triR []int32
 
-	// Audio for beep(): one shared context and a single persistent mixer
-	// player that synthesizes the beeps (see beepEngine).
+	// Audio for tone(): one shared context and a single persistent mixer
+	// player that synthesizes the tones (see toneEngine).
 	audioCtx   *audio.Context
-	audio      *beepEngine
+	audio      *toneEngine
 	audioPl    *audio.Player
 	audioOn    bool // the persistent player has been created
 	audioReady bool // the device has started consuming the stream
@@ -274,8 +275,8 @@ func NewGame() *Game {
 	g := &Game{
 		pixels:    pixels,
 		frame:     unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
-		audioCtx:  audio.NewContext(beepRate),
-		audio:     &beepEngine{},
+		audioCtx:  audio.NewContext(toneRate),
+		audio:     &toneEngine{},
 		startedAt: time.Now(),
 	}
 	g.palreset()
@@ -788,19 +789,27 @@ func (g *Game) palreset() {
 	}
 }
 
-// ---- audio (beep) ------------------------------------------------------
+// ---- audio (tone) ------------------------------------------------------
 
 const (
-	// The beep is synthesized at the device's native rate (48000 Hz) so the
-	// host's resampler doesn't have to up-convert from a low rate. A 22050 Hz
-	// stream gets sinc-resampled by PipeWire/ALSA on its way to the 48000 Hz
-	// device and every square-wave edge rings audibly; 48000 passes straight
-	// through and matches the C host's clean square.
-	beepRate   = 48000
-	beepFrames = beepRate / 10 // 100ms
+	// The tones are synthesized at the device's native rate (48000 Hz) so
+	// the host's resampler doesn't have to up-convert from a low rate. A
+	// 22050 Hz stream gets sinc-resampled by PipeWire/ALSA on its way to the
+	// 48000 Hz device and every square-wave edge rings audibly; 48000 passes
+	// straight through and matches the C host's clean square.
+	toneRate = 48000
+
+	// legacyBlipFrames is the length of the flat blip played for ms <= 0
+	// (the compatibility shim for ported beep() call sites): 100ms, exactly
+	// what the old monophonic beepEngine produced.
+	legacyBlipFrames = toneRate / 10
+
+	// toneMaxMs caps an explicit duration; the plan fixes no bound, this just
+	// keeps one bad cart value from pinning four long voices forever.
+	toneMaxMs = 5000
 
 	// audioBufferSize bounds the persistent player's latency. oto's default
-	// buffer is 0.5s of audio, which would postpone every new beep; a short
+	// buffer is 0.5s of audio, which would postpone every new tone; a short
 	// buffer keeps the device pulling the stream within a few milliseconds.
 	audioBufferSize = 40 * time.Millisecond
 
@@ -812,96 +821,157 @@ const (
 	// audioReadyPosition is how much of the stream the device must have
 	// consumed before the cart clock starts. Position() > 0 fires as soon as
 	// ALSA starts draining the mux, but the PipeWire sink swallows the first
-	// few hundred milliseconds of output during its pre-roll, so beeps placed
+	// few hundred milliseconds of output during its pre-roll, so tones placed
 	// that early are inaudible. Waiting for ~800ms of consumed audio puts the
-	// first beep well past the pre-roll (the C host's first note is lost to
+	// first note well past the pre-roll (the C host's first note is lost to
 	// device warm-up the same way).
 	audioReadyPosition = 800 * time.Millisecond
+
+	// voicePeak is the per-voice square amplitude in s16 units, shared with
+	// the C host's ±8000 f32 wave and the JS host's 8000/32768 gain.
+	voicePeak = 8000.0
+
+	// decayEnd is the envelope's target relative amplitude at the final
+	// sample (~1/256, i.e. -48dB), and knee/threshold shape the soft-clip
+	// applied to the summed voices before they hit the 16-bit range.
+	decayEnd = 1.0 / 256
+	clipKnee = 24000.0
 )
 
-// beepEngine synthesizes 100ms square-wave blips into one long-lived
-// audio.Player. beep(freq) is monophonic: if a previous blip is still playing,
-// it is cut off and the new one starts at the next sample (phase 0, matching
-// the C host's freshly loaded sound wave and the JS host's fresh oscillator).
-// This matches the typical "beep" semantics in retro consoles and keeps
-// rapid-fire beeps from chaining into the future or stacking on top of each
-// other. The earlier 16-voice pool design produced the latter: a cart that
-// calls beep() in a tight loop piled up multiple in-phase copies of the same
-// blip, hard-clipped, and dropped the 17th; a cart that called beep() across
-// frames instead anchored every blip to the previous one's end and silently
-// delayed the rest by 100ms each. Monophonic retrigger avoids both.
-type beepEngine struct {
+// toneVoice is one sustained oscillator: a square wave whose sign toggles
+// every `half` samples, with an amplitude that decays multiplicatively
+// (step == 1 for the flat legacy blip) until `end`.
+type toneVoice struct {
+	half  int     // samples per square half-period (toneRate / (2*freq))
+	phase int     // position within the current half-period
+	end   int64   // exclusive last frame of the current tone
+	amp   float64 // current envelope amplitude
+	step  float64 // per-sample multiplier (exp(-ln(1/decayEnd)/frames))
+}
+
+// pendingTone is a tone() call waiting to be picked up at the next Read.
+type pendingTone struct {
+	set    bool
+	freq   uint32 // 0 = silence the channel
+	frames int64
+	flat   bool // legacy blip: constant amplitude, legacyBlipFrames long
+}
+
+// toneEngine synthesizes up to four independent square-wave voices into one
+// long-lived audio.Player. Each channel sustains its own oscillator; starting
+// a new tone on a channel replaces its previous one at the next sample the
+// device pulls (phase 0, matching the C host's freshly rewritten Sound buffer
+// and the JS host's fresh oscillator). Notes on different channels overlap;
+// their sum runs through a soft clipper with a linear passband below
+// clipKnee, so a single voice is untouched and stacked voices saturate
+// gently instead of hard-clipping.
+//
+// Like the old beepEngine it never chains notes into the future or stacks
+// copies of the same wave: every channel holds at most one voice.
+type toneEngine struct {
 	mu      sync.Mutex
-	pos     int64      // total frames produced (write head)
-	voice   *beepVoice // nil = no active blip
-	pending *uint32    // pending freq from a beep() call, applied at next Read
+	pos     int64 // total frames produced (write head)
+	voices  [4]*toneVoice
+	pending [4]pendingTone
 }
 
-type beepVoice struct {
-	freq  uint32
-	half  int   // samples per square half-period (beepRate / (2*freq))
-	phase int   // position within the current half-period
-	end   int64 // exclusive last frame of the current blip
-}
-
-// beep schedules a 100ms blip at freq Hz, starting at phase 0. The blip
-// replaces whatever is currently playing: a beep() arriving while a previous
-// blip is still active cuts the previous one off and starts a new one at the
-// next sample the audio device pulls. The cart-side call is non-blocking
-// (just sets a flag); the audio thread picks it up on its next Read.
-func (e *beepEngine) beep(freq uint32) {
-	if freq < 1 || freq > 20000 {
-		return
+// tone schedules a tone on channel ch (clamped to 0..3). freq <= 0 silences
+// the channel; freq > 20000 clamps. ms <= 0 plays the flat 100ms legacy blip;
+// a positive ms plays that many milliseconds (capped at toneMaxMs) with an
+// exponential decay envelope. The cart-side call is non-blocking (just sets a
+// flag); the audio thread picks it up on its next Read.
+func (e *toneEngine) tone(channel, freq, ms int32) {
+	ch := channel
+	if ch < 0 {
+		ch = 0
+	}
+	if ch > 3 {
+		ch = 3
 	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	f := freq
-	e.pending = &f
+
+	if freq < 1 {
+		e.pending[ch] = pendingTone{set: true, freq: 0}
+		return
+	}
+
+	if freq > 20000 {
+		freq = 20000
+	}
+
+	p := pendingTone{set: true, freq: uint32(freq)}
+	if ms <= 0 {
+		p.flat = true
+		p.frames = legacyBlipFrames
+	} else {
+		dur := ms
+		if dur > toneMaxMs {
+			dur = toneMaxMs
+		}
+		p.frames = int64(toneRate) * int64(dur) / 1000
+		if p.frames < 1 {
+			p.frames = 1
+		}
+	}
+	e.pending[ch] = p
 }
 
 // Read implements io.Reader with 16-bit stereo interleaved PCM and never
-// returns io.EOF. Idle stream is silence; the active voice (if any) is a
-// square wave starting at +8000, hard-clipped at the 16-bit range.
-func (e *beepEngine) Read(p []byte) (int, error) {
+// returns io.EOF. Idle stream is silence; each active voice contributes a
+// square wave starting at +voicePeak, and the summed voices are soft-clipped.
+func (e *toneEngine) Read(p []byte) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Apply the most recent pending freq as a retrigger: start a fresh blip
-	// or, if one is already playing, replace its frequency and reset its
-	// phase so the new note starts cleanly instead of clicking mid-cycle.
-	if e.pending != nil {
-		freq := *e.pending
-		e.pending = nil
-		half := beepRate / (2 * int(freq))
-		if e.voice == nil {
-			e.voice = &beepVoice{freq: freq, half: half, phase: 0, end: e.pos + beepFrames}
-		} else {
-			e.voice.freq = freq
-			e.voice.half = half
-			e.voice.phase = 0
-			e.voice.end = e.pos + beepFrames
+	// Apply pending tone() calls as retriggers: start a fresh voice or, if
+	// one is already playing on the channel, replace it so the new note
+	// starts cleanly at phase 0 instead of clicking mid-cycle.
+	for ch := range e.pending {
+		p := e.pending[ch]
+		e.pending[ch] = pendingTone{}
+		if !p.set {
+			continue
 		}
+
+		if p.freq < 1 {
+			e.voices[ch] = nil
+			continue
+		}
+
+		half := toneRate / (2 * int(p.freq))
+		v := &toneVoice{half: half, end: e.pos + p.frames, amp: voicePeak}
+		if p.flat {
+			v.step = 1
+		} else {
+			v.step = math.Exp(-math.Log(1/decayEnd) / float64(p.frames))
+		}
+		e.voices[ch] = v
 	}
 
 	n := 0
 	for n+4 <= len(p) {
-		if e.voice != nil && e.pos >= e.voice.end {
-			e.voice = nil
-		}
-
-		acc := 0
-		if e.voice != nil {
-			if (e.voice.phase/e.voice.half)&1 == 0 {
-				acc += 8000
-			} else {
-				acc -= 8000
+		acc := 0.0
+		for ch, v := range e.voices {
+			if v == nil {
+				continue
 			}
-			e.voice.phase++
+			if e.pos >= v.end {
+				e.voices[ch] = nil
+				continue
+			}
+			if (v.phase/v.half)&1 == 0 {
+				acc += v.amp
+			} else {
+				acc -= v.amp
+			}
+			v.phase++
+			v.amp *= v.step
 		}
 		e.pos++
 
-		s := int16(acc)
+		s := softClip(acc)
 		p[n] = byte(s)
 		p[n+1] = byte(uint16(s) >> 8)
 		p[n+2] = byte(s)
@@ -912,8 +982,20 @@ func (e *beepEngine) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// ensureAudio creates and starts the persistent beep player on first use, so
-// the audio device begins warming up before the cart's first beep. If the
+// softClip maps the mixed sample into the 16-bit range: linear below the
+// knee (so quiet mixes are bit-exact), tanh-saturated above it.
+func softClip(a float64) int16 {
+	switch {
+	case a > clipKnee:
+		a = clipKnee + (32767-clipKnee)*math.Tanh((a-clipKnee)/(32767-clipKnee))
+	case a < -clipKnee:
+		a = -clipKnee + (-32767+clipKnee)*math.Tanh((a+clipKnee)/(32767-clipKnee))
+	}
+	return int16(a)
+}
+
+// ensureAudio creates and starts the persistent tone player on first use, so
+// the audio device begins warming up before the cart's first tone. If the
 // player can't be created (no audio device, headless/CI), audio is considered
 // ready immediately so the cart clock isn't held back by the warm-up gate.
 func (g *Game) ensureAudio() {
@@ -934,7 +1016,7 @@ func (g *Game) ensureAudio() {
 
 // audioFlowStarted reports whether the audio device has started consuming the
 // persistent stream. The player is "playing" from the moment Play() is called,
-// but the device needs a few frames to spin up; beeps queued before that are
+// but the device needs a few frames to spin up; tones queued before that are
 // inaudible, which is how the C host's very first note mostly gets lost too.
 func (g *Game) audioFlowStarted() bool {
 	if g.audioPl == nil {
@@ -943,13 +1025,13 @@ func (g *Game) audioFlowStarted() bool {
 	return g.audioPl.Position() > audioReadyPosition || time.Since(g.startedAt) > audioReadyTimeout
 }
 
-// beep(freq): play a short square-wave blip at freq Hz.
-func (g *Game) beep(freq uint32) {
+// tone(channel, freq, ms): play a square wave on voice 0..3 at freq Hz.
+func (g *Game) tone(channel, freq, ms int32) {
 	if g.audioCtx == nil {
 		return
 	}
 	g.ensureAudio()
-	g.audio.beep(freq)
+	g.audio.tone(channel, freq, ms)
 }
 
 // initCart resets the palette, clears the framebuffer, and runs the cart's
@@ -983,10 +1065,10 @@ func (g *Game) Update() error {
 		return nil
 	}
 
-	// Start the audio player immediately (not on the first beep) so the
+	// Start the audio player immediately (not on the first tone) so the
 	// device warms up while the cart is loading, then hold the cart clock
 	// until the device is actually consuming the stream. Otherwise the first
-	// beep lands before the device produces sound and the opening note is
+	// note lands before the device produces sound and the opening tone is
 	// lost -- exactly the ~150ms of inaudible startup the C host suffers.
 	g.ensureAudio()
 	if !g.audioReady {
@@ -1127,7 +1209,7 @@ func buildEnvModule(ctx context.Context, g *Game, r wazero.Runtime) error {
 		{"mbtn", func(_ context.Context, _ api.Module, button uint32) uint32 { return g.mbtn(button) }},
 		{"pal", func(_ context.Context, _ api.Module, index, rgb int32) { g.pal(uint32(index), uint32(rgb)) }},
 		{"palreset", func(_ context.Context, _ api.Module) { g.palreset() }},
-		{"beep", func(_ context.Context, _ api.Module, freq uint32) { g.beep(freq) }},
+		{"tone", func(_ context.Context, _ api.Module, channel, freq, ms int32) { g.tone(channel, freq, ms) }},
 	}
 
 	b := r.NewHostModuleBuilder("env")
