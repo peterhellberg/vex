@@ -17,6 +17,9 @@ func TestProbeCartSampleDuration(t *testing.T) {
 
 	wasm, err := os.ReadFile("/tmp/opencode/smpprobe/probe.wasm")
 	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("probe cart not built (see /tmp/opencode/smpprobe)")
+		}
 		t.Fatal(err)
 	}
 
