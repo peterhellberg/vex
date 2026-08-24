@@ -580,7 +580,14 @@ function apos()
 {
     if (!audioCtx || !channelNodes)
         return 0;
-    return ((audioCtx.currentTime - ctxStartTime) * audioCtx.sampleRate) | 0;
+    // A suspended context freezes currentTime, which would stall
+    // apos()-driven sequencers (e.g. before the first tap). Fall back to a
+    // virtual clock derived from the page's wall clock at the context's
+    // sample rate; once running, the real audio clock takes over.
+    const t = audioCtx.state === "running"
+        ? audioCtx.currentTime
+        : ctxStartTime + performance.now() / 1000;
+    return Math.max(0, ((t - ctxStartTime) * audioCtx.sampleRate) | 0);
 }
 
 //// Part 4: WASM state and string helpers (C string reader)

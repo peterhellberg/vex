@@ -226,4 +226,18 @@ const a1 = sandbox.apos();
 check("apos: advances monotonically at sampleRate",
       a1 > a0 && eq(a1 - a0, 0.5 * SAMPLE_RATE));
 
+// --- apos: suspended context falls back to a virtual clock ------------------
+sandbox.performance = { now: () => 3000 }; // 3s since page load
+ctx.state = "suspended";
+ctx.currentTime = 10.0; // frozen while suspended
+const ctxStart = vm.runInContext("ctxStartTime", sandbox);
+const s0 = sandbox.apos();
+sandbox.performance.now = () => 3500;
+const s1 = sandbox.apos();
+check("apos: suspended context advances via wall clock",
+      s1 > s0 && eq(s1 - s0, 0.5 * SAMPLE_RATE));
+check("apos: virtual clock equals wall time at the sample rate",
+      eq(s1, (3500 / 1000) * SAMPLE_RATE));
+ctx.state = "running";
+
 process.exit(failures ? 1 : 0);

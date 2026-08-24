@@ -978,6 +978,14 @@ func (e *toneEngine) apos() int32 {
 	return int32(e.pos)
 }
 
+// advance pushes the audio clock forward without rendering samples -- the
+// virtual 60 fps clock for runs where no device drains the stream.
+func (e *toneEngine) advance(n int64) {
+	e.mu.Lock()
+	e.pos += n
+	e.mu.Unlock()
+}
+
 // Read implements io.Reader with 16-bit stereo interleaved PCM and never
 // returns io.EOF. Idle stream is silence; each active voice contributes a
 // ±voicePeak wave scaled by its channel's volume, and the summed voices are
@@ -1151,6 +1159,18 @@ func (g *Game) apos() int32 {
 	return g.audio.apos()
 }
 
+// tickAudioClock is called once per delivered cart frame: when no player
+// could be created (headless runs, machines without an audio device) the
+// stream is never drained and the audio clock would freeze, stalling
+// apos()-driven sequencers at t=0. Those runs get a 60 fps virtual clock
+// (48000/60 = 800 samples per frame) instead; with a live player the
+// device's own draining advances the clock and this is a no-op.
+func tickAudioClock(g *Game, livePlayer bool) {
+	if !livePlayer {
+		g.audio.advance(toneRate / 60)
+	}
+}
+
 // initCart resets the palette, clears the framebuffer, and runs the cart's
 // boot() if it exports one. It does not touch g's module/function fields or
 // the bootCalled flag; the caller owns those and any rollback on error.
@@ -1194,6 +1214,8 @@ func (g *Game) Update() error {
 			return nil
 		}
 	}
+
+	tickAudioClock(g, g.audioPl != nil)
 
 	reload := super && inpututil.IsKeyJustPressed(ebiten.KeyR)
 

@@ -190,6 +190,21 @@ int main(void) {
     }
     CHECK("apos advances monotonically", mono);
 
+    // Virtual clock: with no live stream draining the mixer, the per-frame
+    // tick advances apos by 800 samples/frame (48 kHz / 60 fps); with a
+    // live stream it must be a no-op.
+    g_stream_ready = false;
+    atomic_store(&g_apos, 0);
+    for (int i = 0; i < 60; i++) vex_audio_frame_tick();
+    CHECK("headless virtual clock: 800 samples/frame",
+          atomic_load(&g_apos) == 60 * 800);
+
+    g_stream_ready = true;
+    atomic_store(&g_apos, 100000);
+    for (int i = 0; i < 60; i++) vex_audio_frame_tick();
+    CHECK("virtual clock inert while stream is live",
+          atomic_load(&g_apos) == 100000);
+
     printf(failures ? "C HOST: %d FAILURES\n" : "C HOST: all ok\n", failures);
     free(rendered);
     return failures != 0;

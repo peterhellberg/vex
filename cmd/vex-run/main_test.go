@@ -2,12 +2,27 @@ package main
 
 import (
 	"encoding/binary"
+	"sync"
 	"testing"
 	"unsafe"
+
+	"github.com/hajimehoshi/ebiten/v2/audio"
 )
 
 // newTestGame builds a Game without ebiten/audio initialization so drawing
 // logic can be exercised headlessly.
+var (
+	testCtxOnce sync.Once
+	testCtx     *audio.Context
+)
+
+// testAudioContext returns the process-wide ebiten audio context (creating
+// it panics if called twice).
+func testAudioContext() *audio.Context {
+	testCtxOnce.Do(func() { testCtx = audio.NewContext(toneRate) })
+	return testCtx
+}
+
 func newTestGame() *Game {
 	g := &Game{}
 	g.pixels = make([]byte, VEX_W*VEX_H*4)
@@ -324,5 +339,32 @@ func TestToneEngineAposAdvancesWithStream(t *testing.T) {
 	readFrames(t, e, 123)
 	if got := e.apos(); got != 603 {
 		t.Fatalf("apos after 603 frames = %d", got)
+	}
+}
+
+func TestTickAudioClockVirtualWhenHeadless(t *testing.T) {
+	g := newTestGame()
+	g.audio = &toneEngine{}
+	g.audioCtx = testAudioContext()
+	g.audioOn = true // player creation already failed (no device)
+	g.audioReady = true
+
+	tickAudioClock(g, false)
+	if got := g.apos(); got != toneRate/60 {
+		t.Fatalf("headless apos after one tick = %d, want %d", got, toneRate/60)
+	}
+	for range 59 {
+		tickAudioClock(g, false)
+	}
+	if got := g.apos(); got != toneRate {
+		t.Fatalf("headless apos after 60 ticks = %d, want %d (one second)", got, toneRate)
+	}
+
+	// With a live player the device drains the stream; the tick must not
+	// double-advance the clock.
+	before := g.apos()
+	tickAudioClock(g, true)
+	if after := g.apos(); after != before {
+		t.Fatalf("apos moved with live player: %d -> %d", before, after)
 	}
 }

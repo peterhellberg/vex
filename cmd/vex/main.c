@@ -635,6 +635,7 @@ m3ApiRawFunction(host_palreset) {
 #define TONE_MAX_MS       5000
 #define TONE_LEGACY_MS    100
 #define TONE_SUSTAIN      UINT64_MAX // end of a sustained voice
+#define TONE_VIRTUAL_STEP 800        // 48 kHz / 60 fps, for clock-less runs
 
 typedef struct {
     _Atomic uint8_t  kind;       // 0 square, 1 noise
@@ -806,6 +807,17 @@ m3ApiRawFunction(host_vol) {
 
 // apos(): sample frames produced by the output stream since console start
 // (48 kHz count; wraps after ~12.4 hours). Safe in headless runs: returns 0.
+// vex_audio_frame_tick is called once per console frame from both main
+// loops: without a live output stream draining the mixer, the sample
+// counter would freeze and apos()-driven sequencers would stall at t=0
+// (headless -n runs, or machines without an audio device). Those runs get
+// a 60 fps virtual clock instead.
+void vex_audio_frame_tick(void) {
+    if (!g_stream_ready)
+        atomic_fetch_add_explicit(&g_apos, TONE_VIRTUAL_STEP,
+                                  memory_order_relaxed);
+}
+
 m3ApiRawFunction(host_apos) {
     m3ApiReturnType(int32_t)
     uint64_t pos = atomic_load_explicit(&g_apos, memory_order_relaxed);
@@ -1204,6 +1216,7 @@ int main(int argc, char** argv) {
         uint64_t prev = fnv1a64(g_fb, sizeof g_fb);
         long changes = 0;
         for (long i = 0; i < frames; i++) {
+            vex_audio_frame_tick();
             err = m3_CallV(cart.f_update);
             if (err) die(cart.rt, "update", err);
 
@@ -1355,6 +1368,7 @@ int main(int argc, char** argv) {
         g_view_scale = view_scale; g_view_ox = ox; g_view_oy = oy;
 
         // Run the cart: pure CPU rasterization into g_fb.
+            vex_audio_frame_tick();
         err = m3_CallV(cart.f_update);
         if (err) die(cart.rt, "update", err);
 
