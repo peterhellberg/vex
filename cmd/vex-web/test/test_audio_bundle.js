@@ -130,8 +130,8 @@ function serveDir(dir) {
         check('context reached running state', a.running || a.resumes > 0,
               `state-running=${a.running} resumes=${a.resumes}`);
         check('4 persistent channel oscillators', a.osc === 4, `got ${a.osc}`);
-        check('12 gains (3 per channel)', a.gains === 12, `got ${a.gains}`);
-        // 5th buffer source is the one-sample iOS unlock blip.
+        check('16 gains (4 per channel)', a.gains === 16, `got ${a.gains}`);
+        
         check('4 looping noise sources', a.sources === 5, `got ${a.sources}`);
         check('cart notes scheduled gain automation', a.ramps > 20,
               `${a.ramps} ramps in 2s`);

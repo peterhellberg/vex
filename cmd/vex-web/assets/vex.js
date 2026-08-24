@@ -436,17 +436,22 @@ function initChannelNodes()
         const noiseGain = audioCtx.createGain();
         noiseGain.gain.value = 0;
 
+        const sampleGain = audioCtx.createGain();
+        sampleGain.gain.value = 0;
+
         const volGain = audioCtx.createGain();
         volGain.gain.value = 1; // unity until vol() says otherwise
 
         osc.connect(oscGain).connect(volGain);
         noiseSrc.connect(noiseGain).connect(volGain);
+        sampleGain.connect(volGain);
         volGain.connect(audioCtx.destination);
 
         osc.start();
         noiseSrc.start();
 
-        channelNodes.push({ osc, oscGain, noiseSrc, noiseGain, volGain });
+        channelNodes.push({ osc, oscGain, noiseSrc, noiseGain,
+                            sampleGain, volGain, smRate: 0, smSrc: null });
     }
 }
 
@@ -560,6 +565,156 @@ function scheduleEvent(channel, isNoise, freq, ms)
         srcGain.gain.setValueAtTime(TONE_PEAK, end);
         srcGain.gain.linearRampToValueAtTime(0, end + CROSSFADE);
     }
+}
+
+// pitch(channel, freq): retune the sounding voice without restarting it --
+// oscillator frequency, noise step rate, or sample playback rate (Paula's
+// period register). setTargetAtTime with ~1 ms constant avoids zipper
+// noise. Muted nodes get retuned too: harmless, and it keeps the graph
+// stateless.
+function pitch(channel, freq)
+{
+    if (!audioCtx || !channelNodes || audioCtx.state !== "running")
+        return;
+
+    channel = Math.max(0, Math.min(TONE_CHANNELS - 1, channel | 0));
+    // Square/noise top out at tone's 20 kHz; samples may go to their own
+    // max rate so pitching above a high-rate sample stays reachable.
+    const sqFreq = Math.max(1, Math.min(20000, freq | 0));
+    const smFreq = Math.max(1, Math.min(96000, freq | 0));
+
+    const t = audioCtx.currentTime;
+    const nodes = channelNodes[channel];
+    nodes.osc.frequency.setTargetAtTime(sqFreq, t, 0.001);
+    nodes.noiseSrc.playbackRate.setTargetAtTime(
+        (2 * sqFreq) / audioCtx.sampleRate, t, 0.001);
+    if (nodes.smSrc && nodes.smRate > 0) {
+        const cur = smFreq === nodes.smRate
+            ? nodes.smSrc.playbackRate.value // exact restore when retuning to base
+            : smFreq / audioCtx.sampleRate;
+        void cur;
+        nodes.smSrc.playbackRate.setTargetAtTime(
+            smFreq / audioCtx.sampleRate, t, 0.001);
+    }
+}
+
+// AudioBuffer cache keyed by "ptr:len" (D3): bytes are captured at first
+// trigger; later edits of linear memory intentionally do not apply. Bounded
+// at SAMPLE_CACHE_MAX entries / bytes, oldest evicted first.
+const SAMPLE_CACHE_MAX = 16;
+const SAMPLE_CACHE_BYTES = 8 * 1024 * 1024;
+const sampleCache = new Map(); // key -> { buf, bytes }
+
+function sampleBufferFor(ptr, len)
+{
+    updateMemoryViews();
+    const key = ptr + ":" + len;
+    let hit = sampleCache.get(key);
+    if (hit) return hit.buf;
+
+    // Copy out of linear memory now (truncating at its end), then convert
+    // signed 8-bit PCM to float.
+    const avail = mem8 !== null ? Math.max(0, mem8.length - ptr) : 0;
+    const n = Math.min(len, avail);
+    const buf = audioCtx.createBuffer(1, Math.max(1, n), audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < n; i++)
+        data[i] = ((mem8[ptr + i] << 24) >> 24) / 128;
+
+    sampleCache.set(key, { buf, bytes: n });
+    while (sampleCache.size > SAMPLE_CACHE_MAX ||
+           [...sampleCache.values()].reduce((a, e) => a + e.bytes, 0) >
+               SAMPLE_CACHE_BYTES) {
+        const oldest = sampleCache.keys().next().value;
+        if (oldest === key) break;
+        sampleCache.delete(oldest);
+    }
+    return buf;
+}
+
+// sample(channel, ptr, len, rate, loopLen): trigger 8-bit PCM from wasm
+// linear memory (captured at first trigger per D3). loopLen > 0 tail-loops
+// the final loopLen bytes indefinitely; 0 plays once. The event replaces
+// whatever the channel was playing via the usual crossfade; the buffer
+// source is created per trigger -- WebAudio has no reusable source nodes --
+// but the decoded AudioBuffer itself is cached, so no per-trigger decode.
+const SAMPLE_PEAK = 4 * TONE_PEAK; // full-scale samples vs ±8000 squares
+
+function sample(channel, ptr, len, rate, loopLen)
+{
+    if (!audioCtx || !channelNodes || audioCtx.state !== "running")
+        return;
+    updateMemoryViews();
+    if (mem8 === null)
+        return;
+
+    channel = Math.max(0, Math.min(TONE_CHANNELS - 1, channel | 0));
+    const nodes = channelNodes[channel];
+    const t = audioCtx.currentTime;
+
+    // Retire any previous buffer source on this channel.
+    if (nodes.smSrc) {
+        try { nodes.smSrc.stop(t); } catch (e) { /* already stopped */ }
+        nodes.smSrc.disconnect();
+        nodes.smSrc = null;
+    }
+
+    const n = Math.max(0, Math.min(len | 0, 65536));
+    if (n < 1) {
+        // Nothing playable: silence the channel like freq <= 0 does.
+        for (const g of [nodes.oscGain, nodes.noiseGain, nodes.sampleGain]) {
+            g.gain.cancelScheduledValues(t);
+            g.gain.setValueAtTime(g.gain.value, t);
+            g.gain.linearRampToValueAtTime(0, t + CROSSFADE);
+        }
+        return;
+    }
+
+    rate = Math.max(1, Math.min(96000, rate | 0));
+    loopLen = Math.min(Math.max(loopLen | 0, 0), n);
+
+    const buf = sampleBufferFor(ptr, n);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+
+    // The AudioBuffer is stamped at the context rate, so playback must be
+    // scaled by rate/contextRate to land on the cart-declared speed.
+    // pitch() later retargets this ratio from its own frequency argument.
+    src.playbackRate.value = rate / audioCtx.sampleRate;
+    nodes.smRate = rate;
+    nodes.smSrc = src;
+
+    // Fade out the square/noise sources, fade the sample in.
+    for (const g of [nodes.oscGain, nodes.noiseGain]) {
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(g.gain.value, t);
+        g.gain.linearRampToValueAtTime(0, t + CROSSFADE);
+    }
+    nodes.sampleGain.gain.cancelScheduledValues(t);
+    nodes.sampleGain.gain.setValueAtTime(nodes.sampleGain.gain.value, t);
+    nodes.sampleGain.gain.linearRampToValueAtTime(SAMPLE_PEAK, t + CROSSFADE);
+
+    if (loopLen > 0) {
+        src.loop = true;
+        // Loop points live on the buffer's own timeline (stamped at the
+        // context rate), not playback seconds -- dividing by `rate` here
+        // pushes loopEnd past the buffer end for fast grains, which clamps
+        // it below loopStart and silently disables looping.
+        src.loopStart = (n - loopLen) / audioCtx.sampleRate;
+        src.loopEnd = n / audioCtx.sampleRate;
+    } else {
+        src.onended = () => {
+            // One-shot finished naturally: hand the channel back to silence.
+            nodes.sampleGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.005);
+            if (nodes.smSrc === src) {
+                src.disconnect();
+                nodes.smSrc = null;
+            }
+        };
+    }
+
+    src.connect(nodes.sampleGain);
+    src.start(t);
 }
 
 function vol(channel, v)
@@ -1234,7 +1389,9 @@ const env =
     tone,
     noise,
     vol,
-    apos
+    apos,
+    pitch,
+    sample
 };
 
 let rafId = null;

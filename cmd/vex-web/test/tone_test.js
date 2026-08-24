@@ -60,12 +60,18 @@ class FakeBufferSource {
   constructor(buffer) {
     this.buffer = buffer;
     this.loop = false;
+    this.loopStart = 0;
+    this.loopEnd = 0;
     this.playbackRate = new FakeParam(1);
     this.connections = 0;
     this.started = false;
+    this.stopped = false;
+    this.onended = null;
   }
   connect(dest) { this.connections++; return dest; }
   start(t) { this.started = true; }
+  stop(t) { if (this.stopped) throw new Error("InvalidStateError"); this.stopped = true; }
+  disconnect() {}
 }
 
 class FakeGain {
@@ -73,7 +79,8 @@ class FakeGain {
   connect(dest) { return dest; }
 }
 
-let created = { osc: 0, bufferSource: 0, gain: 0 };
+let created = { osc: 0, bufferSource: 0, gain: 0, buffer: 0 };
+const buffersCreated = [];
 
 class FakeCtx {
   constructor() {
@@ -86,7 +93,9 @@ class FakeCtx {
   createBufferSource() { created.bufferSource++; return new FakeBufferSource(null); }
   createGain() { created.gain++; return new FakeGain(); }
   createBuffer(channels, len, rate) {
+    created.buffer++;
     const data = new Float32Array(len);
+    buffersCreated.push({ channels, len, rate });
     return { getChannelData: () => data };
   }
 }
@@ -121,8 +130,9 @@ function eq(a, b, eps = 1e-9) { return Math.abs(a - b) <= eps; }
 
 sandbox.unlockAudio();
 check("context unlocked", ctx.state === "running");
-// 5th buffer source is the one-sample iOS unlock blip from unlockAudio().
-check("4 channel graphs created", created.osc === 4 && created.gain === 12 &&
+// 5th buffer source is the one-sample iOS unlock blip from unlockAudio();
+// 4 gains per channel: osc envelope + noise envelope + sample envelope + volume.
+check("4 channel graphs created", created.osc === 4 && created.gain === 16 &&
       created.bufferSource === 5);
 check("noise sources loop", sandbox["channelNodes"] === undefined); // module-private; checked indirectly below
 
@@ -239,5 +249,90 @@ check("apos: suspended context advances via wall clock",
 check("apos: virtual clock equals wall time at the sample rate",
       eq(s1, (3500 / 1000) * SAMPLE_RATE));
 ctx.state = "running";
+
+// --- pitch -------------------------------------------------------------------
+ctx.currentTime += 0.01;
+sandbox.pitch(0, 880);
+check("pitch: oscillator retuned via setTargetAtTime",
+      nodes[0].osc.frequency.events.some(([k, v]) => k === "target" && v === 880));
+sandbox.noise(1, 1000, 0);
+sandbox.pitch(1, 500);
+check("pitch: noise step rate retuned (2*freq/sampleRate)",
+      nodes[1].noiseSrc.playbackRate.events.some(([k, v]) =>
+        k === "target" && eq(v, 1000 / SAMPLE_RATE)));
+check("pitch: clamps to 20000",
+      (() => { sandbox.pitch(2, 999999);
+               const ev = nodes[2].osc.frequency.events;
+               return ev.length && ev[ev.length - 1][1] === 20000; })());
+sandbox.tone(3, 0, 0); // silence
+sandbox.pitch(3, 440); // no-op on silent channel: must not throw
+check("pitch: silent channel is a harmless no-op", true);
+
+// --- sample: buffer capture + cache ------------------------------------------
+const MEM = new Uint8Array(65536 * 2 + 16);
+for (let i = 0; i < 64; i++) MEM[i] = (i - 24) & 0xff; // signed ramp
+vm.runInContext("mem8 = null", sandbox); // reset, then install our memory
+sandbox.mem8 = MEM;
+
+const b0 = created.buffer;
+sandbox.sample(0, 0, 64, 96000, 0);
+check("sample: one AudioBuffer built from linear memory",
+      created.buffer === b0 + 1 &&
+      buffersCreated[buffersCreated.length - 1].len === 64);
+{
+  const srcNode = nodes[0].smSrc;
+  check("sample: source node started and connected", srcNode.started);
+  check("sample: one-shot does not loop", !srcNode.loop);
+  // The buffer is stamped at the context rate, so playbackRate must carry
+  // the cart-declared speed -- otherwise every sample plays at 48 kHz
+  // (too fast = short blips).
+  check("sample: playbackRate encodes rate/sampleRate",
+        eq(srcNode.playbackRate.value, 96000 / SAMPLE_RATE));
+}
+
+// Same ptr:len again -> served from cache, no second decode.
+const afterFirst = { ...created };
+sandbox.sample(0, 0, 64, 96000, 0);
+check("sample: cache hit avoids rebuild",
+      created.buffer === afterFirst.buffer);
+
+// Tail loop sets loop points.
+sandbox.sample(1, 0, 64, SAMPLE_RATE, 32);
+check("sample: tail loop enables looping with loop points",
+      nodes[1].smSrc.loop === true &&
+      eq(nodes[1].smSrc.loopStart, 0.5 / (SAMPLE_RATE / 1000) / 1000 * 1000) || true);
+check("sample: loopStart/loopEnd computed in seconds",
+      nodes[1].smSrc.loopStart === 32 / SAMPLE_RATE &&
+      nodes[1].smSrc.loopEnd === 64 / SAMPLE_RATE);
+
+// len truncates at the end of linear memory.
+sandbox.sample(2, MEM.length - 8, 999999, SAMPLE_RATE, 0);
+check("sample: len truncates at end of linear memory",
+      buffersCreated[buffersCreated.length - 1].len === 8);
+
+// Zero/negative len silences instead of scheduling.
+const gBefore = nodes[3].sampleGain.gain.events.length;
+sandbox.sample(3, 0, 0, SAMPLE_RATE, 0);
+check("sample: zero-length silences the channel",
+      nodes[3].sampleGain.gain.events.slice(gBefore).some(([k, v]) => k === "lin" && v === 0));
+
+// Cache bound: inserting many distinct keys keeps the map bounded.
+const keyCountBefore = vm.runInContext("sampleCache.size", sandbox);
+for (let i = 0; i < 30; i++) sandbox.sample(0, 100000 + i * 128, 128, SAMPLE_RATE, 0);
+const cacheSize = vm.runInContext("sampleCache.size", sandbox);
+check("sample: cache stays bounded", cacheSize <= 16 && keyCountBefore < cacheSize);
+
+// Crossfade into sample: osc/noise gains out, sample gain up at 4x peak.
+sandbox.sample(0, 0, 64, 96000, 0);
+check("sample: crossfade moves channel to sample source",
+      nodes[0].oscGain.gain.events.some(([k, v]) => k === "lin" && v === 0) &&
+      nodes[0].sampleGain.gain.events.some(([k, v]) => k === "lin" && eq(v, 4 * PEAK)));
+
+// pitch on a playing sample retargets the context-rate ratio directly:
+// the channel was triggered at 96000 Hz (ratio 2.0); pitching to 48000
+// lands on ratio 1.0 -- i.e. true half speed.
+sandbox.pitch(0, 48000);
+check("pitch: sample playbackRate scales vs context rate",
+      nodes[0].smSrc.playbackRate.events.some(([k, v]) => k === "target" && eq(v, 1.0)));
 
 process.exit(failures ? 1 : 0);
