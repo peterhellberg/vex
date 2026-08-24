@@ -82,4 +82,24 @@ VEX_IMPORT("vol") void vol(int channel, int v);
 // sample-accurate regardless of display drift or frame throttling.
 VEX_IMPORT("apos") int apos(void);
 
+// pitch(): retune the voice currently sounding on `channel` (0..3) to `freq`
+// Hz without restarting it -- phase, envelope, volume and duration are kept,
+// and the wave continues from its current position at the new rate. Works on
+// all voice kinds: square/noise half-period divisor and sample playback rate
+// alike (freq clamps to 1..20000 for square/noise, 1..96000 for samples).
+// No-op if the channel is silent. This is what makes arpeggio, vibrato and
+// portamento click-free: retune instead of retrigger.
+VEX_IMPORT("pitch") void pitch(int channel, int freq);
+
+// sample(): trigger 8-bit signed PCM on a voice. `ptr`/`len` address raw
+// bytes in linear memory (len clamps to 64 KiB and truncates at the end of
+// memory; the bytes are captured when sample() is called -- later edits do
+// not affect the playing voice). `rate` is the playback frequency in Hz
+// (clamps to 1..96000); pitch() can slide it afterwards. `loop_len` > 0
+// tail-loops the final loop_len bytes indefinitely (sustain, like
+// tone()'s ms == 0); 0 plays once and ends naturally. The event replaces
+// whatever was on the channel and obeys vol().
+VEX_IMPORT("sample") void sample(int channel, const void* ptr, int len,
+                                 int rate, int loop_len);
+
 #endif // VEX_H

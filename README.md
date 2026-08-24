@@ -355,6 +355,8 @@ zig build-exe -target wasm32-freestanding \
 | `noise(channel, freq, ms)` | switch the voice to a noise source for this event: a 16-bit LFSR stepped at 2×`freq` Hz (freq acts as noise color/pitch); same `ms` semantics as `tone()`; the next `tone()` flips back to square |
 | `vol(channel, v)` | per-channel linear gain, `v` clamped to 0..64 with 64 = unity (tracker-native range; the default); applies live to what the channel is playing |
 | `apos() -> int` | audio clock: 48 kHz sample frames produced since console start (wrap-safe for ~12 h); use it instead of a frame accumulator for sample-accurate tempo |
+| `pitch(channel, freq)` | retune the sounding voice without restarting it — phase/envelope/volume/duration kept; works on square, noise and sample voices; no-op if silent. Click-free arpeggio/vibrato/portamento primitive |
+| `sample(channel, ptr, len, rate, loop_len)` | trigger 8-bit signed PCM from linear memory (`len` ≤ 64 KiB, bytes captured at trigger; `rate` 1..96000 Hz, slideable via `pitch()`); `loop_len` > 0 tail-loops the last `loop_len` bytes indefinitely, `0` plays once |
 
 Audio semantics shared by every host:
 
