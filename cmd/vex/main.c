@@ -636,13 +636,25 @@ m3ApiRawFunction(host_palreset) {
 #define TONE_LEGACY_MS    100
 #define TONE_SUSTAIN      UINT64_MAX // end of a sustained voice
 #define TONE_VIRTUAL_STEP 800        // 48 kHz / 60 fps, for clock-less runs
+#define TONE_SAMPLE_MAX   (64 * 1024) // per-channel PCM cap (host-side copy)
+#define TONE_SAMPLE_MAX_RATE 96000
+#define TONE_SAMPLE_AMP   256.0f      // full-scale 8-bit -> s16 mix domain
+
+// voice kinds
+enum { KIND_SQUARE = 0, KIND_NOISE = 1, KIND_SAMPLE = 2 };
 
 typedef struct {
-    _Atomic uint8_t  kind;       // 0 square, 1 noise
+    _Atomic uint8_t  kind;       // KIND_*
     _Atomic uint32_t half;       // samples per half-period / LFSR step
     _Atomic uint32_t decay_len;  // envelope length in frames, 0 = flat
     _Atomic uint64_t start;      // absolute frame of onset (event version)
     _Atomic uint64_t end;        // absolute frame of stop; TONE_SUSTAIN = never
+    // sample payload (KIND_SAMPLE): points into the channel's static PCM
+    // scratch, which is never freed or moved, so the pointer is stable.
+    _Atomic uintptr_t sm_data;
+    _Atomic uint32_t  sm_len;    // bytes
+    _Atomic uint32_t  sm_loop;   // tail loop in bytes; 0 = one-shot
+    _Atomic uint32_t  sm_rate;   // playback Hz
 } VoiceEvent;
 
 typedef struct {
@@ -654,10 +666,19 @@ typedef struct {
     uint8_t  kind;       // snapshot of ev.kind for the running voice
     uint32_t half;       // snapshot of ev.half
     uint64_t end;        // snapshot of ev.end
-    uint32_t phase;      // position within current half-period / LFSR interval
+    float    ph;         // half-period position [0..1); rewritten by pitch()
+                         // seamlessly because it is an accumulator, not a
+                         // sample counter
+    int      sign;       // square polarity
     uint16_t lfsr;       // 16-bit noise state
     float    env;        // envelope amplitude
     float    step;       // per-sample multiplier
+    // sample runtime
+    const int8_t* sm_data; // borrowed from the channel scratch
+    uint32_t      sm_len;
+    uint32_t      sm_loop;
+    float         sm_rate; // playback Hz (retunable via pitch())
+    float         sm_pos;  // fractional byte position in data[]
 } MixVoice;
 
 static MixVoice g_mix[VEX_TONE_CHANNELS];
@@ -665,6 +686,14 @@ static _Atomic uint64_t g_seq;                // seqlock: odd while publishing
 static _Atomic int      g_vol[VEX_TONE_CHANNELS]; // attenuation 0..VOL_MAX, 0 = unity
 #define VOL_MAX 64 // tracker-native vol() range top; VOL_MAX == unity
 static _Atomic uint64_t g_apos;               // frames produced by the mixer
+// pitch() hands new divisors/rates to the mixer through these slots; the
+// callback consumes them atomically and resets them to zero. Applied without
+// touching the running phase, so retunes are seamless.
+static _Atomic uint32_t g_new_half[4];
+static _Atomic uint32_t g_new_rate[4];
+// Static PCM scratch: allocated once up front, never freed or moved while a
+// voice may reference it, so the seqlock-published pointers stay valid.
+static int8_t g_sample_buf[VEX_TONE_CHANNELS][TONE_SAMPLE_MAX];
 static AudioStream g_stream;
 static bool        g_stream_ready;
 static bool        g_audio_ready;
@@ -728,6 +757,10 @@ static void publish_event(int ch, const VoiceEvent* ev) {
     atomic_store_explicit(&g_mix[ch].ev.decay_len, ev->decay_len, memory_order_relaxed);
     atomic_store_explicit(&g_mix[ch].ev.start,     ev->start,     memory_order_relaxed);
     atomic_store_explicit(&g_mix[ch].ev.end,       ev->end,       memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.sm_data,   ev->sm_data,   memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.sm_len,    ev->sm_len,    memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.sm_loop,   ev->sm_loop,   memory_order_relaxed);
+    atomic_store_explicit(&g_mix[ch].ev.sm_rate,   ev->sm_rate,   memory_order_relaxed);
 
     atomic_store_explicit(&g_seq, s + 2, memory_order_release); // even: stable
 }
@@ -735,6 +768,9 @@ static void publish_event(int ch, const VoiceEvent* ev) {
 // schedule is the shared body of tone() and noise(): clamp arguments and
 // publish an event. Runs on the cart thread.
 static void schedule_voice(int ch_in, bool is_noise, int32_t freq, int32_t ms) {
+    ensure_audio_stream();
+    if (!g_audio_ready) return;
+
     if (!g_audio_ready) return;
 
     int ch = ch_in < 0 ? 0 : ch_in;
@@ -753,7 +789,7 @@ static void schedule_voice(int ch_in, bool is_noise, int32_t freq, int32_t ms) {
         return;
     }
 
-    ev.kind = is_noise ? 1 : 0;
+    ev.kind = is_noise ? KIND_NOISE : KIND_SQUARE;
     if (freq > 20000) freq = 20000;
     int rate = tone_device_rate();
     ev.half = (uint32_t)(rate / (2 * freq));
@@ -787,6 +823,97 @@ m3ApiRawFunction(host_noise) {
     m3ApiGetArg(int32_t, freq)
     m3ApiGetArg(int32_t, ms)
     schedule_voice(channel, true, freq, ms);
+    m3ApiSuccess();
+}
+
+// pitch(channel, freq): retune the sounding voice without restarting it.
+// The new divisor/rate is handed to the mixer through an atomic slot; it is
+// applied at the next callback run WITHOUT touching the running phase,
+// envelope, volume, or end time. No-op on silent channels (the mixer only
+// consumes slots for live voices). Clamps match tone().
+m3ApiRawFunction(host_pitch) {
+    m3ApiGetArg(int32_t, channel)
+    m3ApiGetArg(int32_t, freq)
+    if (!g_audio_ready) m3ApiSuccess();
+
+    int ch = channel < 0 ? 0 : channel;
+    if (ch >= VEX_TONE_CHANNELS) ch = VEX_TONE_CHANNELS - 1;
+    if (freq < 1) freq = 1;
+
+    // Square/noise top out at tone's 20 kHz; samples may go to their own
+    // max rate so pitching above a high-rate sample stays reachable. The
+    // mixer applies whichever slot matches the live voice kind.
+    int32_t sq_freq = freq > 20000 ? 20000 : freq;
+    int32_t sm_freq = freq > TONE_SAMPLE_MAX_RATE ? TONE_SAMPLE_MAX_RATE : freq;
+
+    atomic_store_explicit(&g_new_half[ch],
+                          (uint32_t)(tone_device_rate() / (2 * sq_freq)),
+                          memory_order_relaxed);
+    atomic_store_explicit(&g_new_rate[ch], (uint32_t)sm_freq,
+                          memory_order_relaxed);
+    m3ApiSuccess();
+}
+
+// sample(channel, ptr, len, rate, loop_len): trigger 8-bit signed PCM from
+// cart linear memory. Bytes are copied out at trigger time into the
+// channel's static scratch, so later edits to linear memory do not affect
+// the playing voice. loop_len > 0 tail-loops the final loop_len bytes
+// indefinitely; 0 plays once. rate clamps to 1..96000, len to TONE_SAMPLE_MAX.
+m3ApiRawFunction(host_sample) {
+    m3ApiGetArg(int32_t, channel)
+    m3ApiGetArg(int32_t, ptr)
+    m3ApiGetArg(int32_t, len)
+    m3ApiGetArg(int32_t, rate)
+    m3ApiGetArg(int32_t, loop_len)
+    if (!g_audio_ready) m3ApiSuccess();
+
+    ensure_audio_stream();
+
+    int ch = channel < 0 ? 0 : channel;
+    if (ch >= VEX_TONE_CHANNELS) ch = VEX_TONE_CHANNELS - 1;
+
+    uint32_t n = len < 0 ? 0 : (uint32_t)len;
+    if (n > TONE_SAMPLE_MAX) n = TONE_SAMPLE_MAX;
+
+    // Copy out of linear memory, truncating at its end like hostile blit().
+    uint8_t* mem = (uint8_t*)_mem;
+    uint32_t mem_size = m3_GetMemorySize(runtime);
+    if ((uint32_t)ptr >= mem_size) {
+        n = 0;
+    } else if ((uint32_t)ptr + n > mem_size) {
+        n = mem_size - (uint32_t)ptr;
+    }
+    if (n > 0) memcpy(g_sample_buf[ch], mem + ptr, n);
+
+    // Nothing playable: silence the channel.
+    if (n == 0) {
+        VoiceEvent ev = {0};
+        ev.start = atomic_load_explicit(&g_apos, memory_order_relaxed);
+        ev.end = ev.start;
+        publish_event(ch, &ev);
+        m3ApiSuccess();
+    }
+
+    if (rate < 1) rate = 1;
+    if (rate > TONE_SAMPLE_MAX_RATE) rate = TONE_SAMPLE_MAX_RATE;
+    int32_t loop = loop_len < 0 ? 0 : loop_len;
+    if (loop > (int32_t)n) loop = (int32_t)n;
+
+    uint64_t now = atomic_load_explicit(&g_apos, memory_order_relaxed);
+    VoiceEvent ev = {0};
+    ev.kind = KIND_SAMPLE;
+    ev.start = now;
+    ev.sm_data = (uintptr_t)g_sample_buf[ch];
+    ev.sm_len = n;
+    ev.sm_loop = (uint32_t)loop;
+    ev.sm_rate = (uint32_t)rate;
+    if (loop > 0) {
+        ev.end = TONE_SUSTAIN;
+    } else {
+        uint64_t frames = (uint64_t)((double)n * tone_device_rate() / (double)rate);
+        ev.end = now + (frames < 1 ? 1 : frames);
+    }
+    publish_event(ch, &ev);
     m3ApiSuccess();
 }
 
@@ -824,11 +951,24 @@ m3ApiRawFunction(host_apos) {
     m3ApiReturn((int32_t)(uint32_t)pos);
 }
 
-// mix_callback runs on the audio thread: pull the latest events, then render
-// `frames` interleaved stereo f32 samples as the sum of all active voices,
-// soft-clipped at the 16-bit range like the Go host's mixer.
+// mix_callback runs on the audio thread: pull the latest events and pitch
+// slots, then render `frames` interleaved stereo f32 samples as the sum of
+// all active voices, soft-clipped at the 16-bit range like the Go mixer.
 static void mix_callback(void* buffer, unsigned int frames) {
     float* out = buffer;
+
+    // Consume pending pitch() retunes: applied live, without touching the
+    // running phase/envelope -- that seamlessness is the whole point.
+    for (int c = 0; c < VEX_TONE_CHANNELS; c++) {
+        MixVoice* v = &g_mix[c];
+        if (!v->seen) continue; // stale slot on a silent channel: drop it
+        uint32_t nh = atomic_exchange_explicit(&g_new_half[c], 0,
+                                               memory_order_relaxed);
+        if (nh > 0 && v->kind != KIND_SAMPLE) v->half = nh;
+        uint32_t nr = atomic_exchange_explicit(&g_new_rate[c], 0,
+                                               memory_order_relaxed);
+        if (nr > 0 && v->kind == KIND_SAMPLE) v->sm_rate = (float)nr;
+    }
 
     // Poll every channel's event slot; a changed start marks a new event.
     for (int c = 0; c < VEX_TONE_CHANNELS; c++) {
@@ -842,6 +982,10 @@ static void mix_callback(void* buffer, unsigned int frames) {
         ev.decay_len = atomic_load_explicit(&v->ev.decay_len, memory_order_relaxed);
         ev.start     = atomic_load_explicit(&v->ev.start,     memory_order_relaxed);
         ev.end       = atomic_load_explicit(&v->ev.end,       memory_order_acquire);
+        ev.sm_data   = atomic_load_explicit(&v->ev.sm_data,   memory_order_relaxed);
+        ev.sm_len    = atomic_load_explicit(&v->ev.sm_len,    memory_order_relaxed);
+        ev.sm_loop   = atomic_load_explicit(&v->ev.sm_loop,   memory_order_relaxed);
+        ev.sm_rate   = atomic_load_explicit(&v->ev.sm_rate,   memory_order_relaxed);
 
         if (atomic_load_explicit(&g_seq, memory_order_acquire) != seq) continue;
 
@@ -851,12 +995,18 @@ static void mix_callback(void* buffer, unsigned int frames) {
             v->kind = ev.kind;
             v->half = ev.half < 1 ? 1 : ev.half;
             v->end = ev.end;
-            v->phase = 0;
+            v->ph = 0.0f;
+            v->sign = 1;
             v->lfsr = 0xACE1;
             v->env = 1.0f;
             v->step = ev.decay_len > 0
                 ? expf(-5.545f / (float)ev.decay_len) // ~1/256 at the end
                 : 1.0f;
+            v->sm_data = (const int8_t*)(uintptr_t)ev.sm_data;
+            v->sm_len = ev.sm_len;
+            v->sm_loop = ev.sm_loop;
+            v->sm_rate = (float)ev.sm_rate;
+            v->sm_pos = 0.0f;
         }
     }
 
@@ -872,35 +1022,63 @@ static void mix_callback(void* buffer, unsigned int frames) {
                              &g_vol[c], memory_order_relaxed)) /
                          (float)VOL_MAX;
             if (gain <= 0.0f) {
-                v->env *= v->step;
-                v->phase++;
+                v->ph += 1.0f / (float)v->half;
+                if (v->ph >= 1.0f) v->ph -= 1.0f;
                 continue;
             }
 
             float s;
-            if (v->kind == 1) {
-                if (v->phase >= v->half) {
-                    v->phase = 0;
+            switch (v->kind) {
+            case KIND_SAMPLE: {
+                // Linear interpolation between neighboring bytes.
+                uint32_t i0 = (uint32_t)v->sm_pos;
+                if (i0 >= v->sm_len) i0 = v->sm_len - 1;
+                uint32_t i1 = i0 + 1 < v->sm_len ? i0 + 1 : v->sm_len - 1;
+                float frac = v->sm_pos - (float)(uint32_t)v->sm_pos;
+                float a = (float)v->sm_data[i0];
+                float b = (float)v->sm_data[i1];
+                s = (a + (b - a) * frac) * TONE_SAMPLE_AMP;
+                v->sm_pos += v->sm_rate / (float)tone_device_rate();
+                if (v->sm_pos >= (float)v->sm_len) {
+                    if (v->sm_loop > 0) {
+                        float wrap = (float)(v->sm_len - v->sm_loop);
+                        v->sm_pos = wrap + fmodf(v->sm_pos - (float)v->sm_len,
+                                                 (float)v->sm_loop);
+                    } else {
+                        v->sm_pos = (float)(v->sm_len - 1); // clamp until retired
+                    }
+                }
+                break;
+            }
+            case KIND_NOISE:
+                if (v->ph >= 1.0f) {
+                    v->ph -= 1.0f;
                     // XNOR feedback over taps 15/13 (Game Boy-style noise)
                     uint16_t fb = (uint16_t)(1u - (((v->lfsr >> 15)
                                                    ^ (v->lfsr >> 13)) & 1));
                     v->lfsr = (uint16_t)(v->lfsr << 1 | fb);
                 }
                 s = (v->lfsr & 1) ? 8000.0f : -8000.0f;
-            } else {
-                if ((v->phase / v->half) & 1) s = -8000.0f; else s = 8000.0f;
+                v->ph += 1.0f / (float)v->half;
+                break;
+            default:
+                s = (v->sign < 0) ? -8000.0f : 8000.0f;
+                v->ph += 1.0f / (float)v->half;
+                if (v->ph >= 1.0f) {
+                    v->ph -= 1.0f;
+                    v->sign = -v->sign;
+                }
+                break;
             }
 
             // Mix in the s16 domain so the soft-clip constants match the
             // Go host's exactly; normalize once at the write below.
             acc += s * v->env * gain;
             v->env *= v->step;
-            v->phase++;
         }
         pos++;
 
-        // Soft clip the sum into the 16-bit range (linear below the knee),
-        // matching the Go host's clipKnee/top constants.
+        // Soft clip the sum into the 16-bit range (linear below the knee).
         const float knee = 24000.0f, top = 32767.0f;
         if (acc > knee) {
             acc = knee + (top - knee) * tanhf((acc - knee) / (top - knee));
@@ -949,6 +1127,8 @@ static M3Result link_host(IM3Module mod) {
     LINK("noise",    "v(iii)",   &host_noise);
     LINK("vol",      "v(ii)",    &host_vol);
     LINK("apos",     "i()",      &host_apos);
+    LINK("pitch",    "v(ii)",    &host_pitch);
+    LINK("sample",   "v(iiiii)", &host_sample);
     #undef LINK
     return first_err;
 }
