@@ -14,6 +14,8 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <math.h>
+#include <pthread.h>
 
 #include "raylib.h"
 #include "rlgl.h"
@@ -554,11 +556,11 @@ m3ApiRawFunction(host_btn) {
 m3ApiRawFunction(host_btnp) {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, button)
-    int held = g_window_open && button >= 0 && button < 6
-        ? IsKeyDown(VEX_KEYS[button]) : 0;
     // Clamp before the shift: hostile carts probe out-of-range buttons and
     // a negative shift is undefined behavior (crashes under Zig's cc).
     int prev = button >= 0 && button < 8 ? (g_prev_btns >> button) & 1 : 0;
+    int held = g_window_open && button >= 0 && button < 6
+        ? IsKeyDown(VEX_KEYS[button]) : 0;
     m3ApiReturn(held && !prev);
 }
 
@@ -610,112 +612,284 @@ m3ApiRawFunction(host_palreset) {
     m3ApiSuccess();
 }
 
-// ---- audio (beep) ---------------------------------------------------------
-// One persistent Sound whose buffer is rewritten per call. Each beep()
-// overwrites the Sound's f32-stereo buffer with a fresh ~100ms square wave at
-// the requested frequency and restarts playback, so a beep() arriving while a
-// previous blip is still playing cuts it off and starts a new one. The Sound
-// is created lazily on the first call (so headless runs that never beep()
-// don't touch the audio device) and unloaded on shutdown.
+// ---- audio (tone) ----------------------------------------------------------
+// Four-voice software mixer behind a single tone(freq, duration, volume,
+// flags) import. Time is measured in frames (1/60 s): carts pass packed
+// ADSR durations and the console schedules the envelopes itself, so there
+// is no audio clock for carts to query -- the console tick IS the clock.
 //
-// The previous design used an 8-Sound pool where each beep() produced a fresh
-// Sound and stacked them: a cart calling beep() in a tight loop piled up to
-// 8 overlapping copies of the same blip (8x amplitude) and silently dropped
-// the 9th. Go and JS already use the monophonic retrigger model, and that is
-// also what PICO-8-style beeps mean in practice, so the C host now matches.
-static Sound g_beep = {0};
-static bool g_beep_loaded = false;
-static float* g_beep_buf = NULL;
-static int g_beep_frames = 0;
-static int g_beep_rate = 0;
-static bool g_audio_ready = false;
+// The mixer renders into an AudioStream callback at the device rate. Each
+// voice walks a linear envelope through attack/decay/sustain/release, with
+// zero-length segments skipped instantly; pulse duty cycle, triangle, and
+// a 15-bit LFSR noise cover the waveforms, and a frequency slide rides the
+// sustain segment.
+//
+// tone() runs on the wasm thread while mixing happens on the audio thread:
+// triggers are parked in pending slots under a mutex and applied at the
+// next callback run, which quantizes starts to at most one buffer (~10 ms)
+// -- the same seam every host exposes.
 
-static void beep_cleanup(void) {
-    if (g_beep_loaded) {
-        UnloadSound(g_beep);
-        g_beep = (Sound){0};
-        g_beep_loaded = false;
+#define VEX_TONE_CHANNELS 4
+
+typedef struct {
+    int   kind;         // 0 pulse, 1 noise, 2 triangle
+    float duty;         // pulse flip point within the period (0..1)
+    float freq;         // current frequency in Hz
+    float freq_to;      // slide target Hz (0 = no slide)
+    float freq_start;   // frequency at slide start
+    float freq_step;    // per-sample slide delta (0 = no slide)
+    float ph;           // phase accumulator, 0..1
+    float nph;          // noise step accumulator
+    uint16_t lfsr;
+
+    int      seg;       // 0 attack, 1 decay, 2 sustain, 3 release, 4 idle
+    long     seg_left;  // samples remaining in the current segment
+    float    level;     // envelope level 0..1
+    float    slope;     // level change per sample in this segment
+    long     seg_len[4];    // segment lengths in samples
+    float    seg_end[4];    // level each segment ramps toward
+
+    float    gl, gr;    // constant-power pan gains
+} ToneVoice;
+
+static ToneVoice g_voice[VEX_TONE_CHANNELS];
+static AudioStream g_stream;
+static bool g_audio_ready = false;
+static bool g_stream_ready = false;
+
+// Trigger parsed by tone() on the wasm thread, applied by the mixer.
+typedef struct {
+    int   kind;
+    float duty;
+    float f0, f1;
+    int   frames[4];    // attack, decay, sustain, release
+    float peak, sus;
+    float gl, gr;
+} ToneTrigger;
+
+static pthread_mutex_t g_tone_lock = PTHREAD_MUTEX_INITIALIZER;
+static ToneTrigger g_pending[VEX_TONE_CHANNELS];
+static bool g_pending_set[VEX_TONE_CHANNELS];
+
+// Full-scale single-voice amplitude: matches main's beep (8000/32768) so
+// loudness stays comparable across hosts.
+#define TONE_BASE_AMP (8000.0f / 32768.0f)
+
+static void tone_cleanup(void) {
+    if (g_stream_ready) {
+        UnloadAudioStream(g_stream);
+        g_stream_ready = false;
     }
-    RL_FREE(g_beep_buf);
-    g_beep_buf = NULL;
-    g_beep_frames = 0;
-    g_beep_rate = 0;
     if (g_audio_ready) {
         g_audio_ready = false;
         CloseAudioDevice();
     }
 }
 
-// beep(freq): play a ~100ms square-wave blip at freq Hz, monophonic.
-// The C host used to allocate a fresh Sound per call from a small s16 mono
-// buffer; it now writes directly into a f32 stereo buffer at the device's
-// native rate and uses UpdateSound() to swap it into the persistent Sound.
-// That keeps the wave generation in float math (matching the device format)
-// while avoiding the per-call AudioBuffer allocation that LoadSoundFromWave
-// would otherwise do, and lets PlaySound()'s built-in restart-from-frame-0
-// handle the retrigger for free.
-m3ApiRawFunction(host_beep) {
+// Advance into the next non-empty envelope segment, skipping zero-length
+// ones by snapping to their end level. Enters idle when release finishes.
+static void voice_next_segment(ToneVoice* v) {
+    for (;;) {
+        v->seg++;
+        if (v->seg > 3) {
+            v->seg = 4;
+            v->level = 0.0f;
+            return;
+        }
+        long n = v->seg_len[v->seg];
+        if (n <= 0) {
+            v->level = v->seg_end[v->seg];
+            continue;
+        }
+        v->seg_left = n;
+        v->slope = (v->seg_end[v->seg] - v->level) / (float)n;
+        return;
+    }
+}
+// Apply a parsed trigger to a voice: reset the oscillator, lay out the
+// four envelope segments in samples at the stream rate, and enter the
+// first non-empty one.
+static void voice_apply(ToneVoice* v, const ToneTrigger* t) {
+    const float spf = (float)g_stream.sampleRate / 60.0f; // samples per frame
+
+    v->kind = t->kind;
+    v->duty = t->duty;
+    v->freq_start = t->f0;
+    v->freq_to = t->f1;
+    v->freq = t->f0;
+    v->freq_step = 0.0f;
+    v->ph = 0.0f;
+    v->nph = 0.0f;
+    v->lfsr = 0xACE1;
+    v->gl = t->gl;
+    v->gr = t->gr;
+
+    // Segment order: attack, decay, sustain, release. Sustain holds its end
+    // level (slope 0) and carries any frequency slide.
+    const int frames[4] = { t->frames[0], t->frames[1], t->frames[2], t->frames[3] };
+    const float ends[4] = { t->peak, t->sus, t->sus, 0.0f };
+    long total = 0;
+    for (int i = 0; i < 4; i++) {
+        v->seg_len[i] = frames[i] > 0 ? (long)((float)frames[i] * spf + 0.5f) : 0;
+        v->seg_end[i] = ends[i];
+        total += v->seg_len[i];
+    }
+    if (total <= 0) {
+        // The kill idiom: every segment empty silences the channel now.
+        v->seg = 4;
+        v->level = 0.0f;
+        return;
+    }
+
+    v->seg = -1;
+    v->level = 0.0f;
+    voice_next_segment(v);
+}
+
+static void mix_callback(void* buffer, unsigned int frames) {
+    float* out = buffer;
+
+    // Apply triggers parked by tone() since the last callback run.
+    pthread_mutex_lock(&g_tone_lock);
+    for (int ch = 0; ch < VEX_TONE_CHANNELS; ch++) {
+        if (!g_pending_set[ch]) continue;
+        g_pending_set[ch] = false;
+        voice_apply(&g_voice[ch], &g_pending[ch]);
+    }
+    pthread_mutex_unlock(&g_tone_lock);
+
+    const float rate = (float)g_stream.sampleRate;
+    for (unsigned int pos = 0; pos < frames; pos++) {
+        float l = 0.0f, r = 0.0f;
+
+        for (int ch = 0; ch < VEX_TONE_CHANNELS; ch++) {
+            ToneVoice* v = &g_voice[ch];
+            if (v->seg > 3) continue; // idle
+
+            // Oscillator value in -1..1.
+            float s;
+            switch (v->kind) {
+            case 1: // noise: 15-bit LFSR stepped at 2*freq Hz
+                v->nph += 2.0f * v->freq / rate;
+                while (v->nph >= 1.0f) {
+                    v->nph -= 1.0f;
+                    uint16_t fb = (uint16_t)(1u - (((v->lfsr >> 15)
+                                                   ^ (v->lfsr >> 13)) & 1));
+                    v->lfsr = (uint16_t)(v->lfsr << 1 | fb);
+                }
+                s = (v->lfsr & 1) ? 1.0f : -1.0f;
+                break;
+            case 2: // triangle
+                s = v->ph < 0.25f ? v->ph * 4.0f
+                  : v->ph < 0.75f ? 2.0f - v->ph * 4.0f
+                                  : v->ph * 4.0f - 4.0f;
+                break;
+            default: // pulse with duty cycle
+                s = v->ph < v->duty ? 1.0f : -1.0f;
+                break;
+            }
+
+            l += s * TONE_BASE_AMP * v->level * v->gl;
+            r += s * TONE_BASE_AMP * v->level * v->gr;
+
+            // Envelope advances after the sample that used this level.
+            if (v->seg_left > 0) v->seg_left--;
+            if (v->seg_left <= 0) {
+                v->level = v->seg_end[v->seg];
+                voice_next_segment(v);
+            } else {
+                v->level += v->slope;
+                if (v->seg == 2 && v->freq_step != 0.0f) {
+                    v->freq += v->freq_step;
+                }
+            }
+
+            v->ph += v->freq / rate;
+            if (v->ph >= 1.0f) v->ph -= floorf(v->ph);
+        }
+
+        // Soft clip each channel into the 16-bit range (linear below the
+        // knee) so stacked voices distort musically instead of wrapping.
+        const float knee = 24000.0f, top = 32767.0f;
+        if (l > knee)  l = knee + (top - knee) * tanhf((l - knee) / (top - knee));
+        if (l < -knee) l = -knee + (-top + knee) * tanhf((l + knee) / (top - knee));
+        if (r > knee)  r = knee + (top - knee) * tanhf((r - knee) / (top - knee));
+        if (r < -knee) r = -knee + (-top + knee) * tanhf((r + knee) / (top - knee));
+
+        out[pos * 2] = l / 32768.0f;
+        out[pos * 2 + 1] = r / 32768.0f;
+    }
+}
+
+// The stream is created lazily on the first tone() so silent carts never
+// touch the audio device.
+static void ensure_stream(void) {
+    if (g_stream_ready || !g_audio_ready) return;
+    g_stream = LoadAudioStream(48000, 32, 2);
+    SetAudioStreamCallback(g_stream, mix_callback);
+    PlayAudioStream(g_stream);
+    g_stream_ready = true;
+}
+
+// tone(freq, duration, volume, flags): trigger a voice. See vex.h for the
+// packed argument layouts; all fields are clamped defensively here too.
+m3ApiRawFunction(host_tone) {
     m3ApiGetArg(int32_t, freq)
+    m3ApiGetArg(int32_t, duration)
+    m3ApiGetArg(int32_t, volume)
+    m3ApiGetArg(int32_t, flags)
     if (!g_audio_ready) m3ApiSuccess();
+    ensure_stream();
 
-    if (!g_beep_loaded) {
-        // Load a 1-frame placeholder to discover the device sample rate
-        // (raylib doesn't expose a public getter). Any rate we pass to
-        // LoadSoundFromWave is resampled to the device rate, so the
-        // placeholder's rate is irrelevant.
-        float ph[2] = {0.0f, 0.0f};
-        Wave pw = {
-            .frameCount = 1,
-            .sampleRate = 44100,
-            .sampleSize = 32,
-            .channels = 2,
-            .data = ph,
-        };
-        Sound ps = LoadSoundFromWave(pw);
-        g_beep_rate = (int)ps.stream.sampleRate;
-        UnloadSound(ps);
-        if (g_beep_rate <= 0) g_beep_rate = 44100;
+    static const float duty_table[4] = {0.5f, 0.25f, 0.125f, 0.75f};
+    static const float pan_l[3] = {0.70710678f, 1.0f, 0.0f};
+    static const float pan_r[3] = {0.70710678f, 0.0f, 1.0f};
 
-        g_beep_frames = g_beep_rate / 10; // 100ms
-        g_beep_buf = RL_MALLOC((size_t)g_beep_frames * 2 * sizeof(float));
-        if (!g_beep_buf) m3ApiSuccess();
-        for (int i = 0; i < g_beep_frames * 2; i++) g_beep_buf[i] = 0.0f;
+    const int ch = flags & 3;
+    const int mode = (flags >> 2) & 3;
+    int pan = (flags >> 4) & 3;
+    if (pan > 2) pan = 0;
+    int wave = (flags >> 6) & 3;
+    if (wave == 3) wave = 0;
 
-        Wave wave = {
-            .frameCount = (unsigned int)g_beep_frames,
-            .sampleRate = (unsigned int)g_beep_rate,
-            .sampleSize = 32,
-            .channels = 2,
-            .data = g_beep_buf,
-        };
-        g_beep = LoadSoundFromWave(wave);
-        g_beep_loaded = true;
+    float f0, f1 = 0.0f;
+    if ((flags >> 8) & 1) { // note mode: MIDI note number
+        f0 = 440.0f * powf(2.0f, ((float)freq - 69.0f) / 12.0f);
+    } else {
+        f0 = (float)(freq & 0xFFFF);
+        f1 = (float)((freq >> 16) & 0xFFFF);
+        if (f0 < 1.0f) f0 = 1.0f;
     }
+    if (f0 > 20000.0f) f0 = 20000.0f;
+    if (f1 > 0.0f && f1 < 1.0f) f1 = 0.0f; // degenerate slide target: none
+    if (f1 > 20000.0f) f1 = 20000.0f;
 
-    if (freq < 1) freq = 1;
-    if (freq > 20000) freq = 20000;
+    const int sus = duration & 0xFF;
+    const int rel = (duration >> 8) & 0xFF;
+    const int dec = (duration >> 16) & 0xFF;
+    const int att = (duration >> 24) & 0xFF;
 
-    // Square wave at the device rate, ±8000/32768 ≈ ±0.24 of full scale to
-    // match the Go host's s16 peak (8000) and the JS host's 8000/32768 gain.
-    // Phase starts at sign=+1 on sample 0 and toggles every `half` samples,
-    // so a retrigger after a different frequency restarts the new blip at a
-    // known phase instead of clicking mid-half-period.
-    const float amp = 8000.0f / 32768.0f;
-    const int half = g_beep_rate / (2 * freq); // samples per square half-period
-    int sign = 1;
-    for (int i = 0; i < g_beep_frames; i++) {
-        if (half > 0 && i > 0 && i % half == 0) sign = -sign;
-        float s = (float)sign * amp;
-        g_beep_buf[i * 2] = s;
-        g_beep_buf[i * 2 + 1] = s;
-    }
+    int vs = volume & 0xFF;
+    if (vs > 100) vs = 100;
+    int vp = (volume >> 8) & 0xFF;
+    if (vp == 0 || vp > 100) vp = 100; // unset peak defaults to full
 
-    // UpdateSound() stops the buffer and memcpys our f32 stereo data in place
-    // (the Sound's internal buffer is f32 stereo at the device rate, same as
-    // g_beep_buf, so the copy is a straight byte-for-byte overwrite). The
-    // following PlaySound() then restarts from frame 0, which is the retrigger.
-    UpdateSound(g_beep, g_beep_buf, g_beep_frames);
-    PlaySound(g_beep);
+    const ToneTrigger t = {
+        .kind = wave,
+        .duty = duty_table[mode],
+        .f0 = f0,
+        .f1 = f1,
+        .frames = { att, dec, sus, rel },
+        .peak = vp / 100.0f,
+        .sus = vs / 100.0f,
+        .gl = pan_l[pan],
+        .gr = pan_r[pan],
+    };
+
+    pthread_mutex_lock(&g_tone_lock);
+    g_pending[ch] = t;
+    g_pending_set[ch] = true;
+    pthread_mutex_unlock(&g_tone_lock);
     m3ApiSuccess();
 }
 
@@ -749,7 +923,7 @@ static M3Result link_host(IM3Module mod) {
     LINK("mbtn",     "i(i)",     &host_mbtn);
     LINK("pal",      "v(ii)",    &host_pal);
     LINK("palreset", "v()",      &host_palreset);
-    LINK("beep",     "v(i)",     &host_beep);
+    LINK("tone",     "v(iiii)",  &host_tone);
     #undef LINK
     return first_err;
 }
@@ -767,7 +941,7 @@ static void die(IM3Runtime rt, const char* what, M3Result err) {
     // before InitWindow() (e.g. from a wasm load error in main).
     if (g_window_open) {
         g_window_open = false;
-        beep_cleanup();
+        tone_cleanup();
         CloseWindow();
     }
     exit(1);
@@ -1211,7 +1385,7 @@ int main(int argc, char** argv) {
 
     UnloadTexture(screen);
     g_window_open = false;
-    beep_cleanup();
+    tone_cleanup();
     CloseWindow();
     m3_FreeRuntime(cart.rt);
     m3_FreeEnvironment(env);
