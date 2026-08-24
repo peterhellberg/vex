@@ -14,8 +14,8 @@
             .lazy = true,
         },
         .wasm3 = .{
-            .url = "https://github.com/wasm3/wasm3/archive/refs/tags/v0.5.0.tar.gz",
-            .hash = "N-V-__8AAPJTRwDyyZ7xBJrI5d3EG3JfvAPjPvNcdHLp0zqS",
+            .url = "https://github.com/wasm3/wasm3/archive/40e42cc0f33b24f1db3c632d82cec14084a3a83d.tar.gz",
+            .hash = "N-V-__8AADGXogAx5kod9u1wJK-7rknsGRVPiB448QWUVOjU",
             .lazy = true,
         },
         .xcode_frameworks = .{

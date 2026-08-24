@@ -187,7 +187,8 @@ static void reset_palette(void) {
 // Copy a bounded, NUL-terminated string out of a cart's linear memory.
 static void cart_cstr(IM3Runtime rt, const void *mem, const char *s, char *buf,
                       int size) {
-  uintptr_t end = (uintptr_t)mem + m3_GetMemorySize(rt);
+  (void)rt;
+  uintptr_t end = (uintptr_t)mem + m3_GetMemorySizeAt(mem);
   int n = 0;
   while (n < size - 1 && (uintptr_t)(s + n) < end && s[n]) {
     buf[n] = s[n];
@@ -1071,6 +1072,7 @@ static uint8_t *read_file(const char *path, size_t *out_len) {
 // references for the runtime's lifetime (so they must outlive it).
 typedef struct {
   IM3Runtime rt;
+  IM3Module mod;
   IM3Function f_boot; // optional, may be NULL
   IM3Function f_update;
   uint8_t *wasm;
@@ -1171,7 +1173,7 @@ static bool load_cart(IM3Environment env, const char *path, Cart *out) {
     return false;
   }
 
-  *out = (Cart){.rt = rt, .f_boot = f_boot, .f_update = f_update, .wasm = wasm};
+  *out = (Cart){.rt = rt, .mod = mod, .f_boot = f_boot, .f_update = f_update, .wasm = wasm};
   return true;
 }
 
@@ -1361,9 +1363,9 @@ int main(int argc, char **argv) {
 
     printf("cart=%s frames=%ld total-ms=%.2f ms/frame=%.3f\n", cart_path,
            frames, ms, frames > 0 ? ms / (double)frames : ms);
-    printf("fb-changes=%ld fnv1a64=%016llx mem=%u\n", changes,
+    printf("fb-changes=%ld fnv1a64=%016llx mem=%zu\n", changes,
            (unsigned long long)fnv1a64(g_fb, sizeof g_fb),
-           (unsigned)m3_GetMemorySize(cart.rt));
+           m3_GetMemorySize(cart.mod, 0));
     for (int i = 0; i < 16; i++)
       printf("palette[%X]=%02X%02X%02X\n", i, (unsigned)(g_palette[i] & 0xFF),
              (unsigned)((g_palette[i] >> 8) & 0xFF),
