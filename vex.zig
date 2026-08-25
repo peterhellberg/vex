@@ -157,8 +157,10 @@ pub const ToneDuration = struct {
     attack: i32 = 0,
 
     pub fn pack(d: ToneDuration) i32 {
-        return toneByte(d.sustain) | (toneByte(d.release) << 8) |
-            (toneByte(d.decay) << 16) | (toneByte(d.attack) << 24);
+        return toneByte(d.sustain) |
+            (toneByte(d.release) << 8) |
+            (toneByte(d.decay) << 16) |
+            (toneByte(d.attack) << 24);
     }
 };
 
@@ -169,14 +171,64 @@ pub const ToneVolume = struct {
     peak: i32 = 0,
 
     pub fn pack(v: ToneVolume) i32 {
-        return toneByte(v.level) | (toneByte(v.peak) << 8);
+        return toneByte(v.level) |
+            (toneByte(v.peak) << 8);
     }
 };
 
 /// Channel 0..3, duty mode, plus any TONE_* extras ORed together.
 pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
     return (channel & 3) | (mode & (3 << 2)) |
-        (extra & ~(3 | (3 << 2)));
+        (extra & ~@as(i32, 3 | (3 << 2)));
+}
+
+/// One-shot description of a note to play. Every field except `channel` and
+/// `freq` has a sensible default, so simple notes are one line:
+///
+/// ```zig
+/// try vex.Note{ .channel = 0, .freq = 262 }.play();
+/// ```
+pub const Note = struct {
+    channel: i32,
+    freq: i32,
+    sustain: i32 = 12,
+    release: i32 = 4,
+    decay: i32 = 0,
+    attack: i32 = 0,
+    volume: i32 = 100,
+    peak: i32 = 0,
+    mode: i32 = TONE_MODE0,
+    wave: i32 = TONE_PULSE,
+    pan: i32 = 0,
+    /// Extra `TONE_*` bits (e.g. `TONE_NOTE_MODE`), ORed into the flags.
+    extra: i32 = 0,
+
+    pub fn play(n: Note) void {
+        tone(
+            n.freq,
+            (ToneDuration{
+                .sustain = n.sustain,
+                .release = n.release,
+                .decay = n.decay,
+                .attack = n.attack,
+            }).pack(),
+            (ToneVolume{
+                .level = n.volume,
+                .peak = n.peak,
+            }).pack(),
+            toneFlags(
+                n.channel,
+                n.mode,
+                n.wave | n.pan | n.extra,
+            ),
+        );
+    }
+};
+
+/// Silence `channel` immediately: an all-zero duration ends whatever the
+/// voice is playing.
+pub fn silence(channel: i32) void {
+    tone(440, 0, 0, toneFlags(channel, 0, 0));
 }
 
 fn toneByte(v: i32) i32 {
