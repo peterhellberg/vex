@@ -66,6 +66,6 @@ VEX_EXPORT("update") void update(void) {
   tone(0, 0, 0, 0);
   tone(-42, -1, -1, -1);
   tone(100000, 0x7FFFFFFF, 0x7FFFFFFF, 0x7FFFFFFF);
-  tone(262 | (999999 << 16), 0, 0, TONE_FLAGS(9, 99, ~0));
+  tone(262 | (999999 << 16), 0, 0, VEX_TONE_FLAGS(9, 99, ~0));
   palreset();
 }

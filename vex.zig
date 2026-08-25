@@ -51,6 +51,29 @@ pub const MOUSE_RIGHT = 1;
 /// `mbtn()` index for the middle mouse button.
 pub const MOUSE_MIDDLE = 2;
 
+/// Number of independent mixer voices (`tone()` channels, `0..3`).
+pub const TONE_CHANNELS = 4;
+
+/// Waveform (bits 6..7); persists per channel until changed.
+pub const TONE_PULSE: i32 = 0;
+/// LFSR stepped at 2*freq Hz.
+pub const TONE_NOISE: i32 = 1 << 6;
+/// Triangle; softer, good for bass.
+pub const TONE_TRI: i32 = 2 << 6;
+
+/// Duty cycle for pulses (bits 2..3).
+pub const TONE_MODE0: i32 = 0; // 50%
+pub const TONE_MODE1: i32 = 1 << 2; // 25%
+pub const TONE_MODE2: i32 = 2 << 2; // 12.5%
+pub const TONE_MODE3: i32 = 3 << 2; // 75%
+
+/// Panning (bits 4..5); constant-power gains, center by default.
+pub const TONE_PAN_LEFT: i32 = 1 << 4;
+pub const TONE_PAN_RIGHT: i32 = 2 << 4;
+
+/// Interpret the frequency parameter as a MIDI note number.
+pub const TONE_NOTE_MODE: i32 = 1 << 8;
+
 /// Clear the whole screen to `color`.
 pub extern "env" fn cls(color: i32) void;
 /// Set the single pixel at (`x`, `y`) to `color`.
@@ -92,25 +115,6 @@ pub extern "env" fn mbtn(button: i32) i32;
 pub extern "env" fn pal(index: i32, rgb: i32) void;
 /// Restore the default SWEETIE-16 palette.
 pub extern "env" fn palreset() void;
-/// `true` while the button is held — shorthand for `btn(button) != 0`.
-pub fn down(button: i32) bool {
-    return btn(button) != 0;
-}
-
-/// `true` while the mouse button is held — shorthand for `mbtn(button) != 0`.
-pub fn mdown(button: i32) bool {
-    return mbtn(button) != 0;
-}
-
-/// `true` if the button was just pressed this frame — shorthand for `btnp(button) != 0`.
-pub fn pressed(button: i32) bool {
-    return btnp(button) != 0;
-}
-
-// ---- audio -----------------------------------------------------------------
-
-pub const TONE_CHANNELS = 4;
-
 /// Play a tone at `freq` Hz (clamps to 1..20000), or a MIDI note number with
 /// `TONE_NOTE_MODE` (middle C = 60). Build arguments with `toneSlide`,
 /// `ToneDuration`, `ToneVolume`, and `toneFlags` -- layouts:
@@ -121,29 +125,24 @@ pub const TONE_CHANNELS = 4;
 ///            bit 8 note mode
 pub extern "env" fn tone(freq: i32, duration: i32, volume: i32, flags: i32) void;
 
-/// Waveform (bits 6..7); persists per channel until changed.
-pub const TONE_PULSE: i32 = 0;
-/// LFSR stepped at 2*freq Hz.
-pub const TONE_NOISE: i32 = 1 << 6;
-/// Triangle; softer, good for bass.
-pub const TONE_TRI: i32 = 2 << 6;
+// ---- input -----------------------------------------------------------------
 
-/// Duty cycle for pulses (bits 2..3).
-pub const TONE_MODE0: i32 = 0; // 50%
-pub const TONE_MODE1: i32 = 1 << 2; // 25%
-pub const TONE_MODE2: i32 = 2 << 2; // 12.5%
-pub const TONE_MODE3: i32 = 3 << 2; // 75%
-
-/// Panning (bits 4..5); constant-power gains, center by default.
-pub const TONE_PAN_LEFT: i32 = 1 << 4;
-pub const TONE_PAN_RIGHT: i32 = 2 << 4;
-
-/// Interpret the frequency parameter as a MIDI note number.
-pub const TONE_NOTE_MODE: i32 = 1 << 8;
-
-fn toneByte(v: i32) i32 {
-    return if (v < 0) 0 else if (v > 255) 255 else v;
+/// `true` while the button is held
+pub fn down(button: i32) bool {
+    return btn(button) != 0;
 }
+
+/// `true` while the mouse button is held
+pub fn mdown(button: i32) bool {
+    return mbtn(button) != 0;
+}
+
+/// `true` if the button was just pressed this frame
+pub fn pressed(button: i32) bool {
+    return btnp(button) != 0;
+}
+
+// ---- audio -----------------------------------------------------------------
 
 /// Slide from `freq` to `to` over the sustain duration (linear in Hz).
 pub fn toneSlide(freq: i32, to: i32) i32 {
@@ -178,4 +177,8 @@ pub const ToneVolume = struct {
 pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
     return (channel & 3) | (mode & (3 << 2)) |
         (extra & ~(3 | (3 << 2)));
+}
+
+fn toneByte(v: i32) i32 {
+    return if (v < 0) 0 else if (v > 255) 255 else v;
 }

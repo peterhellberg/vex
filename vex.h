@@ -28,6 +28,27 @@
 #define VEX_MOUSE_RIGHT  1
 #define VEX_MOUSE_MIDDLE 2
 
+// Number of independent mixer voices (`tone()` channels, `0..3`).
+#define VEX_TONE_CHANNELS 4
+
+// Waveform (bits 6..7); persists per channel until changed.
+#define VEX_TONE_PULSE 0                 // default: pulse wave
+#define VEX_TONE_NOISE (1 << 6)          // LFSR stepped at 2*freq Hz
+#define VEX_TONE_TRI   (2 << 6)          // triangle; softer, good for bass
+
+// Duty cycle for pulses (bits 2..3).
+#define VEX_TONE_MODE0 0                 // 50%
+#define VEX_TONE_MODE1 (1 << 2)          // 25%
+#define VEX_TONE_MODE2 (2 << 2)          // 12.5%
+#define VEX_TONE_MODE3 (3 << 2)          // 75%
+
+// Panning (bits 4..5); constant-power gains, center by default.
+#define VEX_TONE_PAN_LEFT  (1 << 4)
+#define VEX_TONE_PAN_RIGHT (2 << 4)
+
+// Note mode (bit 8): freq parameter is a MIDI note number.
+#define VEX_TONE_NOTE_MODE (1 << 8)
+
 VEX_IMPORT("cls")   void cls(int color);                              // clear screen
 VEX_IMPORT("pset")  void pset(int x, int y, int color);              // set one pixel
 VEX_IMPORT("rect")  void rect(int x, int y, int w, int h, int color);  // filled rect
@@ -50,16 +71,9 @@ VEX_IMPORT("mbtn") int mbtn(int button);     // 1 if mouse button held
 VEX_IMPORT("pal")      void pal(int index, int rgb); // override palette entry (0xRRGGBB)
 VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 
-// ---- audio -----------------------------------------------------------------
-// One import, four independent voices. Time is in frames (1/60 s); the
-// console schedules envelopes itself, so carts never need an audio clock.
-// Channels clamp to 0..3; retriggering restarts a voice at phase 0
-// (attack > 0 makes it click-free).
-#define VEX_TONE_CHANNELS 4
-
 // tone(): play a tone at `freq` Hz (clamps to 1..20000), or a MIDI note
-// number with TONE_NOTE_MODE (middle C = 60). Argument layouts -- build
-// with the TONE_* helpers below:
+// number with VEX_TONE_NOTE_MODE (middle C = 60). Argument layouts -- build
+// with the VEX_TONE_* helpers below:
 //   freq     low 16: start Hz; high 16: slide target over the sustain
 //   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
 //   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
@@ -67,45 +81,28 @@ VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 //            bit 8 note mode
 VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
-// Waveform (bits 6..7); persists per channel until changed.
-#define TONE_PULSE 0                 // default: pulse wave
-#define TONE_NOISE (1 << 6)          // LFSR stepped at 2*freq Hz
-#define TONE_TRI   (2 << 6)          // triangle; softer, good for bass
-
-// Duty cycle for pulses (bits 2..3).
-#define TONE_MODE0 0                 // 50%
-#define TONE_MODE1 (1 << 2)          // 25%
-#define TONE_MODE2 (2 << 2)          // 12.5%
-#define TONE_MODE3 (3 << 2)          // 75%
-
-// Panning (bits 4..5); constant-power gains, center by default.
-#define TONE_PAN_LEFT  (1 << 4)
-#define TONE_PAN_RIGHT (2 << 4)
-
-// Note mode (bit 8): freq parameter is a MIDI note number.
-#define TONE_NOTE_MODE (1 << 8)
-
+// ---- audio -----------------------------------------------------------------
 // Helpers are macros so they work in static initializers (cart tables);
 // each argument is clamped and masked per byte.
 
 // Slide from `freq` to `to` over the sustain duration (linear in Hz).
-#define TONE_SLIDE(freq, to) \
+#define VEX_TONE_SLIDE(freq, to) \
   (((freq) & 0xFFFF) | (((to) & 0xFFFF) << 16))
 
-#define TONE_DUR_BYTE(v) ((v) < 0 ? 0 : (v) > 255 ? 255 : (v))
+#define VEX_TONE_DUR_BYTE(v) ((v) < 0 ? 0 : (v) > 255 ? 255 : (v))
 
-#define TONE_DURATION(sustain, release, decay, attack) \
-  (TONE_DUR_BYTE(sustain) | (TONE_DUR_BYTE(release) << 8) | \
-   (TONE_DUR_BYTE(decay) << 16) | (TONE_DUR_BYTE(attack) << 24))
+#define VEX_TONE_DURATION(sustain, release, decay, attack) \
+  (VEX_TONE_DUR_BYTE(sustain) | (VEX_TONE_DUR_BYTE(release) << 8) | \
+   (VEX_TONE_DUR_BYTE(decay) << 16) | (VEX_TONE_DUR_BYTE(attack) << 24))
 
-#define TONE_VOL_BYTE(v) ((v) < 0 ? 0 : (v) > 100 ? 100 : (v))
+#define VEX_TONE_VOL_BYTE(v) ((v) < 0 ? 0 : (v) > 100 ? 100 : (v))
 
 // Sustain volume 0..100 with optional attack-time peak (peak 0 = full).
-#define TONE_VOLUME(volume, peak) \
-  (TONE_VOL_BYTE(volume) | (TONE_VOL_BYTE(peak) << 8))
+#define VEX_TONE_VOLUME(volume, peak) \
+  (VEX_TONE_VOL_BYTE(volume) | (VEX_TONE_VOL_BYTE(peak) << 8))
 
-// Channel 0..3, duty mode, plus any TONE_* extras ORed together.
-#define TONE_FLAGS(channel, mode, extra) \
+// Channel 0..3, duty mode, plus any VEX_TONE_* extras ORed together.
+#define VEX_TONE_FLAGS(channel, mode, extra) \
   (((channel) & 3) | ((mode) & (3 << 2)) | ((extra) & ~(3 | (3 << 2))))
 
 #endif // VEX_H
