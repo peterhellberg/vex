@@ -92,6 +92,21 @@ pub extern "env" fn mbtn(button: i32) i32;
 pub extern "env" fn pal(index: i32, rgb: i32) void;
 /// Restore the default SWEETIE-16 palette.
 pub extern "env" fn palreset() void;
+/// `true` while the button is held — shorthand for `btn(button) != 0`.
+pub fn down(button: i32) bool {
+    return btn(button) != 0;
+}
+
+/// `true` while the mouse button is held — shorthand for `mbtn(button) != 0`.
+pub fn mdown(button: i32) bool {
+    return mbtn(button) != 0;
+}
+
+/// `true` if the button was just pressed this frame — shorthand for `btnp(button) != 0`.
+pub fn pressed(button: i32) bool {
+    return btnp(button) != 0;
+}
+
 // ---- audio -----------------------------------------------------------------
 
 pub const TONE_CHANNELS = 4;
@@ -163,19 +178,4 @@ pub const ToneVolume = struct {
 pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
     return (channel & 3) | (mode & (3 << 2)) |
         (extra & ~(3 | (3 << 2)));
-}
-
-/// `true` while the button is held — shorthand for `btn(button) != 0`.
-pub fn down(button: i32) bool {
-    return btn(button) != 0;
-}
-
-/// `true` while the mouse button is held — shorthand for `mbtn(button) != 0`.
-pub fn mdown(button: i32) bool {
-    return mbtn(button) != 0;
-}
-
-/// `true` if the button was just pressed this frame — shorthand for `btnp(button) != 0`.
-pub fn pressed(button: i32) bool {
-    return btnp(button) != 0;
 }
