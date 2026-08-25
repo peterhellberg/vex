@@ -8,7 +8,7 @@
 #define TRACE_N 16 // steps kept in the recent-steps trace
 
 typedef struct {
-  int freq;   // Hz, or MIDI note with TONE_NOTE_MODE, or slide-packed
+  int freq;   // Hz, or MIDI note with VEX_TONE_NOTE_MODE, or slide-packed
   int dur;    // packed via tone_duration
   int vol;    // packed via tone_volume
   int flags;  // built via tone_flags
@@ -20,74 +20,74 @@ typedef struct {
   Voice voice[3];  // simultaneous voices (freq 0 entries are skipped)
 } Step;
 
-#define V(ch, f, d, v, x) {f, d, v, TONE_FLAGS(ch, 0, x)}
-#define NOTE_LEN(dur) (TONE_DURATION(dur, 6, 3, 1)) // musical default envelope
+#define V(ch, f, d, v, x) {f, d, v, VEX_TONE_FLAGS(ch, 0, x)}
+#define NOTE_LEN(dur) (VEX_TONE_DURATION(dur, 6, 3, 1)) // musical default envelope
 
 static const Step STEPS[] = {
   // -- arpeggio: rising and falling C major on a square lead ----------------
-  {"arpeggio", 14, {V(0, 262, NOTE_LEN(12), 100, TONE_MODE0)}},
-  {"arpeggio", 14, {V(0, 330, NOTE_LEN(12), 100, TONE_MODE0)}},
-  {"arpeggio", 14, {V(0, 392, NOTE_LEN(12), 100, TONE_MODE0)}},
-  {"arpeggio", 14, {V(0, 523, NOTE_LEN(12), 100, TONE_MODE0)}},
-  {"arpeggio", 20, {V(0, 392, NOTE_LEN(18), 100, TONE_MODE0)}},
+  {"arpeggio", 14, {V(0, 262, NOTE_LEN(12), 100, VEX_TONE_MODE0)}},
+  {"arpeggio", 14, {V(0, 330, NOTE_LEN(12), 100, VEX_TONE_MODE0)}},
+  {"arpeggio", 14, {V(0, 392, NOTE_LEN(12), 100, VEX_TONE_MODE0)}},
+  {"arpeggio", 14, {V(0, 523, NOTE_LEN(12), 100, VEX_TONE_MODE0)}},
+  {"arpeggio", 20, {V(0, 392, NOTE_LEN(18), 100, VEX_TONE_MODE0)}},
 
   // -- twinkle: classic melody ----------------------------------------------
-  {"twinkle", 14, {V(0, 262, NOTE_LEN(12), 100, TONE_MODE0)}},
-  {"twinkle", 14, {V(0, 262, NOTE_LEN(12), 100, TONE_MODE0)}},
-  {"twinkle", 14, {V(0, 392, NOTE_LEN(12), 100, TONE_MODE0)}},
-  {"twinkle", 14, {V(0, 440, NOTE_LEN(12), 90, TONE_MODE0)}},
-  {"twinkle", 22, {V(0, 392, NOTE_LEN(20), 100, TONE_MODE0)}},
+  {"twinkle", 14, {V(0, 262, NOTE_LEN(12), 100, VEX_TONE_MODE0)}},
+  {"twinkle", 14, {V(0, 262, NOTE_LEN(12), 100, VEX_TONE_MODE0)}},
+  {"twinkle", 14, {V(0, 392, NOTE_LEN(12), 100, VEX_TONE_MODE0)}},
+  {"twinkle", 14, {V(0, 440, NOTE_LEN(12), 90, VEX_TONE_MODE0)}},
+  {"twinkle", 22, {V(0, 392, NOTE_LEN(20), 100, VEX_TONE_MODE0)}},
 
   // -- polyphony: triangle bass under a square lead --------------------------
   {"polyphony", 40,
-    {V(0, 330, NOTE_LEN(38), 80, TONE_MODE0),
-     V(1, 131, TONE_DURATION(36, 8, 6, 2), 90, TONE_TRI)}},
+    {V(0, 330, NOTE_LEN(38), 80, VEX_TONE_MODE0),
+     V(1, 131, VEX_TONE_DURATION(36, 8, 6, 2), 90, VEX_TONE_TRI)}},
   {"polyphony", 40,
-    {V(0, 392, NOTE_LEN(38), 80, TONE_MODE0),
-     V(1, 165, TONE_DURATION(36, 8, 6, 2), 90, TONE_TRI)}},
+    {V(0, 392, NOTE_LEN(38), 80, VEX_TONE_MODE0),
+     V(1, 165, VEX_TONE_DURATION(36, 8, 6, 2), 90, VEX_TONE_TRI)}},
 
   // -- duty: same pitch at each pulse width ----------------------------------
-  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE0)}},
-  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE1)}},
-  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE2)}},
-  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, TONE_MODE3)}},
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, VEX_TONE_MODE0)}},
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, VEX_TONE_MODE1)}},
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, VEX_TONE_MODE2)}},
+  {"duty", 16, {V(0, 440, NOTE_LEN(14), 100, VEX_TONE_MODE3)}},
 
   // -- noise: kick and hats ---------------------------------------------------
-  {"noise", 10, {V(2, 120, TONE_DURATION(2, 10, 0, 0), 100, TONE_NOISE)}},
-  {"noise", 6,  {V(2, 6000, TONE_DURATION(1, 5, 0, 0), 60, TONE_NOISE)}},
-  {"noise", 6,  {V(2, 6000, TONE_DURATION(1, 5, 0, 0), 60, TONE_NOISE)}},
-  {"noise", 10, {V(2, 120, TONE_DURATION(2, 10, 0, 0), 100, TONE_NOISE)}},
-  {"noise", 6,  {V(2, 6000, TONE_DURATION(1, 5, 0, 0), 60, TONE_NOISE)}},
+  {"noise", 10, {V(2, 120, VEX_TONE_DURATION(2, 10, 0, 0), 100, VEX_TONE_NOISE)}},
+  {"noise", 6,  {V(2, 6000, VEX_TONE_DURATION(1, 5, 0, 0), 60, VEX_TONE_NOISE)}},
+  {"noise", 6,  {V(2, 6000, VEX_TONE_DURATION(1, 5, 0, 0), 60, VEX_TONE_NOISE)}},
+  {"noise", 10, {V(2, 120, VEX_TONE_DURATION(2, 10, 0, 0), 100, VEX_TONE_NOISE)}},
+  {"noise", 6,  {V(2, 6000, VEX_TONE_DURATION(1, 5, 0, 0), 60, VEX_TONE_NOISE)}},
 
   // -- slide: linear frequency glides -----------------------------------------
-  {"slide", 30, {V(0, TONE_SLIDE(200, 800), TONE_DURATION(28, 8, 0, 0), 90, TONE_MODE0)}},
-  {"slide", 30, {V(0, TONE_SLIDE(800, 200), TONE_DURATION(28, 8, 0, 0), 90, TONE_MODE0)}},
+  {"slide", 30, {V(0, VEX_TONE_SLIDE(200, 800), VEX_TONE_DURATION(28, 8, 0, 0), 90, VEX_TONE_MODE0)}},
+  {"slide", 30, {V(0, VEX_TONE_SLIDE(800, 200), VEX_TONE_DURATION(28, 8, 0, 0), 90, VEX_TONE_MODE0)}},
 
   // -- notes: MIDI note numbers (C4 E4 G4 C5) ----------------------------------
-  {"notes", 14, {V(0, 60, NOTE_LEN(12), 100, TONE_NOTE_MODE)}},
-  {"notes", 14, {V(0, 64, NOTE_LEN(12), 100, TONE_NOTE_MODE)}},
-  {"notes", 14, {V(0, 67, NOTE_LEN(12), 100, TONE_NOTE_MODE)}},
-  {"notes", 20, {V(0, 72, NOTE_LEN(18), 100, TONE_NOTE_MODE)}},
+  {"notes", 14, {V(0, 60, NOTE_LEN(12), 100, VEX_TONE_NOTE_MODE)}},
+  {"notes", 14, {V(0, 64, NOTE_LEN(12), 100, VEX_TONE_NOTE_MODE)}},
+  {"notes", 14, {V(0, 67, NOTE_LEN(12), 100, VEX_TONE_NOTE_MODE)}},
+  {"notes", 20, {V(0, 72, NOTE_LEN(18), 100, VEX_TONE_NOTE_MODE)}},
 
   // -- pan: left, center, right -------------------------------------------------
-  {"pan", 14, {V(0, 440, NOTE_LEN(12), 100, TONE_PAN_LEFT)}},
+  {"pan", 14, {V(0, 440, NOTE_LEN(12), 100, VEX_TONE_PAN_LEFT)}},
   {"pan", 14, {V(0, 494, NOTE_LEN(12), 100, 0)}},
-  {"pan", 14, {V(0, 554, NOTE_LEN(12), 100, TONE_PAN_RIGHT)}},
+  {"pan", 14, {V(0, 554, NOTE_LEN(12), 100, VEX_TONE_PAN_RIGHT)}},
 
   // -- rapid: quick alternating notes (stresses retriggering) ------------------
-  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, TONE_MODE0)}},
-  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, TONE_MODE0)}},
-  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, TONE_MODE0)}},
-  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, TONE_MODE0)}},
-  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, TONE_MODE0)}},
-  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, TONE_MODE0)}},
+  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, VEX_TONE_MODE0)}},
+  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, VEX_TONE_MODE0)}},
+  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, VEX_TONE_MODE0)}},
+  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, VEX_TONE_MODE0)}},
+  {"rapid", 6, {V(0, 440, NOTE_LEN(6), 100, VEX_TONE_MODE0)}},
+  {"rapid", 6, {V(0, 659, NOTE_LEN(6), 100, VEX_TONE_MODE0)}},
 
   // -- range: extremes plus an explicit kill ------------------------------------
-  {"range", 10, {V(0, 55, NOTE_LEN(9), 100, TONE_MODE0)}},
-  {"range", 10, {V(0, 1975, NOTE_LEN(9), 100, TONE_MODE0)}},
+  {"range", 10, {V(0, 55, NOTE_LEN(9), 100, VEX_TONE_MODE0)}},
+  {"range", 10, {V(0, 1975, NOTE_LEN(9), 100, VEX_TONE_MODE0)}},
   {"range", 14, {}},                 // rest: nothing triggered
   {"range", 10, {V(0, 262, 0, 0, 0), // kill idiom: zero duration
-                 V(1, 131, TONE_DURATION(8, 4, 0, 0), 80, TONE_TRI)}},
+                 V(1, 131, VEX_TONE_DURATION(8, 4, 0, 0), 80, VEX_TONE_TRI)}},
 };
 
 #define NUM_STEPS (int)(sizeof(STEPS) / sizeof(STEPS[0]))

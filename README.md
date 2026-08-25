@@ -369,8 +369,8 @@ envelopes itself, so carts never need an audio clock:
 | `volume` | low byte: sustain level 0..100; high byte: optional attack-time peak (`0` means 100 during the attack) |
 | `flags` | channel (0..3), duty cycle, panning, waveform, note mode |
 
-Waveforms: pulse (default; duty cycles via `TONE_MODE0`-`TONE_MODE3`),
-`TONE_NOISE` (an LFSR stepped at 2x freq), and `TONE_TRI`. `TONE_NOTE_MODE`
+Waveforms: pulse (default; duty cycles via `VEX_TONE_MODE0`-`VEX_TONE_MODE3`),
+`VEX_TONE_NOISE` (an LFSR stepped at 2x freq), and `VEX_TONE_TRI`. `VEX_TONE_NOTE_MODE`
 interprets the frequency parameter as a MIDI note number instead of Hz.
 Use the SDK helpers (`tone_duration`, `tone_volume`, `tone_flags`,
 `tone_slide` in C / `ToneDuration`, `ToneVolume`, `toneFlags`, `toneSlide`
@@ -378,7 +378,7 @@ in Zig) rather than packing by hand.
 
 ```c
 // Middle C for one second on channel 0:
-tone(262, tone_duration(60, 0, 0, 0), 100, tone_flags(0, TONE_MODE0, 0));
+tone(262, tone_duration(60, 0, 0, 0), 100, tone_flags(0, VEX_TONE_MODE0, 0));
 
 // Slide 262 -> 523 Hz over half a second, releasing over 15 frames:
 tone(tone_slide(262, 523), tone_duration(30, 15, 0, 0), 100,
