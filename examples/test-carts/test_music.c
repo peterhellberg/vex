@@ -1,125 +1,97 @@
 // test_music.c - music library test cart.
-// Plays a simple chiptune: melody, bass, and percussion, looping forever.
+// Plays a short bassline with octave pulses, looping forever.
 // Exercises mus.h so the music engine can be compared across hosts.
-#include "vex.h"
+//
+// Requires mus.h with:
+//   - triggering gated on _mus_tick == 0 (no per-frame retrigger)
+//   - notes played as Hz via _mus_note_hz() (no VEX_TONE_NOTE_MODE)
 #include "mus.h"
+#include "vex.h"
 
-// -- instruments (1-indexed in note events) -----------------------------------
+// clang-format off
 
+// ---- instruments -------------------------------------------------------------
+// wave            duty             atk dec sus rel vol pan
 static const MusInst INSTS[] = {
-    // 0: square lead (pulse, 50% duty, snappy envelope)
-    {VEX_TONE_PULSE, VEX_TONE_MODE0, 1, 3, 80, 6, 90, 0},
-    // 1: triangle bass
-    {VEX_TONE_TRI, VEX_TONE_MODE0, 2, 4, 85, 8, 85, 0},
-    // 2: kick (low noise)
-    {VEX_TONE_NOISE, 0, 0, 3, 20, 8, 100, 0},
-    // 3: hi-hat (high noise)
-    {VEX_TONE_NOISE, 0, 0, 2, 10, 5, 60, 0},
+    // 1: bass - triangle, deep
+    {VEX_TONE_TRI,   VEX_TONE_MODE0, 0, 2, 85, 20, 95, 0},
+    // 2: pulse - same line one/two octaves up, quiet bounce
+    {VEX_TONE_TRI,   VEX_TONE_MODE0, 0, 2, 50, 15, 45, 0},
+    // 3: hat - filtered LFSR tick, short and bright, panned left
+    {VEX_TONE_NOISE, 0,              1, 3, 22, 10, 45, VEX_TONE_PAN_LEFT},
 };
 
-// -- pattern 0: 16 rows, speed 6 (10 rows/sec) ------------------------------
-//
-// Melody: C4 E4 G4 C5 | G4 E4 C4 -- | repeated
-// Bass:   C3 --- G2 --- | C3 --- G2 --- |
-// Perc:   K - H - K - H - | K - H - K - H - |
+// ---- pattern -----------------------------------------------------------------
+// A minor walk: A A E G / F F C D.  Speed 8 => ~7.5 rows/sec.
+#define ROWS 8
+#define SPD  8
+#define _(n, i) {(n), (i), 0, 0}
+#define O       {MUS_OFF, 0, 0, 0}
+#define R       {MUS_REST, 0, 0, 0}
 
-#define ROWS 16
-#define SPD  6
-#define _(n, i) {n, i, 0, 0}
-#define R       {0, 0, 0, 0}
+// Events: rows * MUS_CHANNELS;
 
-static const MusNote EVENTS[ROWS * MUS_CHANNELS] = {
-    //  row: melody       bass        kick         hat
-    /*  0 */ _(60, 1), _(48, 1), _(36, 2), R,
-    /*  1 */ _(64, 1), R,        R,         R,
-    /*  2 */ _(67, 1), R,        R,         _(78, 3),
-    /*  3 */ _(72, 1), R,        R,         R,
-    /*  4 */ _(67, 1), _(43, 1), _(36, 2), R,
-    /*  5 */ _(64, 1), R,        R,         R,
-    /*  6 */ _(60, 1), R,        R,         _(78, 3),
-    /*  7 */ R,        R,        R,         R,
-    /*  8 */ _(60, 1), _(48, 1), _(36, 2), R,
-    /*  9 */ _(64, 1), R,        R,         R,
-    /* 10 */ _(67, 1), R,        R,         _(78, 3),
-    /* 11 */ _(72, 1), R,        R,         R,
-    /* 12 */ _(67, 1), _(43, 1), _(36, 2), R,
-    /* 13 */ _(64, 1), R,        R,         R,
-    /* 14 */ _(60, 1), R,        R,         _(78, 3),
-    /* 15 */ R,        R,        R,         R,
+static const MusNote EV0[ROWS * MUS_CHANNELS] = {
+    //  ch0  ch1  bass          oct-pulse     hat
+    R,   R,   _(45,1), R,   _(69,2), R, _(84,3), R,
+    R,   R,   R,       R,   R,       R, R,       R,
+    R,   R,   _(45,1), R,   R,       R, R,       R,
+    R,   R,   R,       R,   _(57,2), R, R,       R,
+    R,   R,   _(52,1), R,   _(76,2), R, _(84,3), R,
+    R,   R,   R,       R,   R,       R, R,       R,
+    R,   R,   _(43,1), R,   R,       R, R,       R,
+    R,   R,   _(50,1), R,   _(62,2), R, R,       R,
 };
 
 #undef _
+#undef O
 #undef R
 
-static const MusPat PAT0 = {ROWS, SPD, EVENTS};
+// ---- song --------------------------------------------------------------------
+static const MusPat PAT0 = {ROWS, SPD, EV0};
 static const MusPat *const PATS[] = {&PAT0};
+
 static const unsigned char ORDERS[] = {0};
 
 static const MusSong SONG = {
-    4,    // num_insts
-    1,    // num_pats
-    1,    // num_orders
-    0,    // loop to order 0
+    3,      // num_insts
+    1,      // num_pats
+    1,      // num_orders
+    0,      // loop to order 0
     INSTS, PATS, ORDERS,
 };
 
-// -- tiny helpers (no libc) --------------------------------------------------
+// clang-format on
 
-static void str_cat(char *d, const char *s) {
-    while (*d) d++;
-    while (*s) *d++ = *s++;
-    *d = '\0';
-}
-
-static void itoa(int v, char *out) {
-    char tmp[12];
-    int n = 0;
-    if (v == 0) tmp[n++] = '0';
-    while (v > 0) { tmp[n++] = (char)('0' + v % 10); v /= 10; }
-    for (int i = 0; i < n; i++) out[i] = tmp[n - 1 - i];
-    out[n] = '\0';
-}
-
-// -- entry points -------------------------------------------------------------
+// -- entry points
+// --------------------------------------------------------------
 
 VEX_EXPORT("boot") void boot(void) {
-    mus_load(&SONG);
-    mus_play();
-    title("vex - test_music");
+  mus_load(&SONG);
+  mus_play();
+  title("vex - test_music");
 }
 
 VEX_EXPORT("update") void update(void) {
-    mus_tick();
+  mus_tick();
 
-    int pos = mus_pos();
-    int ord = pos & 0xFF;
-    int row = (pos >> 8) & 0xFF;
+  int pos = mus_pos();
+  int row = (pos >> 8) & 0xFF;
 
-    cls(0);
-    rectb(2, 2, VEX_WIDTH - 4, VEX_HEIGHT - 4, 2);
+  cls(0);
+  rectb(2, 2, VEX_WIDTH - 4, VEX_HEIGHT - 4, 2);
 
-    text("vex - test_music", 4, 4, 12);
+  text("vex - test_music", 4, 4, 12);
 
-    // position display: "0:05"
-    char s[16];
-    s[0] = '\0';
-    char tmp[8];
-    itoa(ord, tmp);
-    str_cat(s, tmp);
-    str_cat(s, ":");
-    itoa(row, tmp);
-    str_cat(s, tmp);
-    text(s, 4, 14, 10);
+  // progress bar within the pattern
+  rect(4, 30, (VEX_WIDTH - 24) * (row % ROWS) / ROWS, 4, 6);
 
-    // progress bar
-    rect(4, 30, (VEX_WIDTH - 24) * row / ROWS, 4, 6);
+  // channel activity dots (ch2 and ch3 should light up)
+  for (int ch = 0; ch < MUS_CHANNELS; ch++) {
+    const MusNote *ev = &EV0[(row % ROWS) * MUS_CHANNELS + ch];
+    int color = ev->note != MUS_REST ? 11 : 5;
+    rect(4 + ch * 12, 44, 8, 8, color);
+  }
 
-    // channel activity dots
-    for (int ch = 0; ch < MUS_CHANNELS; ch++) {
-        const MusNote *ev = &EVENTS[row * MUS_CHANNELS + ch];
-        int color = ev->note != 0 ? 11 : 5;
-        rect(4 + ch * 12, 44, 8, 8, color);
-    }
-
-    text("mus", 4, VEX_HEIGHT - 10, 11);
+  text("mus", 4, VEX_HEIGHT - 10, 11);
 }
