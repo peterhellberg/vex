@@ -96,6 +96,9 @@ pub extern "env" fn trib(x1: i32, y1: i32, x2: i32, y2: i32, x3: i32, y3: i32, c
 /// top-left at (`x`, `y`). Pixels equal to `key` are skipped — pass a value
 /// outside `0..15` (e.g. `-1`) to draw every pixel.
 pub extern "env" fn blit(data: [*]const u8, x: i32, y: i32, w: i32, h: i32, key: i32) void;
+/// Like `blit`, but each source palette index is remapped through the 16-byte
+/// table at `map` before the palette lookup.
+pub extern "env" fn blitm(data: [*]const u8, x: i32, y: i32, w: i32, h: i32, key: i32, map: [*]const u8) void;
 /// Draw the NUL-terminated string `s` with its top-left at (`x`, `y`).
 pub extern "env" fn text(s: [*:0]const u8, x: i32, y: i32, color: i32) void;
 /// Set the console window title to the NUL-terminated string `s`.
