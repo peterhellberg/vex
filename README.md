@@ -343,6 +343,7 @@ zig build-exe -target wasm32-freestanding \
 | `tri(x1, y1, x2, y2, x3, y3, color)` | filled triangle |
 | `trib(x1, y1, x2, y2, x3, y3, color)` | triangle outline |
 | `blit(data, x, y, w, h, key)` | draw a `w`×`h` bitmap of palette indices (one byte/pixel); pixels equal to `key` are skipped |
+| `blitm(data, x, y, w, h, key, map)` | like `blit`, but each source index is remapped through the 16-byte table at `map` before the palette lookup (`palette[map[index & 15] & 15]`) |
 | `text(s, x, y, color)` | draw a string |
 | `title(s)` | set the window title |
 | `btn(button) -> int` | `1` if a button is held, else `0` |
