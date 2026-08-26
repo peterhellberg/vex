@@ -36,9 +36,6 @@ const (
 	VEX_FONT_FIRST = 32
 	VEX_COORD_MAX  = VEX_W * 16
 	VEX_NUM_BTNS   = 6
-
-	toneNoiseClkMin = 8000.0
-	toneNoiseClkMax = 48000.0
 )
 
 var defaultPalette = [16][4]uint8{
@@ -1039,6 +1036,9 @@ var (
 	tonePanL      = [3]float64{0.70710678, 1, 0}
 	tonePanR      = [3]float64{0.70710678, 0, 1}
 )
+
+const toneNoiseClkMin = 8000.0
+const toneNoiseClkMax = 48000.0
 
 // tone parses a cart's tone(freq, duration, volume, flags) call and parks
 // it for the audio side. See vex.h for the packed argument layouts.
