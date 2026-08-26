@@ -16,4 +16,4 @@ base/*/vex.zig
 base/*/vex.h
 base/*/mus.zig
 base/*/mus.h
-vex-run
+/vex-run
