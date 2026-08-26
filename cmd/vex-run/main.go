@@ -36,6 +36,9 @@ const (
 	VEX_FONT_FIRST = 32
 	VEX_COORD_MAX  = VEX_W * 16
 	VEX_NUM_BTNS   = 6
+
+	toneNoiseClkMin = 8000.0
+	toneNoiseClkMax = 48000.0
 )
 
 var defaultPalette = [16][4]uint8{
@@ -884,9 +887,10 @@ const (
 	// frames; the timeout only guards headless/CI runs).
 	audioReadyTimeout = 2 * time.Second
 
-	// audioReadyPosition is how much of the stream the device must have
-	// consumed before the cart clock starts (see audioFlowStarted).
-	audioReadyPosition = 800 * time.Millisecond
+	// audioReadyBytes is how much of the stream (in bytes; 48000 Hz × stereo ×
+	// 16-bit = 192000 bytes/sec) the device must have consumed before the cart
+	// clock starts.
+	audioReadyBytes = toneRate * 4 * 80 / 100 // 80% of one second
 )
 
 // Envelope segments, in trigger order.
@@ -918,6 +922,8 @@ type toneVoice struct {
 	ph        float64 // phase accumulator, 0..1
 	nph       float64 // noise step accumulator
 	lfsr      uint16
+	noiseRaw  float64 // last raw LFSR output (+1/-1)
+	noiseLp   float64 // one-pole lowpassed noise value
 
 	seg     int
 	segLeft int64
@@ -968,6 +974,10 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 	v.ph = 0
 	v.nph = 0
 	v.lfsr = 0xACE1
+	v.noiseRaw = 0
+	// Starting the noise filter from silence also gives noise hits a free
+	// natural fade-in over its first few dozen samples.
+	v.noiseLp = 0
 	v.gl = t.gl
 	v.gr = t.gr
 
@@ -984,9 +994,18 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 		total += v.segLen[i]
 	}
 	if total <= 0 {
+		// The kill idiom: every segment empty silences the channel now.
 		v.seg = segIdle
 		v.level = 0
 		return
+	}
+
+	// Pad zero-length attacks up to a sub-millisecond fade-in: jumping the
+	// level straight to peak on sample one of every note is an audible click
+	// per trigger. Only when there's a real note here (never on pure-release
+	// or the kill path above).
+	if v.segLen[0] < 32 {
+		v.segLen[0] = 32
 	}
 
 	v.seg = -1
@@ -1100,6 +1119,15 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 	}
 
 	const knee, top = 24000.0, 32767.0
+	soft := func(x float64) float64 {
+		if x > knee {
+			return knee + (top-knee)*math.Tanh((x-knee)/(top-knee))
+		}
+		if x < -knee {
+			return -knee + (top-knee)*math.Tanh((x+knee)/(top-knee))
+		}
+		return x
+	}
 	n := 0
 	for n+4 <= len(p) {
 		var l, r float64
@@ -1112,18 +1140,30 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			// Oscillator value in -1..1.
 			var s float64
 			switch v.kind {
-			case 1: // noise: 15-bit LFSR stepped at 2*freq Hz
-				v.nph += 2 * v.freq / toneRate
+			case 1: // noise: 15-bit LFSR, clock clamped to the crisp band
+				nclk := 2 * v.freq
+				if nclk < toneNoiseClkMin {
+					nclk = toneNoiseClkMin
+				}
+				if nclk > toneNoiseClkMax {
+					nclk = toneNoiseClkMax
+				}
+				v.nph += nclk / toneRate
 				for v.nph >= 1 {
 					v.nph--
-					fb := uint16(1 - (((v.lfsr >> 15) ^ (v.lfsr >> 13)) & 1))
+					fb := uint16(1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1))
 					v.lfsr = v.lfsr<<1 | fb
+					if v.lfsr&1 == 1 {
+						v.noiseRaw = 1
+					} else {
+						v.noiseRaw = -1
+					}
 				}
-				if v.lfsr&1 == 1 {
-					s = 1
-				} else {
-					s = -1
-				}
+				// One-pole lowpass rounds each raw step edge into a ramp:
+				// turns raw sample-and-hold hash into classic chip hiss.
+				// Higher coefficient = brighter/snapier; lower = darker.
+				v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp)
+				s = v.noiseLp * 1.4 // compensate filter gain loss
 			case 2: // triangle
 				switch {
 				case v.ph < 0.25:
@@ -1164,15 +1204,6 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			}
 		}
 
-		soft := func(x float64) float64 {
-			if x > knee {
-				return knee + (top-knee)*math.Tanh((x-knee)/(top-knee))
-			}
-			if x < -knee {
-				return -knee + (top-knee)*math.Tanh((x+knee)/(top-knee))
-			}
-			return x
-		}
 		ls := int16(soft(l))
 		rs := int16(soft(r))
 		p[n] = byte(ls)
@@ -1197,7 +1228,7 @@ func (g *Game) ensureAudio() {
 	}
 	g.audioOn = true
 
-	p, err := audio.NewPlayer(g.audioCtx, g.audio)
+	p, err := g.audioCtx.NewPlayer(g.audio)
 	if err != nil {
 		g.audioReady = true
 		return
@@ -1215,7 +1246,7 @@ func (g *Game) audioFlowStarted() bool {
 	if g.audioPl == nil {
 		return false
 	}
-	return g.audioPl.Position() > audioReadyPosition || time.Since(g.startedAt) > audioReadyTimeout
+	return g.audioPl.Position() > audioReadyBytes || time.Since(g.startedAt) > audioReadyTimeout
 }
 
 // tone(freq, duration, volume, flags): trigger a voice on the mixer.
