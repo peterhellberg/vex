@@ -481,7 +481,7 @@ class ToneMixer extends AudioWorkletProcessor {
     // then scale like the C host's float output.
     const knee = 24000, top = 32767;
     const soft = x => x > knee ? knee + (top - knee) * Math.tanh((x - knee) / (top - knee))
-                  : x < -knee ? -knee + (-top + knee) * Math.tanh((x + knee) / (top - knee))
+                  : x < -knee ? -knee + (top - knee) * Math.tanh((x + knee) / (top - knee))
                   : x;
 
     for (let i = 0; i < L.length; i++) {

@@ -858,9 +858,9 @@ static void mix_callback(void* buffer, unsigned int frames) {
         // knee) so stacked voices distort musically instead of wrapping.
         const float knee = 24000.0f, top = 32767.0f;
         if (l > knee)  l = knee + (top - knee) * tanhf((l - knee) / (top - knee));
-        if (l < -knee) l = -knee + (-top + knee) * tanhf((l + knee) / (top - knee));
+        if (l < -knee) l = -knee + (top - knee) * tanhf((l + knee) / (top - knee));
         if (r > knee)  r = knee + (top - knee) * tanhf((r - knee) / (top - knee));
-        if (r < -knee) r = -knee + (-top + knee) * tanhf((r + knee) / (top - knee));
+        if (r < -knee) r = -knee + (top - knee) * tanhf((r + knee) / (top - knee));
 
         out[pos * 2] = l / 32768.0f;
         out[pos * 2 + 1] = r / 32768.0f;

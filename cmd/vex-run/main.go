@@ -1169,7 +1169,7 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				return knee + (top-knee)*math.Tanh((x-knee)/(top-knee))
 			}
 			if x < -knee {
-				return -knee + (-top+knee)*math.Tanh((x+knee)/(top-knee))
+				return -knee + (top-knee)*math.Tanh((x+knee)/(top-knee))
 			}
 			return x
 		}
