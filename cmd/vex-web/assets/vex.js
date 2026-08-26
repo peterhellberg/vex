@@ -1058,6 +1058,62 @@ function blit(ptr, x, y, w, h, key)
     }
 }
 
+function blitm(ptr, x, y, w, h, key, mapptr)
+{
+    x |= 0;
+    y |= 0;
+    w |= 0;
+    h |= 0;
+
+    updateMemoryViews();
+
+    if (w <= 0 || h <= 0)
+        return;
+
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
+
+    if (ptr < 0 || ptr + w * h > mem8.length)
+        return;
+
+    if (mapptr < 0 || mapptr + 16 > mem8.length)
+        return;
+
+    for (let row = 0; row < h; row++)
+    {
+        const yy = y + row;
+
+        if (yy < 0 || yy >= VEX_H)
+            continue;
+
+        const dst = yy * VEX_W;
+        const src = ptr + row * w;
+
+        let col = 0;
+        while (col < w)
+        {
+            while (col < w && mem8[src + col] === key)
+                col++;
+
+            if (col >= w)
+                break;
+
+            const start = col;
+            const run = mem8[src + col];
+
+            while (col < w && mem8[src + col] === run)
+                col++;
+
+            let sx = Math.max(0, x + start);
+            const ex = Math.min(VEX_W, x + col);
+            const v = palette[mem8[mapptr + (run & 15)] & 15];
+
+            for (; sx < ex; sx++)
+                pixels32[dst + sx] = v;
+        }
+    }
+}
+
 //// Part 10: Triangle fill (tri) + outline (trib)
 
 // Reusable scanline edge buffers, grown on demand -- avoids allocating two
@@ -1334,6 +1390,7 @@ const env =
     tri,
     trib,
     blit,
+    blitm,
 
     text,
     title,
