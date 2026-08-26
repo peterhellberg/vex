@@ -14,3 +14,4 @@ mycart*
 base/*/*.wasm
 base/*/vex.zig
 base/*/vex.h
+vex-run
