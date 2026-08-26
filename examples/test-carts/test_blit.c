@@ -1,7 +1,7 @@
 #include "vex.h"
 
 #define FRAMES_PER_CASE 15
-#define NUM_CASES 12
+#define NUM_CASES 16
 
 static const char* CASE_NAMES[NUM_CASES] = {
   "1x1 blits, every 997th pixel",
@@ -16,6 +16,10 @@ static const char* CASE_NAMES[NUM_CASES] = {
   "key = INT32_MIN / INT32_MAX",
   "w/h exceeding VEX_W/VEX_H",
   "1px tall full-width, 1px wide full-height",
+  "blitm identity remap",
+  "blitm swap indices 1<->2",
+  "blitm invert all indices",
+  "blitm remap with transparency key",
 };
 
 static int frame;
@@ -124,6 +128,40 @@ static void draw_case(int c) {
       unsigned char col[180];
       for (int i = 0; i < 180; i++) col[i] = (i / 12) & 15;
       blit(col, 310, 0, 1, 180, 16);
+    }
+    break;
+  case 12:
+    {
+      unsigned char map[16];
+      for (int i = 0; i < 16; i++) map[i] = i;
+      fill_data(big_data, VEX_WIDTH, VEX_HEIGHT, 0);
+      blitm(big_data, 0, 0, VEX_WIDTH, VEX_HEIGHT, 16, map);
+    }
+    break;
+  case 13:
+    {
+      unsigned char map[16];
+      for (int i = 0; i < 16; i++) map[i] = i;
+      map[1] = 2;
+      map[2] = 1;
+      fill_data(big_data, VEX_WIDTH, VEX_HEIGHT, 1);
+      blitm(big_data, 0, 0, VEX_WIDTH, VEX_HEIGHT, 16, map);
+    }
+    break;
+  case 14:
+    {
+      unsigned char map[16];
+      for (int i = 0; i < 16; i++) map[i] = 15 - i;
+      fill_data(big_data, VEX_WIDTH, VEX_HEIGHT, 0);
+      blitm(big_data, 0, 0, VEX_WIDTH, VEX_HEIGHT, 16, map);
+    }
+    break;
+  case 15:
+    {
+      unsigned char map[16];
+      for (int i = 0; i < 16; i++) map[i] = 15 - i;
+      fill_data(big_data, VEX_WIDTH, VEX_HEIGHT, 3);
+      blitm(big_data, 0, 0, VEX_WIDTH, VEX_HEIGHT, 0, map);
     }
     break;
   }
