@@ -52,6 +52,23 @@ static void fill_data(unsigned char *d, int w, int h, int pat) {
     }
 }
 
+static void fill_sprite_shape(unsigned char *d, int w, int h) {
+  for (int y = 0; y < h; y++)
+    for (int x = 0; x < w; x++) {
+      int dx, dy, dist;
+      d[y * w + x] = 0;
+      dx = x - w / 2;
+      dy = y - h / 2;
+      dist = dx * dx + dy * dy;
+      if (dist < (w / 3) * (w / 3))
+        d[y * w + x] = 4;
+      if (x >= w / 3 && x < w * 2 / 3 && y >= h / 3 && y < h * 2 / 3)
+        d[y * w + x] = 2;
+      if (x >= 2 && x < w - 2 && y == x)
+        d[y * w + x] = 12;
+    }
+}
+
 static void draw_case(int c) {
   switch (c) {
   case 0:
@@ -132,47 +149,42 @@ static void draw_case(int c) {
   } break;
   case 12: {
     unsigned char spr[32 * 32];
-    for (int y = 0; y < 32; y++)
-      for (int x = 0; x < 32; x++)
-        spr[y * 32 + x] = (x / 4 + y / 4) & 15;
     unsigned char id[16];
-    for (int i = 0; i < 16; i++) id[i] = i;
-    unsigned char sh[16];
-    for (int i = 0; i < 16; i++) sh[i] = (i + 3) & 15;
+    int i;
+    fill_sprite_shape(spr, 32, 32);
+    for (i = 0; i < 16; i++) id[i] = i;
     text("blit", 24, 22, 12);
     blit(spr, 32, 30, 32, 32, 16);
     text("blitm id", 116, 22, 12);
     blitm(spr, 128, 30, 32, 32, 16, id);
     text("blitm +3", 224, 22, 12);
+    unsigned char sh[16];
+    for (i = 0; i < 16; i++) sh[i] = (i + 3) & 15;
     blitm(spr, 224, 30, 32, 32, 16, sh);
   } break;
   case 13: {
     unsigned char spr[32 * 32];
-    for (int y = 0; y < 32; y++)
-      for (int x = 0; x < 32; x++)
-        spr[y * 32 + x] = (x / 4 + y / 4) & 15;
     unsigned char id[16];
-    for (int i = 0; i < 16; i++) id[i] = i;
     unsigned char sw[16];
-    for (int i = 0; i < 16; i++) sw[i] = i;
-    sw[1] = 2;
-    sw[2] = 1;
+    int i;
+    fill_sprite_shape(spr, 32, 32);
+    for (i = 0; i < 16; i++) { id[i] = i; sw[i] = i; }
+    sw[2] = 12;
+    sw[12] = 2;
     text("blit", 24, 22, 12);
     blit(spr, 32, 30, 32, 32, 16);
     text("blitm id", 116, 22, 12);
     blitm(spr, 128, 30, 32, 32, 16, id);
-    text("blitm 1<->2", 206, 22, 12);
+    text("blitm 2<->12", 206, 22, 12);
     blitm(spr, 224, 30, 32, 32, 16, sw);
   } break;
   case 14: {
     unsigned char spr[32 * 32];
-    for (int y = 0; y < 32; y++)
-      for (int x = 0; x < 32; x++)
-        spr[y * 32 + x] = (x / 4 + y / 4) & 15;
     unsigned char id[16];
-    for (int i = 0; i < 16; i++) id[i] = i;
     unsigned char inv[16];
-    for (int i = 0; i < 16; i++) inv[i] = 15 - i;
+    int i;
+    fill_sprite_shape(spr, 32, 32);
+    for (i = 0; i < 16; i++) { id[i] = i; inv[i] = 15 - i; }
     text("blit", 24, 22, 12);
     blit(spr, 32, 30, 32, 32, 16);
     text("blitm id", 116, 22, 12);
@@ -182,16 +194,15 @@ static void draw_case(int c) {
   } break;
   case 15: {
     unsigned char spr[32 * 32];
-    for (int y = 0; y < 32; y++)
-      for (int x = 0; x < 32; x++)
-        spr[y * 32 + x] = (x / 4 + y / 4) & 15;
     unsigned char inv[16];
-    for (int i = 0; i < 16; i++) inv[i] = 15 - i;
-    text("blit key=0", 12, 22, 12);
+    int i;
+    fill_sprite_shape(spr, 32, 32);
+    for (i = 0; i < 16; i++) inv[i] = 15 - i;
+    text("blit k=0", 18, 22, 12);
     blit(spr, 32, 30, 32, 32, 0);
-    text("blitm inv key=0", 116, 22, 12);
+    text("inv k=0", 128, 22, 12);
     blitm(spr, 128, 30, 32, 32, 0, inv);
-    text("blitm inv key=15", 222, 22, 12);
+    text("inv k=15", 222, 22, 12);
     blitm(spr, 224, 30, 32, 32, 15, inv);
   } break;
   }
@@ -216,6 +227,23 @@ VEX_EXPORT("boot") void boot(void) {
 }
 
 VEX_EXPORT("update") void update(void) {
+  if (btnp(VEX_RIGHT) && phase < NUM_CASES - 1) {
+    phase++;
+    frame = 0;
+    cls(0);
+    draw_case(phase);
+    draw_header();
+    return;
+  }
+  if (btnp(VEX_LEFT) && phase > 0) {
+    phase--;
+    frame = 0;
+    cls(0);
+    draw_case(phase);
+    draw_header();
+    return;
+  }
+
   if (phase >= NUM_CASES) {
     cls(0);
     text("DONE - test_blit", 88, VEX_HEIGHT / 2 - 4, 12);
@@ -224,8 +252,8 @@ VEX_EXPORT("update") void update(void) {
 
   if (frame == 0) {
     cls(0);
-    draw_header();
     draw_case(phase);
+    draw_header();
   }
 
   frame++;
