@@ -455,6 +455,10 @@ func (g *Game) circ(cx, cy, r int32, color uint32) {
 		r = VEX_COORD_MAX
 	}
 
+	if !g.coordOK(cx) || !g.coordOK(cy) {
+		return
+	}
+
 	x := r
 	y := int32(0)
 	err := int32(0)
@@ -482,6 +486,10 @@ func (g *Game) circb(cx, cy, r int32, color uint32) {
 
 	if r > VEX_COORD_MAX {
 		r = VEX_COORD_MAX
+	}
+
+	if !g.coordOK(cx) || !g.coordOK(cy) {
+		return
 	}
 
 	x := r
