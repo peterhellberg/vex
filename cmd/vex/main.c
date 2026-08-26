@@ -496,6 +496,46 @@ m3ApiRawFunction(host_blit) {
     m3ApiSuccess();
 }
 
+// blitm(data, x, y, w, h, key, map): like blit(), but each source palette index
+// is remapped through the 16-byte table at map before the palette lookup.
+m3ApiRawFunction(host_blitm) {
+    m3ApiGetArgMem(const uint8_t*, data)
+    m3ApiGetArg(int32_t, x)
+    m3ApiGetArg(int32_t, y)
+    m3ApiGetArg(int32_t, w)
+    m3ApiGetArg(int32_t, h)
+    m3ApiGetArg(int32_t, key)
+    m3ApiGetArgMem(const uint8_t*, map)
+    if (w <= 0 || h <= 0) m3ApiSuccess();
+    if (!COORDS_OK(x, y)) m3ApiSuccess();
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
+    if ((size_t)w > (size_t)-1 / (size_t)h) m3ApiSuccess();
+    m3ApiCheckMem(data, (size_t)w * (size_t)h);
+    m3ApiCheckMem(map, 16);
+    for (int32_t row = 0; row < h; row++) {
+        int32_t yy = y + row;
+        if (yy < 0 || yy >= VEX_H) continue;
+        uint32_t* dst = &g_fb[(size_t)yy * VEX_W];
+        const uint8_t* src = data + (size_t)row * w;
+        int32_t col = 0;
+        while (col < w) {
+            while (col < w && (uint32_t)src[col] == (uint32_t)key) col++;
+            if (col >= w) break;
+            int32_t start = col;
+            uint8_t run = src[col];
+            while (col < w && src[col] == run) col++;
+            int32_t sx = x + start;
+            int32_t ex = x + col;
+            if (sx < 0) sx = 0;
+            if (ex > VEX_W) ex = VEX_W;
+            uint32_t v = g_palette[map[run & 15] & 15];
+            for (; sx < ex; sx++) dst[sx] = v;
+        }
+    }
+    m3ApiSuccess();
+}
+
 m3ApiRawFunction(host_text) {
     m3ApiGetArgMem(const char*, s)
     m3ApiGetArg(int32_t, x)
@@ -920,6 +960,7 @@ static M3Result link_host(IM3Module mod) {
     LINK("tri",   "v(iiiiiii)", &host_tri);
     LINK("trib",  "v(iiiiiii)", &host_trib);
     LINK("blit",  "v(*iiiii)", &host_blit);
+    LINK("blitm", "v(*iiiii*)", &host_blitm);
     LINK("text",     "v(*iii)",  &host_text);
     LINK("title",    "v(*)",     &host_title);
     LINK("btn",      "i(i)",     &host_btn);
