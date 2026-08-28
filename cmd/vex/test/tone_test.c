@@ -102,19 +102,28 @@ int main(void) {
     g_audio_ready = true;
 
     // ---- duty cycle: 25% pulse flips at a quarter period --------------------
+    // The engine pads zero-length attacks to 32 samples, so verify duty
+    // after the fade-in where level is stable. Use the same double
+    // accumulation as the mixer (now double in all hosts) so the
+    // quarter-point lands on the same sample.
     {
         ToneTrigger quarter = mk_pulse(1000, 0, 0, 0, 4, 0);
-        quarter.duty = 0.25f;
-        fire_and_run(0, quarter, 32);
-        // Flip within one sample of the ideal quarter point: float32 phase
-        // accumulation may land a sample later than exact math.
-        int flips = -1;
-        for (unsigned i = 1; i < 32 && flips < 0; i++)
-            if (sample_at(i) < 0) flips = (int)i;
-        CHECK("duty 25%: samples before flip are high",
-              sample_at(0) > 0 && sample_at(10) > 0);
-        CHECK("duty 25%: flip lands near sample 12",
-              flips >= 11 && flips <= 13);
+        quarter.duty = 0.25;
+        fire_and_run(0, quarter, 96);
+        double ph = 0.0;
+        const double inc = 1000.0 / 48000.0;
+        int duty_bad = 0;
+        for (unsigned i = 0; i < 96; i++) {
+            int wantHigh = ph < 0.25;
+            if (i >= 32) {
+                int16_t s = sample_at(i);
+                if (wantHigh && s != 5656) duty_bad++;
+                if (!wantHigh && s != -5656) duty_bad++;
+            }
+            ph += inc;
+            if (ph >= 1.0) ph -= floor(ph);
+        }
+        CHECK("duty 25%: samples match 25% duty after padded attack", duty_bad == 0);
     }
 
     // ---- envelope: linear attack, flat sustain, linear release ---------------
@@ -164,13 +173,13 @@ int main(void) {
         CHECK("slide approaches 880 Hz", end_hz > 700 && end_hz < 1060);
     }
 
-    // ---- noise: LFSR taps and output mapping ---------------------------------
+    // ---- noise: LFSR taps, clock clamping, filtering and attack ---------------
     {
         ToneTrigger t = {0};
         t.kind = 1; // noise
         t.duty = 0.5f;
         t.f0 = 8000; // stepped at 16000 Hz: one step every third sample
-        t.frames[2] = 8; // sustain
+        t.frames[2] = 8; // sustain (padded attack 32)
         t.peak = 1.0f;
         t.sus = 1.0f;
         t.gl = 0.70710678f;
@@ -179,16 +188,37 @@ int main(void) {
 
         uint16_t lfsr = 0xACE1;
         double nph = 0.0;
+        double noiseRaw = 0.0;
+        double noiseLp = 0.0;
+        double level = 0.0;
+        const double slope = 1.0 / 32.0;
+        long segLeft = 32;
         int bad = 0;
         for (unsigned i = 0; i < 300; i++) {
-            nph += 2.0 * 8000.0 / 48000.0;
+            double nclk = 2.0 * 8000.0;
+            if (nclk < TONE_NOISE_CLK_MIN) nclk = TONE_NOISE_CLK_MIN;
+            if (nclk > TONE_NOISE_CLK_MAX) nclk = TONE_NOISE_CLK_MAX;
+            nph += nclk / 48000.0;
             while (nph >= 1.0) {
                 nph -= 1.0;
-                uint16_t fb = (uint16_t)(1u - (((lfsr >> 15) ^ (lfsr >> 13)) & 1));
+                uint16_t fb = (uint16_t)(1u - (((lfsr >> 14) ^ (lfsr >> 12)) & 1));
                 lfsr = (uint16_t)(lfsr << 1 | fb);
+                noiseRaw = (lfsr & 1) ? 1.0 : -1.0;
             }
-            int16_t want = (lfsr & 1) ? 5656 : -5656;
+            noiseLp += 0.18 * (noiseRaw - noiseLp);
+            double s = noiseLp * 1.4;
+            double v = s * 8000.0 * level * 0.70710678;
+            // soft-clip is linear below knee (5656 < 24000)
+            int16_t want = (int16_t)v;
             if (sample_at(i) != want) bad++;
+            if (segLeft > 0) segLeft--;
+            if (segLeft <= 0) {
+                level = 1.0;
+                segLeft = 6400;
+            } else {
+                level += slope;
+            }
+            if (i >= 31) level = 1.0;
         }
         CHECK("noise reproduces the reference LFSR", bad == 0);
     }
