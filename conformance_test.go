@@ -160,11 +160,11 @@ func TestToneTablesMatchAcrossHosts(t *testing.T) {
 	}
 
 	cs := section(mustRead(t, "cmd/vex/main.c"),
-		"static const float duty_table[4]", ";")
+		"duty_table[4]", ";")
 	cPan := section(mustRead(t, "cmd/vex/main.c"),
-		"static const float pan_l[3]", ";")
+		"pan_l[3]", ";")
 	cKnee := section(mustRead(t, "cmd/vex/main.c"),
-		"const float knee = ", ";")
+		"knee = ", ";")
 
 	gs := mustRead(t, "cmd/vex-run/main.go")
 	gd := floats(section(gs, "toneDutyTable = [4]float64{", "}"))
