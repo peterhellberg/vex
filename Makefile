@@ -34,7 +34,15 @@ CART ?= bin/carts/cart.wasm
 # Path to the bundled test directory (Playwright scripts).
 TEST_DIR := cmd/vex-web/test
 
-.PHONY: all run runz web test-web test-hosts install uninstall clean distclean test-deps docs
+# Recipes are silent and say what they are doing through STEP, so the output is
+# the work rather than the command lines that did it. The tools themselves still
+# write to the terminal untouched.
+STEP := @printf "\033[36m==>\033[0m %s\n"
+
+# Do not print entering directories
+MAKEFLAGS += --no-print-directory
+
+.PHONY: all run runz web test-web test-hosts install uninstall clean distclean test-deps docs help
 .PHONY: release release-linux release-windows release-macos
 
 # Version stamped into every archive name. Single source of truth: the SDK
@@ -47,21 +55,24 @@ VERSION := $(shell awk -F'"' '/\.version/ {print $$2; exit}' build.zig.zon)
 RELEASE_DIR := release
 STAGING_DIR := $(RELEASE_DIR)/staging
 
+##@ Build
+
 # Build every binary into ./bin. `--prefix .` makes Zig install into ./bin
 # (its exe dir under the prefix). The host package is built from cmd/vex/
 # with `--prefix ../..` so it lands in the same ./bin.
-all:
+all: ## Build vex + vex-init + vex-web + carts into ./bin
 	zig build --prefix . --release=fast
 	cd cmd/vex && zig build --prefix ../.. --release=fast
 	go build -o bin/vex-web ./cmd/vex-web
 	go build -o bin/vex-run ./cmd/vex-run
 
-run: all
+run: all ## Build and run the C example cart
 	cd cmd/vex && zig build run
 
-runz: all
+runz: all ## Build and run the Zig example cart
 	cd cmd/vex && zig build runz
 
+web: ## Serve the browser build (CART=... to override)
 web:
 	zig build --prefix .
 	go run ./cmd/vex-web $(CART)
@@ -85,8 +96,10 @@ web:
 #   - cmd/vex: the real audio section extracted from main.c and driven
 #     through the same trigger path carts use, compiled with zig cc (the
 #     only C compiler this repo uses)
+##@ Test
+
 .PHONY: test-hosts
-test-hosts:
+test-hosts: ## Run Go and C conformance tests
 	cd cmd/vex-run && go test ./...
 	go test ./...
 	@awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
@@ -96,7 +109,7 @@ test-hosts:
 	@cmd/vex/test/tone_test.bin
 	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
 
-test-web: $(TEST_DIR)/node_modules/.package-lock.json
+test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser tests
 	zig build --prefix .
 	cd $(TEST_DIR) && node test_gamepad.js $(CURDIR)/$(CART)
 	rm -rf $(CURDIR)/bundle
@@ -109,31 +122,34 @@ $(TEST_DIR)/node_modules/.package-lock.json: $(TEST_DIR)/package.json
 	@touch $@
 
 # Alias for "I just want the deps to be ready" — useful in CI.
-test-deps: $(TEST_DIR)/node_modules/.package-lock.json
+test-deps: $(TEST_DIR)/node_modules/.package-lock.json ## Install test dependencies
 
+##@ Docs
 # Regenerates everything under docs/ (index.html, main.js, main.wasm,
 # sources.tar) from vex.zig. The artifacts are committed for GitHub Pages --
 # don't hand-edit them, rerun this target instead.
-docs:
+docs: ## Regenerate docs from vex.zig
 	rm -rf docs .docs-tmp
 	mkdir -p .docs-tmp
 	cp vex.zig .docs-tmp/
 	cd .docs-tmp && zig build-lib -fno-emit-bin -femit-docs=../docs vex.zig
 	rm -rf .docs-tmp
 
-install: all
+##@ Install
+install: all ## Install binaries to ~/.local/bin
 	mkdir -p $(BINDIR)
 	install -m 0755 bin/vex $(BINDIR)/vex
 	install -m 0755 bin/vex-init $(BINDIR)/vex-init
 	install -m 0755 bin/vex-web $(BINDIR)/vex-web
 	install -m 0755 bin/vex-run $(BINDIR)/vex-run
 
-uninstall:
+uninstall: ## Remove installed binaries
 	rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web $(BINDIR)/vex-run
 
+##@ Maintenance
 # Remove build artifacts. Fetched Zig packages (zig-pkg/) and the Playwright
 # node_modules are deliberately kept so the next build starts warm.
-clean:
+clean: ## Remove build artifacts
 	rm -rf bin zig-out .zig-cache cmd/vex/zig-out cmd/vex/.zig-cache
 	rm -rf $(RELEASE_DIR)
 
@@ -141,9 +157,20 @@ clean:
 # packages (raylib, wasm3, xcode_frameworks under cmd/vex/zig-pkg) and the
 # Playwright node_modules/Chromium install. Back to a fresh-checkout state;
 # the next build re-fetches and recompiles dependencies from scratch.
-distclean: clean
+distclean: clean ## Remove all build and fetched artifacts
 	rm -rf zig-pkg cmd/vex/zig-pkg
 	rm -rf $(TEST_DIR)/node_modules
+
+# Targets are documented by a ## comment on the target line, and
+# grouped by the ##@ markers above them. Anything without a ## is
+# plumbing and stays out of the list.
+help: ## Show this help text
+	@printf "Usage: make \033[32m<target>\033[0m, or plain \033[32mmake\033[0m to build.\n"
+	@awk 'BEGIN {FS = ":.*?## "} \
+    /^##@ / {printf "\n\033[1m%s\033[0m\n", substr($$0, 5); next} \
+    /^[a-zA-Z_\/-]+:.*?## / {printf "  \033[32m%-29s\033[0m %s\n", $$1, $$2}' \
+    $(MAKEFILE_LIST)
+
 
 # --- release ---------------------------------------------------------------
 #
@@ -189,13 +216,15 @@ endef
 # isn't worth the complexity here. The Go binary is already stripped at
 # build time via -s -w.
 
+##@ Release
+
 # Linux: build native. The SDK package has no raylib dep, so the
 # linux_display_backend option is host-only; we forward it to the host
 # build.zig (cmd/vex/) where it controls which GL/display backend raylib
 # pulls in. The default is X11; a Wayland-only user can override via the
 # environment without editing the Makefile.
 release-linux: export LINUX_DISPLAY_BACKEND ?= X11
-release-linux:
+release-linux: ## Build Linux release archive
 	@mkdir -p $(STAGING_DIR)/linux-amd64/vex-$(VERSION)
 	zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
 		-Dtarget=native --release=fast
@@ -210,7 +239,7 @@ release-linux:
 
 # Windows: cross-compile. raylib + wasm3 + the wasm3 -Dd_m3Use32BitSlots=0
 # flag all flow through the host build.zig unchanged.
-release-windows:
+release-windows: ## Build Windows release archive
 	@mkdir -p $(STAGING_DIR)/windows-amd64/vex-$(VERSION)
 	zig build --prefix $(CURDIR)/$(STAGING_DIR)/windows-amd64/vex-$(VERSION) \
 		-Dtarget=x86_64-windows-gnu --release=fast
@@ -228,7 +257,7 @@ release-windows:
 # macOS: cross-compile via the xcode_frameworks stubs. The host build.zig
 # detects `.macos` and adds the stub include + framework + lib paths to
 # raylib; nothing extra is needed at the Makefile level.
-release-macos:
+release-macos: ## Build macOS release archive
 	@mkdir -p $(STAGING_DIR)/macos-aarch64/vex-$(VERSION)
 	zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-aarch64/vex-$(VERSION) \
 		-Dtarget=aarch64-macos --release=fast
@@ -245,7 +274,7 @@ release-macos:
 		-C $(STAGING_DIR)/macos-aarch64 vex-$(VERSION)
 	@echo "==> $(RELEASE_DIR)/vex-$(VERSION)-macos-aarch64.tar.gz"
 
-release: release-linux release-windows release-macos
+release: release-linux release-windows release-macos ## Build all release archives
 	@echo ""
 	@echo "Release archives:"
 	@ls -lh $(RELEASE_DIR)/*.tar.gz $(RELEASE_DIR)/*.zip 2>/dev/null
