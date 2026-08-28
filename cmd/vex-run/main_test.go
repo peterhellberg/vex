@@ -125,13 +125,14 @@ func TestTriFixture(t *testing.T) {
 func TestToneEngineReadPhaseAndEnd(t *testing.T) {
 	e := &toneEngine{}
 
-	// Sustain 5 frames (400 samples at 48kHz) with no attack/decay/release:
-	// zero-length segments snap straight to the sustain level, so the very
-	// first sample is a full-volume positive pulse sample. flags 0 selects
-	// channel 0, 50% duty, and center panning (constant-power ~0.707).
+	// Sustain 5 frames with no attack/decay/release: the engine pads
+	// zero-length attacks to 32 samples (~0.66 ms) to avoid clicks, so
+	// the first 32 samples ramp 0 -> full and the rest holds sustain.
+	// flags 0 selects channel 0, 50% duty, and center panning
+	// (constant-power ~0.707).
 	e.tone(100, 5, 100, 0)
 
-	buf := make([]byte, 4*16)
+	buf := make([]byte, 4*64)
 	n, err := e.Read(buf)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
@@ -140,19 +141,34 @@ func TestToneEngineReadPhaseAndEnd(t *testing.T) {
 		t.Fatalf("Read returned %d bytes, want %d", n, len(buf))
 	}
 
+	// First sample starts at silence due to the padded attack.
+	if l := int16(binary.LittleEndian.Uint16(buf[0:])); l != 0 {
+		t.Fatalf("frame 0: L = %d, want 0 (padded attack)", l)
+	}
+	if r := int16(binary.LittleEndian.Uint16(buf[2:])); r != 0 {
+		t.Fatalf("frame 0: R = %d, want 0 (padded attack)", r)
+	}
+	// After the 32-sample fade-in the pulse is at full scale.
 	want := int16(5656) // 8000 * constant-power center gain, truncated
-	for i := range 16 {
+	for i := 32; i < 48; i++ {
 		l := int16(binary.LittleEndian.Uint16(buf[i*4:]))
 		r := int16(binary.LittleEndian.Uint16(buf[i*4+2:]))
 		if l != want || r != want {
 			t.Fatalf("frame %d: L/R = %d/%d, want %d/%d", i, l, r, want, want)
 		}
 	}
+	// Still in sustain a few hundred samples later.
+	for i := 32; i < 64; i++ {
+		l := int16(binary.LittleEndian.Uint16(buf[i*4:]))
+		if l != want {
+			t.Fatalf("frame %d: L = %d, want %d", i, l, want)
+		}
+	}
 
-	// The voice ends after sustain+release frames; past the end the stream
-	// is silence and never returns io.EOF.
-	e.tone(1, 1, 100, 0) // retrigger: 1 frame of sustain, no release
-	whole := make([]byte, 4*(toneRate/60))
+	// The voice ends after attack+sustain+release frames; past the end
+	// the stream is silence and never returns io.EOF.
+	e.tone(1, 1, 100, 0) // retrigger: 1 frame of sustain, no release (padded to 32+800)
+	whole := make([]byte, 4*(toneRate/60+32))
 	if n, err := e.Read(whole); err != nil || n != len(whole) {
 		t.Fatalf("voice-length Read = (%d, %v)", n, err)
 	}
@@ -172,15 +188,21 @@ func TestToneEngineKillAndClamps(t *testing.T) {
 
 	// A sustained voice silenced by the kill idiom on another channel's
 	// trigger must not keep sounding: kill only affects its own channel.
+	// The padded 32-sample attack means sample 0 is silence; check after
+	// the fade-in.
 	e.tone(440, 10, 100, 0) // channel 0 sustains for 10 frames
 	e.tone(262, 0, 0, 3)    // channel 3: all-zero duration is a no-op
-	buf := make([]byte, 4*16)
+	buf := make([]byte, 4*64)
 	if _, err := e.Read(buf); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	l := int16(binary.LittleEndian.Uint16(buf[0:]))
+	// First sample is silence due to attack padding.
+	if l := int16(binary.LittleEndian.Uint16(buf[0:])); l != 0 {
+		t.Fatalf("frame 0 should be silence due to padded attack, got %d", l)
+	}
+	l := int16(binary.LittleEndian.Uint16(buf[32*4:]))
 	if l == 0 {
-		t.Fatal("channel 0 should still sound; kill on channel 3 leaked")
+		t.Fatal("channel 0 should still sound after attack; kill on channel 3 leaked")
 	}
 
 	// Extreme arguments clamp instead of misbehaving.
@@ -193,21 +215,28 @@ func TestToneEngineKillAndClamps(t *testing.T) {
 func TestToneEngineDutyFlipsAtQuarter(t *testing.T) {
 	e := &toneEngine{}
 	// 1000 Hz pulse, 25% duty (MODE1), sustained flat: phase advances
-	// freq/rate per sample, so the flip lands at sample 12 (0.25*48000/1000).
+	// freq/rate per sample, period 48 samples. The padded 32-sample
+	// attack ramps level 0->1, so check after the fade-in where level
+	// is stable and phase is deterministic (ph = i*freq/rate %1).
 	e.tone(1000, 4, 100, 1<<2)
 
-	buf := make([]byte, 4*32)
+	buf := make([]byte, 4*96)
 	if _, err := e.Read(buf); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 	sample := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
-	for i := 0; i < 12; i++ {
-		if sample(i) <= 0 {
-			t.Fatalf("sample %d should be high before the 25%% flip point", i)
+	// After attack the envelope is at full scale, so magnitude is 5656.
+	for i := 32; i < 96; i++ {
+		ph := float64(i) * 1000.0 / float64(toneRate)
+		ph -= float64(int(ph))
+		wantHigh := ph < 0.25
+		s := sample(i)
+		if wantHigh && s != 5656 {
+			t.Fatalf("sample %d ph=%.3f should be high 5656, got %d", i, ph, s)
 		}
-	}
-	if sample(12) >= 0 {
-		t.Fatal("sample 12 should be low after the 25% flip point")
+		if !wantHigh && s != -5656 {
+			t.Fatalf("sample %d ph=%.3f should be low -5656, got %d", i, ph, s)
+		}
 	}
 }
 
@@ -299,24 +328,54 @@ func TestToneNoiseMatchesLFSR(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	get := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
-	// Stepped at 2*freq = 16000 Hz: one LFSR step every third sample. The
-	// reference mirrors that cadence while independently reproducing the
-	// tap/bit0 math, so any drift in either shows up as a sign flip.
+	// Noise: 15-bit LFSR with taps 14/12, clock clamped to
+	// [8000,48000] (2*freq = 16000 here), one-pole lowpass at 0.18
+	// with 1.4 gain, and the padded 32-sample attack. Reference
+	// mirrors that exactly so any tap/clock/filter/attack drift
+	// shows up as a sample mismatch.
 	lfsr := uint16(0xACE1)
 	nph := 0.0
+	noiseRaw := 0.0
+	noiseLp := 0.0
+	level := 0.0
+	slope := 1.0 / 32
+	segLeft := int64(32)
 	for i := range 300 {
-		nph += 2 * 8000.0 / toneRate
+		nclk := 2 * 8000.0
+		if nclk < toneNoiseClkMin {
+			nclk = toneNoiseClkMin
+		}
+		if nclk > toneNoiseClkMax {
+			nclk = toneNoiseClkMax
+		}
+		nph += nclk / toneRate
 		for nph >= 1 {
 			nph--
-			fb := uint16(1 - (((lfsr >> 15) ^ (lfsr >> 13)) & 1))
+			fb := uint16(1 - (((lfsr >> 14) ^ (lfsr >> 12)) & 1))
 			lfsr = lfsr<<1 | fb
+			if lfsr&1 == 1 {
+				noiseRaw = 1
+			} else {
+				noiseRaw = -1
+			}
 		}
-		want := int16(5656) // 8000 * constant-power center gain
-		if lfsr&1 == 0 {
-			want = -want
-		}
+		noiseLp += 0.18 * (noiseRaw - noiseLp)
+		s := noiseLp * 1.4
+		want := int16(s * toneFullAmp * level * tonePanL[0])
 		if get(i) != want {
-			t.Fatalf("sample %d = %d, want %d", i, get(i), want)
+			t.Fatalf("sample %d = %d, want %d (lfsr=%04x lp=%.4f level=%.4f)", i, get(i), want, lfsr, noiseLp, level)
+		}
+		if segLeft > 0 {
+			segLeft--
+		}
+		if segLeft <= 0 {
+			level = 1
+			segLeft = 6400 // sustain remainder, large enough for 300 samples
+		} else {
+			level += slope
+		}
+		if i >= 31 {
+			level = 1
 		}
 	}
 }
