@@ -154,10 +154,10 @@ pub fn toneSlide(freq: i32, to: i32) i32 {
 
 /// ADSR duration in frames (each segment clamps to 0..255).
 pub const ToneDuration = struct {
+    attack: i32 = 0,
+    decay: i32 = 0,
     sustain: i32 = 0,
     release: i32 = 0,
-    decay: i32 = 0,
-    attack: i32 = 0,
 
     pub fn pack(d: ToneDuration) i32 {
         return toneByte(d.sustain) |
@@ -194,10 +194,10 @@ pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
 pub const Note = struct {
     channel: i32,
     freq: i32,
+    attack: i32 = 0,
+    decay: i32 = 0,
     sustain: i32 = 12,
     release: i32 = 4,
-    decay: i32 = 0,
-    attack: i32 = 0,
     volume: i32 = 100,
     peak: i32 = 0,
     mode: i32 = TONE_MODE0,
