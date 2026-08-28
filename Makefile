@@ -42,7 +42,8 @@ STEP := @printf "\033[32m==>\033[0m %s\n"
 # Do not print entering directories
 MAKEFLAGS += --no-print-directory
 
-.PHONY: all run runz web test-web test-hosts install uninstall clean distclean test-deps docs help
+.PHONY: all run runz web test test-web test-hosts
+.PHONY: install uninstall clean distclean test-deps docs help
 .PHONY: release release-linux release-windows release-macos
 
 # Version stamped into every archive name. Single source of truth: the SDK
@@ -118,6 +119,8 @@ test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser 
 	@zig build --prefix .
 	@cd $(TEST_DIR) && node test_gamepad.js $(CURDIR)/$(CART)
 	@rm -rf $(CURDIR)/bundle
+
+test: test-hosts test-web ## Run all tests
 
 # `npm install` only runs the first time and on dep changes; the
 # timestamp file is our cheap "did we install?" marker.
