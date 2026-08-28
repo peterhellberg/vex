@@ -185,14 +185,14 @@ pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
         (extra & ~@as(i32, 3 | (3 << 2)));
 }
 
-/// One-shot description of a note to play. Every field except `channel` and
-/// `freq` has a sensible default, so simple notes are one line:
+/// One-shot description of a note to play. Every field except `freq` has a
+/// sensible default, so simple notes are one line:
 ///
 /// ```zig
-/// try vex.Note{ .channel = 0, .freq = 262 }.play();
+/// try vex.play(.{ .freq = 262 });
 /// ```
 pub const Note = struct {
-    channel: i32,
+    channel: i32 = 0,
     freq: i32,
     attack: i32 = 0,
     decay: i32 = 0,
@@ -227,6 +227,11 @@ pub const Note = struct {
         );
     }
 };
+
+/// Play `note` — `vex.play(.{ .freq = 440 })`.
+pub fn play(note: Note) void {
+    note.play();
+}
 
 /// Silence `channel` immediately: an all-zero duration ends whatever the
 /// voice is playing.
