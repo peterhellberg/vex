@@ -89,12 +89,12 @@ web:
 test-hosts:
 	cd cmd/vex-run && go test ./...
 	go test ./...
-	awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
+	@awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
 		cmd/vex/main.c > cmd/vex/test/audio_section.inc
-	zig cc -std=c2x -I cmd/vex/test -o cmd/vex/test/tone_test.bin \
+	zig cc -std=c2x -Wno-gcc-install-dir-libstdcxx -I cmd/vex/test -o cmd/vex/test/tone_test.bin \
 		cmd/vex/test/tone_test.c -lm -lpthread
-	cmd/vex/test/tone_test.bin
-	rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
+	@cmd/vex/test/tone_test.bin
+	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
 
 test-web: $(TEST_DIR)/node_modules/.package-lock.json
 	zig build --prefix .
