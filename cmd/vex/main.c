@@ -21,16 +21,11 @@
 #include "rlgl.h"
 #include "wasm3.h"
 
-#define VEX_W 320 // logical screen width  (keep in sync with vex.h)
-#define VEX_H 180 // logical screen height (keep in sync with vex.h)
-#define VEX_SCALE                                                              \
-  3 // default window pixels per logical pixel (override with -s)
-#define VEX_SCALE_MAX                                                          \
-  20 // -s/--scale: upper clamp. A too-large scale can drive
-     // the window beyond the metal device's max texture
-     // size and trip MTLTextureDescriptorValidation.
-#define VEX_WATCH_FRAMES                                                       \
-  30 // -w/--watch: poll the cart's mtime every ~0.5s (at 60fps)
+#define VEX_W 320
+#define VEX_H 180
+#define VEX_SCALE 3
+#define VEX_SCALE_MAX 20
+#define VEX_WATCH_FRAMES 30
 
 // Default SWEETIE-16 palette: 16 colors, indexed 0..15. Carts can override
 // entries at runtime via pal()/palreset(); `palette` holds the live colors.
@@ -43,13 +38,9 @@ static const Color DEFAULT_PALETTE[16] = {
     {51, 60, 87, 255},
 };
 
-// Live palette as packed RGBA. Byte order in memory is R,G,B,A -- identical
-// to the Go host's pixel buffer, so framebuffer hashes compare across hosts.
 static uint32_t g_palette[16];
-
-static inline uint32_t pack_rgba(int r, int g, int b) {
-  return (uint32_t)r | (uint32_t)g << 8 | (uint32_t)b << 16 | 0xFFu << 24;
-}
+#define pack_rgba(r, g, b)                                                     \
+  ((uint32_t)(r) | (uint32_t)(g) << 8 | (uint32_t)(b) << 16 | 0xFFu << 24)
 
 // The software framebuffer. Carts rasterize here with plain stores, and the
 // finished frame is uploaded to the GPU exactly once per frame. This replaces
@@ -307,61 +298,49 @@ m3ApiRawFunction(host_rectb) {
 // hline() the Go and JS hosts use, so circ()/circb()/tri() land on identical
 // pixels everywhere (see fb_hline above).
 
+static void circ_draw(int32_t x, int32_t y, int32_t r, uint32_t c, bool fill) {
+  if (r < 0)
+    r = 0;
+  if (r > VEX_COORD_MAX)
+    r = VEX_COORD_MAX;
+  if (!COORDS_OK(x, y))
+    return;
+  int32_t rx = r, ry = 0, err = 0;
+  while (rx >= ry) {
+    if (fill) {
+      fb_hline(y + ry, x - rx, x + rx, c);
+      fb_hline(y + rx, x - ry, x + ry, c);
+      fb_hline(y - ry, x - rx, x + rx, c);
+      fb_hline(y - rx, x - ry, x + ry, c);
+    } else {
+      fb_pset(x + rx, y + ry, c);
+      fb_pset(x + ry, y + rx, c);
+      fb_pset(x - ry, y + rx, c);
+      fb_pset(x - rx, y + ry, c);
+      fb_pset(x - rx, y - ry, c);
+      fb_pset(x - ry, y - rx, c);
+      fb_pset(x + ry, y - rx, c);
+      fb_pset(x + rx, y - ry, c);
+    }
+    ry++;
+    if (err <= 0)
+      err += 2 * ry + 1;
+    else {
+      rx--;
+      err += 2 * (ry - rx) + 1;
+    }
+  }
+}
 m3ApiRawFunction(host_circ) {
   m3ApiGetArg(int32_t, x) m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, r)
-      m3ApiGetArg(int32_t, color) if (r < 0) r = 0;
-  if (r > VEX_COORD_MAX)
-    r = VEX_COORD_MAX;
-  if (!COORDS_OK(x, y))
-    m3ApiSuccess();
-  // Midpoint circle algorithm, filled with horizontal spans -- byte-for-byte
-  // the circ() of the Go and JS hosts.
-  uint32_t c = g_palette[(unsigned)(color) & 15];
-  int32_t rx = r, ry = 0, err = 0;
-  while (rx >= ry) {
-    fb_hline(y + ry, x - rx, x + rx, c);
-    fb_hline(y + rx, x - ry, x + ry, c);
-    fb_hline(y - ry, x - rx, x + rx, c);
-    fb_hline(y - rx, x - ry, x + ry, c);
-    ry++;
-    if (err <= 0) {
-      err += 2 * ry + 1;
-    } else {
-      rx--;
-      err += 2 * (ry - rx) + 1;
-    }
-  }
+      m3ApiGetArg(int32_t, color)
+          circ_draw(x, y, r, g_palette[(unsigned)color & 15], true);
   m3ApiSuccess();
 }
-
 m3ApiRawFunction(host_circb) {
   m3ApiGetArg(int32_t, x) m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, r)
-      m3ApiGetArg(int32_t, color) if (r < 0) r = 0;
-  if (r > VEX_COORD_MAX)
-    r = VEX_COORD_MAX;
-  if (!COORDS_OK(x, y))
-    m3ApiSuccess();
-  // Midpoint circle outline, 8-way symmetric single pixels -- matching the
-  // Go and JS hosts.
-  uint32_t c = g_palette[(unsigned)(color) & 15];
-  int32_t rx = r, ry = 0, err = 0;
-  while (rx >= ry) {
-    fb_pset(x + rx, y + ry, c);
-    fb_pset(x + ry, y + rx, c);
-    fb_pset(x - ry, y + rx, c);
-    fb_pset(x - rx, y + ry, c);
-    fb_pset(x - rx, y - ry, c);
-    fb_pset(x - ry, y - rx, c);
-    fb_pset(x + ry, y - rx, c);
-    fb_pset(x + rx, y - ry, c);
-    ry++;
-    if (err <= 0) {
-      err += 2 * ry + 1;
-    } else {
-      rx--;
-      err += 2 * (ry - rx) + 1;
-    }
-  }
+      m3ApiGetArg(int32_t, color)
+          circ_draw(x, y, r, g_palette[(unsigned)color & 15], false);
   m3ApiSuccess();
 }
 
@@ -473,31 +452,8 @@ m3ApiRawFunction(host_trib) {
   m3ApiSuccess();
 }
 
-// blit(data, x, y, w, h, key): draw a w*h bitmap of palette indices (one byte
-// per pixel) with its top-left at (x, y). Pixels equal to key are skipped, so a
-// key outside 0..15 (e.g. -1) draws every pixel.
-m3ApiRawFunction(host_blit) {
-  m3ApiGetArgMem(const uint8_t *, data) m3ApiGetArg(int32_t, x)
-      m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, w) m3ApiGetArg(int32_t, h)
-          m3ApiGetArg(int32_t, key) if (w <= 0 || h <= 0) m3ApiSuccess();
-  if (!COORDS_OK(x, y))
-    m3ApiSuccess();
-  // Cap w and h to the framebuffer so a malformed cart can't make wasm3 walk
-  // a multi-gigabyte memory range inside m3ApiCheckMem (DoS via stalled
-  // validation) or stall the host drawing millions of pixels per frame.
-  if (w > VEX_W)
-    w = VEX_W;
-  if (h > VEX_H)
-    h = VEX_H;
-  if ((size_t)w > (size_t)-1 / (size_t)h)
-    m3ApiSuccess();
-  m3ApiCheckMem(data, (size_t)w * (size_t)h);
-  // Batch horizontal runs of equal, non-key pixels into one clipped span
-  // fill per run. For a typical sprite (palette entries repeated per row)
-  // this is several times fewer inner-loop iterations than per-pixel
-  // stores; for key=-1 ("draw every pixel") each row collapses to a single
-  // contiguous span. Rows outside the framebuffer are skipped and x spans
-  // are clipped, matching the Go host's blit().
+static void blit_rows(const uint8_t *data, int32_t x, int32_t y, int32_t w,
+                      int32_t h, int32_t key, const uint8_t *map) {
   for (int32_t row = 0; row < h; row++) {
     int32_t yy = y + row;
     if (yy < 0 || yy >= VEX_H)
@@ -507,29 +463,40 @@ m3ApiRawFunction(host_blit) {
     int32_t col = 0;
     while (col < w) {
       while (col < w && (uint32_t)src[col] == (uint32_t)key)
-        col++; // transparent run
+        col++;
       if (col >= w)
         break;
       int32_t start = col;
       uint8_t run = src[col];
       while (col < w && src[col] == run)
-        col++; // solid run
-      int32_t sx = x + start;
-      int32_t ex = x + col;
+        col++;
+      int32_t sx = x + start, ex = x + col;
       if (sx < 0)
         sx = 0;
       if (ex > VEX_W)
         ex = VEX_W;
-      uint32_t v = g_palette[run & 15];
+      uint32_t v = map ? g_palette[map[run & 15] & 15] : g_palette[run & 15];
       for (; sx < ex; sx++)
         dst[sx] = v;
     }
   }
+}
+m3ApiRawFunction(host_blit) {
+  m3ApiGetArgMem(const uint8_t *, data) m3ApiGetArg(int32_t, x)
+      m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, w) m3ApiGetArg(int32_t, h)
+          m3ApiGetArg(int32_t, key) if (w <= 0 || h <= 0) m3ApiSuccess();
+  if (!COORDS_OK(x, y))
+    m3ApiSuccess();
+  if (w > VEX_W)
+    w = VEX_W;
+  if (h > VEX_H)
+    h = VEX_H;
+  if ((size_t)w > (size_t)-1 / (size_t)h)
+    m3ApiSuccess();
+  m3ApiCheckMem(data, (size_t)w * (size_t)h);
+  blit_rows(data, x, y, w, h, key, NULL);
   m3ApiSuccess();
 }
-
-// blitm(data, x, y, w, h, key, map): like blit(), but each source palette index
-// is remapped through the 16-byte table at map before the palette lookup.
 m3ApiRawFunction(host_blitm) {
   m3ApiGetArgMem(const uint8_t *, data) m3ApiGetArg(int32_t, x)
       m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, w) m3ApiGetArg(int32_t, h)
@@ -546,33 +513,7 @@ m3ApiRawFunction(host_blitm) {
     m3ApiSuccess();
   m3ApiCheckMem(data, (size_t)w * (size_t)h);
   m3ApiCheckMem(map, 16);
-  for (int32_t row = 0; row < h; row++) {
-    int32_t yy = y + row;
-    if (yy < 0 || yy >= VEX_H)
-      continue;
-    uint32_t *dst = &g_fb[(size_t)yy * VEX_W];
-    const uint8_t *src = data + (size_t)row * w;
-    int32_t col = 0;
-    while (col < w) {
-      while (col < w && (uint32_t)src[col] == (uint32_t)key)
-        col++;
-      if (col >= w)
-        break;
-      int32_t start = col;
-      uint8_t run = src[col];
-      while (col < w && src[col] == run)
-        col++;
-      int32_t sx = x + start;
-      int32_t ex = x + col;
-      if (sx < 0)
-        sx = 0;
-      if (ex > VEX_W)
-        ex = VEX_W;
-      uint32_t v = g_palette[map[run & 15] & 15];
-      for (; sx < ex; sx++)
-        dst[sx] = v;
-    }
-  }
+  blit_rows(data, x, y, w, h, key, map);
   m3ApiSuccess();
 }
 
@@ -644,23 +585,19 @@ m3ApiRawFunction(host_btnp) {
   m3ApiReturn(held && !prev);
 }
 
-// Mouse position, mapped from window space into logical screen coordinates
-// and clamped to the framebuffer (0..W-1 / 0..H-1), matching the Go host and
-// the documented API range.
-static inline int32_t clampi32(int32_t v, int32_t lo, int32_t hi) {
-  return v < lo ? lo : (v > hi ? hi : v);
+static int32_t mouse_axis(bool isX) {
+  if (!g_window_open)
+    return 0;
+  float c = isX ? GetMouseX() : GetMouseY(), o = isX ? g_view_ox : g_view_oy,
+        s = g_view_scale;
+  int32_t v = (int32_t)((c - o) / s), lim = isX ? VEX_W : VEX_H;
+  return v < 0 ? 0 : v >= lim ? lim - 1 : v;
 }
-
 m3ApiRawFunction(host_mx) {
-  m3ApiReturnType(int32_t) if (!g_window_open) m3ApiReturn(0);
-  int32_t mx = (int32_t)((GetMouseX() - g_view_ox) / g_view_scale);
-  m3ApiReturn(clampi32(mx, 0, VEX_W - 1));
+  m3ApiReturnType(int32_t) m3ApiReturn(mouse_axis(true));
 }
-
 m3ApiRawFunction(host_my) {
-  m3ApiReturnType(int32_t) if (!g_window_open) m3ApiReturn(0);
-  int32_t my = (int32_t)((GetMouseY() - g_view_oy) / g_view_scale);
-  m3ApiReturn(clampi32(my, 0, VEX_H - 1));
+  m3ApiReturnType(int32_t) m3ApiReturn(mouse_axis(false));
 }
 
 // mbtn(button) -> held? 0 left, 1 right, 2 middle (raylib button indices).
@@ -709,23 +646,23 @@ m3ApiRawFunction(host_palreset) {
 #define VEX_TONE_CHANNELS 4
 
 typedef struct {
-  int kind;         // 0 pulse, 1 noise, 2 triangle
-  double duty;      // pulse flip point within the period (0..1)
-  double freq;      // current frequency in Hz
-  double freq_to;   // slide target Hz (0 = no slide)
+  int kind;          // 0 pulse, 1 noise, 2 triangle
+  double duty;       // pulse flip point within the period (0..1)
+  double freq;       // current frequency in Hz
+  double freq_to;    // slide target Hz (0 = no slide)
   double freq_start; // frequency at slide start
-  double freq_step; // per-sample slide delta (0 = no slide)
-  double ph;        // phase accumulator, 0..1
-  double nph;       // noise step accumulator
+  double freq_step;  // per-sample slide delta (0 = no slide)
+  double ph;         // phase accumulator, 0..1
+  double nph;        // noise step accumulator
   uint16_t lfsr;
   double noise_raw; // last raw LFSR output (+1/-1)
-  double noise_lp; // one-pole lowpassed noise value
+  double noise_lp;  // one-pole lowpassed noise value
 
-  int seg;          // 0 attack, 1 decay, 2 sustain, 3 release, 4 idle
-  long seg_left;    // samples remaining in the current segment
-  double level;     // envelope level 0..1
-  double slope;     // level change per sample in this segment
-  long seg_len[4];  // segment lengths in samples
+  int seg;           // 0 attack, 1 decay, 2 sustain, 3 release, 4 idle
+  long seg_left;     // samples remaining in the current segment
+  double level;      // envelope level 0..1
+  double slope;      // level change per sample in this segment
+  long seg_len[4];   // segment lengths in samples
   double seg_end[4]; // level each segment ramps toward
 
   double gl, gr; // constant-power pan gains
@@ -855,20 +792,16 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
 static void mix_callback(void *buffer, unsigned int frames) {
   float *out = buffer;
 
-  // Apply triggers parked by tone() since the last callback run.
   pthread_mutex_lock(&g_tone_lock);
-  for (int ch = 0; ch < VEX_TONE_CHANNELS; ch++) {
-    if (!g_pending_set[ch])
-      continue;
-    g_pending_set[ch] = false;
-    voice_apply(&g_voice[ch], &g_pending[ch]);
-  }
+  for (int ch = 0; ch < VEX_TONE_CHANNELS; ch++)
+    if (g_pending_set[ch]) {
+      g_pending_set[ch] = false;
+      voice_apply(&g_voice[ch], &g_pending[ch]);
+    }
   pthread_mutex_unlock(&g_tone_lock);
-
   const double rate = (double)g_stream.sampleRate;
   for (unsigned int pos = 0; pos < frames; pos++) {
     double l = 0.0, r = 0.0;
-
     for (int ch = 0; ch < VEX_TONE_CHANNELS; ch++) {
       ToneVoice *v = &g_voice[ch];
       if (v->seg > 3)
@@ -1275,6 +1208,10 @@ static bool parse_long(const char *s, long *out) {
   *out = v;
   return true;
 }
+static void usage(const char *p) {
+  fprintf(stderr, "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n",
+          p);
+}
 
 // FNV-1a 64-bit over the framebuffer -- cheap, deterministic, and identical
 // to what the Go host's golden tests compute over their pixel buffer, so a
@@ -1314,18 +1251,14 @@ int main(int argc, char **argv) {
       long v;
       if (i + 1 >= argc || !parse_long(argv[++i], &v)) {
         fprintf(stderr, "vex: %s requires an integer scale\n", a);
-        fprintf(stderr,
-                "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n",
-                argv[0]);
+        usage(argv[0]);
         return 1;
       }
       scale = (int)v;
     } else if (strcmp(a, "-n") == 0 || strcmp(a, "--frames") == 0) {
       if (i + 1 >= argc || !parse_long(argv[++i], &frames) || frames < 0) {
         fprintf(stderr, "vex: %s requires a frame count\n", a);
-        fprintf(stderr,
-                "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n",
-                argv[0]);
+        usage(argv[0]);
         return 1;
       }
     } else if (strcmp(a, "-t") == 0 || strcmp(a, "--trace") == 0) {
@@ -1340,17 +1273,14 @@ int main(int argc, char **argv) {
       watch = true;
     } else if (a[0] == '-') {
       fprintf(stderr, "vex: unknown option %s\n", a);
-      fprintf(stderr,
-              "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n",
-              argv[0]);
+      usage(argv[0]);
       return 1;
     } else if (cart_path == NULL) {
       cart_path = a;
     }
   }
   if (!cart_path) {
-    fprintf(stderr, "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n",
-            argv[0]);
+    usage(argv[0]);
     return 1;
   }
   if (scale < 1)
