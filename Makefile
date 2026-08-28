@@ -65,8 +65,8 @@ all: ## Build vex + vex-init + vex-web + carts into ./bin
 	$(STEP) "Building vex"
 	@zig build --prefix . --release=fast
 	@cd cmd/vex && zig build --prefix ../.. --release=fast
-	@go build -o bin/vex-web ./cmd/vex-web
-	@go build -o bin/vex-run ./cmd/vex-run
+	go build -o bin/vex-web ./cmd/vex-web
+	go build -o bin/vex-run ./cmd/vex-run
 
 run: all ## Build and run the C example cart
 	$(STEP) "Running C cart"
@@ -148,10 +148,10 @@ docs: ## Regenerate docs from vex.zig
 install: all ## Install binaries to ~/.local/bin
 	$(STEP) "Installing to $(BINDIR)"
 	@mkdir -p $(BINDIR)
-	@install -m 0755 bin/vex $(BINDIR)/vex
-	@install -m 0755 bin/vex-init $(BINDIR)/vex-init
-	@install -m 0755 bin/vex-web $(BINDIR)/vex-web
-	@install -m 0755 bin/vex-run $(BINDIR)/vex-run
+	install -m 0755 bin/vex $(BINDIR)/vex
+	install -m 0755 bin/vex-init $(BINDIR)/vex-init
+	install -m 0755 bin/vex-web $(BINDIR)/vex-web
+	install -m 0755 bin/vex-run $(BINDIR)/vex-run
 
 uninstall: ## Remove installed binaries
 	$(STEP) "Uninstalling"
