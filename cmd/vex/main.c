@@ -967,9 +967,10 @@ static M3Result link_host(IM3Module mod) {
   M3Result first_err = m3Err_none;
 #define LINK(name, sig, fn)                                                    \
   do {                                                                         \
-    M3Result r_ = m3_LinkRawFunction(mod, m, name, sig, fn);                   \
-    if (r_ && r_ != m3Err_functionLookupFailed && !first_err)                  \
-      first_err = r_;                                                          \
+    M3Result _vex_link_r = m3_LinkRawFunction(mod, m, name, sig, fn);          \
+    if (_vex_link_r && _vex_link_r != m3Err_functionLookupFailed &&           \
+        !first_err)                                                            \
+      first_err = _vex_link_r;                                                 \
   } while (0)
   LINK("cls", "v(i)", &host_cls);
   LINK("pset", "v(iii)", &host_pset);
