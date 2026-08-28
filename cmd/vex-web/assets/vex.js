@@ -407,11 +407,19 @@ const parkedTriggers = [null, null, null, null];
 function toneWorkletMain() {
 const SEG_SUSTAIN = 2, SEG_RELEASE = 3, SEG_IDLE = 4;
 
+// Noise channel clock bounds in Hz. Stepping the LFSR much below ~8 kHz
+// produces a raspy sample-and-hold buzz rather than hiss (each random value
+// is held for dozens of samples); above ~48 kHz it wastes cycles aliasing.
+// The clock tracks 2*freq so pitched-noise tricks still work, but is held
+// inside this band.
+const TONE_NOISE_CLK_MIN = 8000, TONE_NOISE_CLK_MAX = 48000;
+
 class ToneMixer extends AudioWorkletProcessor {
   constructor() {
     super();
     const mk = () => ({ kind: 0, duty: 0.5, freq: 0, freqTo: 0,
                         freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0xACE1,
+                        noiseRaw: 0, noiseLp: 0,
                         seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
                         segLen: [0, 0, 0, 0], segEnd: [0, 0, 0, 0],
                         gl: 0.70710678, gr: 0.70710678 });
@@ -453,6 +461,10 @@ class ToneMixer extends AudioWorkletProcessor {
     v.kind = t.kind; v.duty = t.duty;
     v.freqStart = t.f0; v.freqTo = t.f1; v.freq = t.f0; v.freqStep = 0;
     v.ph = 0; v.nph = 0; v.lfsr = 0xACE1;
+    v.noiseRaw = 0;
+    // Starting the noise filter from silence also gives noise hits a free
+    // natural fade-in over its first few dozen samples.
+    v.noiseLp = 0;
     v.gl = t.gl; v.gr = t.gr;
     const frames = t.frames;
     const ends = [t.peak, t.sus, t.sus, 0];
@@ -462,7 +474,15 @@ class ToneMixer extends AudioWorkletProcessor {
       v.segEnd[i] = ends[i];
       total += v.segLen[i];
     }
-    if (total <= 0) { v.seg = SEG_IDLE; v.level = 0; return; }
+    if (total <= 0) {
+      // The kill idiom: every segment empty silences the channel now.
+      v.seg = SEG_IDLE; v.level = 0; return;
+    }
+    // Pad zero-length attacks up to a sub-millisecond fade-in: jumping the
+    // level straight to peak on sample one of every note is an audible click
+    // per trigger. Only when there's a real note here (never on pure-release
+    // or the kill path above).
+    if (v.segLen[0] < 32) v.segLen[0] = 32;
     v.seg = -1; v.level = 0;
     this.nextSegment(v);
   }
@@ -491,14 +511,22 @@ class ToneMixer extends AudioWorkletProcessor {
         if (v.seg === SEG_IDLE) continue;
 
         let s;
-        if (v.kind === 1) { // noise: 15-bit LFSR stepped at 2*freq Hz
-          v.nph += 2 * v.freq / sampleRate;
+        if (v.kind === 1) { // noise: 15-bit LFSR, clock clamped to the crisp band
+          let nclk = 2 * v.freq;
+          if (nclk < TONE_NOISE_CLK_MIN) nclk = TONE_NOISE_CLK_MIN;
+          if (nclk > TONE_NOISE_CLK_MAX) nclk = TONE_NOISE_CLK_MAX;
+          v.nph += nclk / sampleRate;
           while (v.nph >= 1) {
             v.nph -= 1;
-            const fb = 1 - (((v.lfsr >> 15) ^ (v.lfsr >> 13)) & 1);
+            const fb = 1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1);
             v.lfsr = ((v.lfsr << 1) | fb) & 0xFFFF;
+            v.noiseRaw = (v.lfsr & 1) ? 1 : -1;
           }
-          s = (v.lfsr & 1) ? 1 : -1;
+          // One-pole lowpass rounds each raw step edge into a ramp: turns
+          // raw sample-and-hold hash into classic chip hiss. Higher
+          // coefficient = brighter/snapier; lower = darker.
+          v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp);
+          s = v.noiseLp * 1.4; // compensate filter gain loss
         } else if (v.kind === 2) { // triangle
           s = v.ph < 0.25 ? v.ph * 4
             : v.ph < 0.75 ? 2 - v.ph * 4
@@ -625,7 +653,14 @@ function unlockAudio()
 
     if (!audioCtx) {
         try {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            // Fixed 48 kHz matches the C and Go hosts so the same cart
+            // sounds identical everywhere; the browser resamples to the
+            // device rate.
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+            } catch (_) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
 
             // A one-sample silent buffer within the gesture makes iOS start
             // the audio pipeline for real; otherwise it can defer actual
