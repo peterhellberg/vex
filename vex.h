@@ -92,7 +92,7 @@ VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
 #define VEX_TONE_DUR_BYTE(v) ((v) < 0 ? 0 : (v) > 255 ? 255 : (v))
 
-#define VEX_TONE_DURATION(sustain, release, decay, attack) \
+#define VEX_TONE_DURATION(attack, decay, sustain, release) \
   (VEX_TONE_DUR_BYTE(sustain) | (VEX_TONE_DUR_BYTE(release) << 8) | \
    (VEX_TONE_DUR_BYTE(decay) << 16) | (VEX_TONE_DUR_BYTE(attack) << 24))
 
