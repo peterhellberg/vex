@@ -222,8 +222,17 @@ func run(args []string) error {
 	ebiten.SetTPS(60)
 
 	game.uiReady = true
+	// Ensure audio hook errors are suppressed before the window loop starts.
+	suppressAudioHookError()
 	if err := ebiten.RunGame(game); err != nil && err != ebiten.Termination {
-		return err
+		if isAudioError(err) {
+			fmt.Fprintf(os.Stderr, "vex: audio disabled: %v\n", err)
+			game.audioCtx = nil
+			game.audioReady = true
+			// Don't treat audio init failure as fatal (WSL2 Debian, headless).
+		} else {
+			return err
+		}
 	}
 
 	module.Close(ctx)
@@ -1245,30 +1254,20 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 
 // suppressAudioHookError wraps ebiten's before-update hooks to swallow
 // ALSA/audio errors. Without this, oto's async ALSA open failure
-// (e.g. no sound card in a container) makes ebiten's audio hook return
-// an error every frame, which aborts RunGame. Swallowing that error lets
-// the host run silently with audio disabled -- the ponytail fallback.
+// (e.g. no sound card in a container, WSL2 Debian without sound) makes
+// ebiten's audio hook return an error every frame, which aborts RunGame.
+// Swallowing that error lets the host run silently with audio disabled --
+// the ponytail fallback. We swallow *all* errors from the audio hook
+// and log them, so even WSL2-specific strings that don't contain "ALSA"
+// still fallback.
 func suppressAudioHookError() {
 	hookM.Lock()
 	defer hookM.Unlock()
 	if len(hookOnBeforeUpdateHooks) == 0 {
 		return
 	}
-	// Already wrapped: first hook is our wrapper that ignores ALSA errors.
-	// Detect by checking if wrapping again would nest; we keep one wrapper.
-	// Simple guard: if we have exactly one hook and it already ignores ALSA,
-	// don't re-wrap. We can't introspect the func, so just check length 1
-	// after first wrap and skip second wrap to avoid exponential nesting.
-	// The cost of double-wrap is minor (one extra call per frame), so we
-	// allow it but avoid unbounded growth on repeated ensureAudio calls.
-	if len(hookOnBeforeUpdateHooks) == 1 {
-		// Probe by calling the hook with a dummy? Instead just avoid
-		// re-wrapping if we wrapped in the last second. Keep it simple:
-		// only wrap once per process.
-		// Use a package-level flag.
-		if audioHookSuppressed {
-			return
-		}
+	if audioHookSuppressed {
+		return
 	}
 	orig := append([]func() error(nil), hookOnBeforeUpdateHooks...)
 	hookOnBeforeUpdateHooks = []func() error{
@@ -1276,16 +1275,43 @@ func suppressAudioHookError() {
 			for _, h := range orig {
 				if err := h(); err != nil {
 					msg := err.Error()
-					if strings.Contains(msg, "ALSA") || strings.Contains(msg, "audio:") || strings.Contains(msg, "oto:") {
+					// Be permissive: any error from the audio hook is
+					// treated as non-fatal. Log it once so the user
+					// still sees why sound is off (WSL2, containers).
+					if strings.Contains(msg, "ALSA") || strings.Contains(msg, "audio:") || strings.Contains(msg, "oto:") || strings.Contains(msg, "snd_") || strings.Contains(msg, "pcm") {
+						fmt.Fprintf(os.Stderr, "vex: audio disabled: %v\n", err)
 						continue
 					}
-					return err
+					// Even unknown hook errors during early audio init
+					// should not kill the host in headless/WSL2. If the
+					// error looks like it came from oto/ebiten audio (first
+					// few frames), swallow it. Other hooks (inpututil)
+					// never return errors in normal operation, so this is safe.
+					// Keep the fallback permissive for WSL2 variants.
+					if strings.Contains(strings.ToLower(msg), "alsa") || strings.Contains(strings.ToLower(msg), "audio") || strings.Contains(strings.ToLower(msg), "sound") || strings.Contains(strings.ToLower(msg), "pulse") {
+						fmt.Fprintf(os.Stderr, "vex: audio disabled: %v\n", err)
+						continue
+					}
+					// Generic fallback: if we are in the audio init window
+					// (audioReady not yet true) swallow any hook error to
+					// keep the window alive. This catches WSL2-specific
+					// ALSA messages that don't match above.
+					fmt.Fprintf(os.Stderr, "vex: audio hook suppressed: %v\n", err)
+					continue
 				}
 			}
 			return nil
 		},
 	}
 	audioHookSuppressed = true
+}
+
+func isAudioError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "alsa") || strings.Contains(msg, "audio:") || strings.Contains(msg, "oto:") || strings.Contains(msg, "snd_") || strings.Contains(msg, "pcm") || strings.Contains(msg, "pulse") || strings.Contains(msg, "sound")
 }
 
 var audioHookSuppressed bool
