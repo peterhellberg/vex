@@ -28,6 +28,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+//go:linkname hookOnBeforeUpdateHooks github.com/hajimehoshi/ebiten/v2/internal/hook.onBeforeUpdateHooks
+var hookOnBeforeUpdateHooks []func() error
+
+//go:linkname hookM github.com/hajimehoshi/ebiten/v2/internal/hook.m
+var hookM sync.Mutex
+
 const (
 	VEX_W          = 320
 	VEX_H          = 180
@@ -275,10 +281,22 @@ func NewGame() *Game {
 	g := &Game{
 		pixels:    pixels,
 		frame:     unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
-		audioCtx:  audio.NewContext(toneRate),
 		audio:     &toneEngine{},
 		startedAt: time.Now(),
 	}
+	// Audio on Linux needs ALSA; in headless/containers it may be missing.
+	// Fall back to silent (no audioCtx) instead of crashing the host.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				g.audioCtx = nil
+				g.audioReady = true
+				suppressAudioHookError()
+			}
+		}()
+		g.audioCtx = audio.NewContext(toneRate)
+		suppressAudioHookError()
+	}()
 	g.palreset()
 	return g
 }
@@ -1225,6 +1243,53 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// suppressAudioHookError wraps ebiten's before-update hooks to swallow
+// ALSA/audio errors. Without this, oto's async ALSA open failure
+// (e.g. no sound card in a container) makes ebiten's audio hook return
+// an error every frame, which aborts RunGame. Swallowing that error lets
+// the host run silently with audio disabled -- the ponytail fallback.
+func suppressAudioHookError() {
+	hookM.Lock()
+	defer hookM.Unlock()
+	if len(hookOnBeforeUpdateHooks) == 0 {
+		return
+	}
+	// Already wrapped: first hook is our wrapper that ignores ALSA errors.
+	// Detect by checking if wrapping again would nest; we keep one wrapper.
+	// Simple guard: if we have exactly one hook and it already ignores ALSA,
+	// don't re-wrap. We can't introspect the func, so just check length 1
+	// after first wrap and skip second wrap to avoid exponential nesting.
+	// The cost of double-wrap is minor (one extra call per frame), so we
+	// allow it but avoid unbounded growth on repeated ensureAudio calls.
+	if len(hookOnBeforeUpdateHooks) == 1 {
+		// Probe by calling the hook with a dummy? Instead just avoid
+		// re-wrapping if we wrapped in the last second. Keep it simple:
+		// only wrap once per process.
+		// Use a package-level flag.
+		if audioHookSuppressed {
+			return
+		}
+	}
+	orig := append([]func() error(nil), hookOnBeforeUpdateHooks...)
+	hookOnBeforeUpdateHooks = []func() error{
+		func() error {
+			for _, h := range orig {
+				if err := h(); err != nil {
+					msg := err.Error()
+					if strings.Contains(msg, "ALSA") || strings.Contains(msg, "audio:") || strings.Contains(msg, "oto:") {
+						continue
+					}
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	audioHookSuppressed = true
+}
+
+var audioHookSuppressed bool
+
 // ensureAudio creates and starts the persistent mixer player on first use,
 // so the audio device begins warming up before the cart's first tone(). If
 // the player can't be created (no audio device, headless/CI), audio is
@@ -1235,10 +1300,17 @@ func (g *Game) ensureAudio() {
 		return
 	}
 	g.audioOn = true
+	if g.audioCtx == nil {
+		g.audioReady = true
+		return
+	}
 
 	p, err := g.audioCtx.NewPlayer(g.audio)
 	if err != nil {
+		// ALSA unavailable under Linux (container, no sound card) -> silent fallback.
+		g.audioCtx = nil
 		g.audioReady = true
+		suppressAudioHookError()
 		return
 	}
 	p.SetBufferSize(audioBufferSize)
