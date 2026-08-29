@@ -788,6 +788,9 @@ function readCString(ptr)
     while (end < mem8.length && mem8[end] !== 0)
         end++;
 
+    if (end - ptr > 127)
+        end = ptr + 127;
+
     // Chunked String.fromCharCode keeps long strings O(n) instead of the
     // O(n²) of repeated += concatenation.
     let s = "";
@@ -885,6 +888,12 @@ function rect(x, y, w, h, color)
     if (w <= 0 || h <= 0)
         return;
 
+    const B = VEX_W * 16;
+    if (x < -B || x > B || y < -B || y > B)
+        return;
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
+
     let x0 = Math.max(0, x);
     let y0 = Math.max(0, y);
 
@@ -912,6 +921,12 @@ function rectb(x, y, w, h, color)
 {
     if (w <= 0 || h <= 0)
         return;
+
+    const B = VEX_W * 16;
+    if (x < -B || x > B || y < -B || y > B)
+        return;
+    if (w > VEX_W) w = VEX_W;
+    if (h > VEX_H) h = VEX_H;
 
     rect(x, y, w, 1, color);
 
@@ -944,6 +959,10 @@ function circ(cx, cy, r, color)
     const R_MAX = VEX_W * 16;
     if (r < 0) r = 0;
     if (r > R_MAX) r = R_MAX;
+
+    const B = VEX_W * 16;
+    if (cx < -B || cx > B || cy < -B || cy > B)
+        return;
 
     let x = r;
     let y = 0;
@@ -1015,6 +1034,10 @@ function circb(cx, cy, r, color)
     if (r < 0) r = 0;
     if (r > R_MAX) r = R_MAX;
 
+    const B = VEX_W * 16;
+    if (cx < -B || cx > B || cy < -B || cy > B)
+        return;
+
     let x = r;
     let y = 0;
     let err = 0;
@@ -1063,6 +1086,10 @@ function blit(ptr, x, y, w, h, key)
     updateMemoryViews();
 
     if (w <= 0 || h <= 0)
+        return;
+
+    const B = VEX_W * 16;
+    if (x < -B || x > B || y < -B || y > B)
         return;
 
     // Clamp to the framebuffer before validating against cart memory, so a
@@ -1119,6 +1146,10 @@ function blitm(ptr, x, y, w, h, key, mapptr)
     updateMemoryViews();
 
     if (w <= 0 || h <= 0)
+        return;
+
+    const B = VEX_W * 16;
+    if (x < -B || x > B || y < -B || y > B)
         return;
 
     if (w > VEX_W) w = VEX_W;
@@ -1191,7 +1222,8 @@ function addTriEdge(ax, ay, bx, by, ymin, triL, triR)
     for (let y = yStart; y <= yEnd; y++)
     {
         const xf = ax + (y - ay) * slope;
-        const xi = Math.floor(xf);
+        let xi = Math.trunc(xf);
+        if (xf < 0 && xf - xi > 0) xi--;
         const i = y - ymin;
 
         if (xi < triL[i]) triL[i] = xi;

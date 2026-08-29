@@ -795,6 +795,9 @@ func (g *Game) text(m api.Module, ptr uint32, x, y int32, color uint32) {
 	for end < len(data) && data[end] != 0 {
 		end++
 	}
+	if end > 127 {
+		end = 127
+	}
 
 	v := g.palette[color&15]
 	frame := g.frame
@@ -831,6 +834,9 @@ func (g *Game) text(m api.Module, ptr uint32, x, y int32, color uint32) {
 }
 
 func (g *Game) title(m api.Module, ptr uint32) {
+	if !g.uiReady {
+		return
+	}
 	ebiten.SetWindowTitle(readCString(m, ptr))
 }
 
@@ -1593,6 +1599,9 @@ func readCString(m api.Module, ptr uint32) string {
 	end := 0
 	for end < len(data) && data[end] != 0 {
 		end++
+	}
+	if end > 127 {
+		end = 127
 	}
 
 	return string(data[:end])
