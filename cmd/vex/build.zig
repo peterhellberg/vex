@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{
         .preferred_optimize_mode = .ReleaseFast,
     });
+    const strip = optimize != .Debug;
 
     // raylib's Linux display backend. X11 (the default) also covers Wayland
     // via XWayland; tag names match raylib's own enum.
@@ -59,6 +60,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
+            .strip = strip,
             .link_libc = true,
         }),
     });

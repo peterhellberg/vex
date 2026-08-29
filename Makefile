@@ -263,6 +263,7 @@ release-windows: ## Build Windows release archive
 	@$(call vex-web-cross,windows,amd64,windows-amd64/vex-$(VERSION),.exe)
 	@cp README.md $(STAGING_DIR)/windows-amd64/vex-$(VERSION)/
 	@cp LICENSE $(STAGING_DIR)/windows-amd64/vex-$(VERSION)/
+	@find $(STAGING_DIR)/windows-amd64 -name "*.pdb" -delete
 	# Windows binaries aren't stripped: `strip` is platform-aware and the
 	# Linux toolchain can't touch a PE file.
 	@(cd $(STAGING_DIR)/windows-amd64 && \

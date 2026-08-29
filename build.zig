@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{
         .preferred_optimize_mode = .ReleaseFast,
     });
+    const strip = optimize != .Debug;
 
     // The cart SDK, exposed as a public module so external carts can
     // `@import("vex")`. Cheap to expose -- it pulls in no other dependencies.
@@ -38,6 +39,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .target = wasm_target,
             .optimize = .ReleaseSmall,
+            .strip = true,
         }),
     });
     cart_c.root_module.addCSourceFile(.{ .file = b.path("examples/cart/main.c") });
@@ -52,6 +54,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("examples/zcart/main.zig"),
             .target = wasm_target,
             .optimize = .ReleaseSmall,
+            .strip = true,
             .imports = &.{
                 .{ .name = "vex", .module = vex_mod },
                 .{ .name = "spr", .module = spr_mod },
@@ -73,6 +76,7 @@ pub fn build(b: *std.Build) void {
             .root_module = b.createModule(.{
                 .target = wasm_target,
                 .optimize = .ReleaseSmall,
+                .strip = true,
             }),
         });
         t.root_module.addCSourceFile(.{ .file = b.path("examples/test-carts/" ++ name ++ ".c") });
@@ -86,6 +90,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("spr.zig"),
         .target = b.resolveTargetQuery(.{}),
         .optimize = optimize,
+        .strip = strip,
     }) });
     const run_sdk_tests = b.addRunArtifact(sdk_tests);
     const test_step = b.step("test", "Run SDK tests (spr.zig)");
@@ -98,6 +103,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("cmd/vex-init/main.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = strip,
         }),
     });
     b.installArtifact(init_exe);
