@@ -226,10 +226,8 @@ func run(args []string) error {
 	suppressAudioHookError()
 	if err := ebiten.RunGame(game); err != nil && err != ebiten.Termination {
 		if isAudioError(err) {
-			fmt.Fprintf(os.Stderr, "vex: audio disabled: %v\n", err)
 			game.audioCtx = nil
 			game.audioReady = true
-			// Don't treat audio init failure as fatal (WSL2 Debian, headless).
 		} else {
 			return err
 		}
@@ -1279,7 +1277,6 @@ func suppressAudioHookError() {
 					// treated as non-fatal. Log it once so the user
 					// still sees why sound is off (WSL2, containers).
 					if strings.Contains(msg, "ALSA") || strings.Contains(msg, "audio:") || strings.Contains(msg, "oto:") || strings.Contains(msg, "snd_") || strings.Contains(msg, "pcm") {
-						fmt.Fprintf(os.Stderr, "vex: audio disabled: %v\n", err)
 						continue
 					}
 					// Even unknown hook errors during early audio init
@@ -1289,14 +1286,12 @@ func suppressAudioHookError() {
 					// never return errors in normal operation, so this is safe.
 					// Keep the fallback permissive for WSL2 variants.
 					if strings.Contains(strings.ToLower(msg), "alsa") || strings.Contains(strings.ToLower(msg), "audio") || strings.Contains(strings.ToLower(msg), "sound") || strings.Contains(strings.ToLower(msg), "pulse") {
-						fmt.Fprintf(os.Stderr, "vex: audio disabled: %v\n", err)
 						continue
 					}
 					// Generic fallback: if we are in the audio init window
 					// (audioReady not yet true) swallow any hook error to
 					// keep the window alive. This catches WSL2-specific
 					// ALSA messages that don't match above.
-					fmt.Fprintf(os.Stderr, "vex: audio hook suppressed: %v\n", err)
 					continue
 				}
 			}
