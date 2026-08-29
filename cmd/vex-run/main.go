@@ -1073,6 +1073,28 @@ var (
 const toneNoiseClkMin = 8000.0
 const toneNoiseClkMax = 48000.0
 
+// clear silences all voices and drops pending triggers. Called when a new
+// cart is loaded so a hostile cart's long note doesn't bleed into the next.
+func (e *toneEngine) clear() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range e.pending {
+		e.pending[i] = nil
+	}
+	for i := range e.voices {
+		v := &e.voices[i]
+		v.seg = segIdle
+		v.level = 0
+		v.segLeft = 0
+		v.slope = 0
+		v.ph = 0
+		v.nph = 0
+		v.lfsr = 0xACE1
+		v.noiseRaw = 0
+		v.noiseLp = 0
+	}
+}
+
 // tone parses a cart's tone(freq, duration, volume, flags) call and parks
 // it for the audio side. See vex.h for the packed argument layouts.
 func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
@@ -1481,6 +1503,7 @@ func (g *Game) reloadCart(ctx context.Context) error {
 	bootFn := module.ExportedFunction("boot")
 
 	oldPalette := g.palette
+	g.audio.clear()
 	if err := g.initCart(ctx, bootFn); err != nil {
 		g.palette = oldPalette
 

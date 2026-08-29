@@ -711,6 +711,25 @@ static void tone_cleanup(void) {
   }
 }
 
+// clear_audio silences all voices and drops pending triggers. Called when a
+// new cart is loaded so a hostile cart's long note doesn't bleed into the next.
+static void clear_audio(void) {
+  pthread_mutex_lock(&g_tone_lock);
+  for (int i = 0; i < VEX_TONE_CHANNELS; i++) {
+    g_pending_set[i] = false;
+    g_voice[i].seg = 4;
+    g_voice[i].level = 0.0;
+    g_voice[i].seg_left = 0;
+    g_voice[i].slope = 0.0;
+    g_voice[i].ph = 0.0;
+    g_voice[i].nph = 0.0;
+    g_voice[i].lfsr = 0xACE1;
+    g_voice[i].noise_raw = 0.0;
+    g_voice[i].noise_lp = 0.0;
+  }
+  pthread_mutex_unlock(&g_tone_lock);
+}
+
 // Advance into the next non-empty envelope segment, skipping zero-length
 // ones by snapping to their end level. Enters idle when release finishes.
 static void voice_next_segment(ToneVoice *v) {
@@ -1173,6 +1192,7 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart) {
   uint32_t old_pal[16];
   memcpy(old_pal, g_palette, sizeof(g_palette));
   reset_palette();
+  clear_audio();
 
   // Try boot() on the fresh cart BEFORE swapping it in: if it traps, the
   // old cart (which is still running) stays untouched. Doing it after the

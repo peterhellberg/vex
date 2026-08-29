@@ -396,6 +396,13 @@ let toneNodeReady = false;
 // flushed when the node connects (matches dropping instead of queuing).
 const parkedTriggers = [null, null, null, null];
 
+// Silence all voices and drop pending triggers so a hostile cart's long
+// note doesn't bleed into the next cart (matches C/Go clear_audio).
+function clearAudio() {
+    for (let i = 0; i < 4; i++) parkedTriggers[i] = null;
+    if (toneNode) toneNode.port.postMessage({ clear: true });
+}
+
 
 // The mixer runs on the audio thread. Defining it as a real function keeps
 // it syntax-highlighted, lintable, and free of string-escaping constraints;
@@ -433,6 +440,14 @@ class ToneMixer extends AudioWorkletProcessor {
     this.fullAmp = 8000;
     this.port.onmessage = e => {
       const t = e.data;
+      if (t.clear) {
+        for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
+        for (const v of this.voices) {
+          v.seg = SEG_IDLE; v.level = 0; v.segLeft = 0; v.slope = 0;
+          v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0;
+        }
+        return;
+      }
       this.pending[t.ch] = t;
     };
   }
@@ -1463,6 +1478,7 @@ async function instantiateCart(bytes)
     // order: reset_palette() then boot()).
     palreset();
     clear();
+    clearAudio();
 
     if (instance.exports.boot)
         instance.exports.boot();
