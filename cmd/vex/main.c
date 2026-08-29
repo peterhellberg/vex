@@ -1389,6 +1389,9 @@ int main(int argc, char **argv) {
   // Errors only, like 4b: raylib's INFO chatter (GLFW hints, audio device
   // notes) is noise during normal play.
   SetTraceLogLevel(LOG_ERROR);
+#ifdef _WIN32
+  SetConfigFlags(FLAG_WINDOW_RESIZABLE); // enable maximize button on Windows
+#endif
   InitWindow(VEX_W * scale, VEX_H * scale, "vex");
   g_window_open = true;
   SetTargetFPS(60);
@@ -1458,6 +1461,31 @@ int main(int argc, char **argv) {
     }
     if (super && IsKeyPressed(KEY_I))
       integer_scale = !integer_scale;
+
+    // Maximize button → fullscreen on Windows: the maximize button is only
+    // enabled for resizable windows, so the window is made resizable and a
+    // maximize toggles true fullscreen to match the user's expectation.
+#ifdef _WIN32
+    {
+      static bool was_maximized = false;
+      bool is_maximized = IsWindowMaximized();
+      if (is_maximized != was_maximized) {
+        was_maximized = is_maximized;
+        if (is_maximized && !IsWindowFullscreen()) {
+          UnloadTexture(screen);
+          int mon = GetCurrentMonitor();
+          SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
+          ToggleFullscreen();
+          integer_scale = true;
+          screen = make_screen_texture();
+          if (screen.id == 0)
+            die(cart.rt,
+                "cannot re-create framebuffer texture after maximize",
+                NULL);
+        }
+      }
+    }
+#endif
 
     // Compute this frame's framebuffer->surface mapping: fit the VEX_W x
     // VEX_H screen into the visible surface preserving aspect ratio and
