@@ -106,10 +106,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return writeBundle(cart, stdout)
 	}
 
-	// Warn early if the cart is missing, but keep serving: it may be (re)built
-	// after the server starts.
+	cartExists := true
 	if _, err := os.Stat(cart); err != nil {
-		fmt.Fprintf(stderr, "warning: %v\n", err)
+		if os.IsNotExist(err) {
+			cartExists = false
+		} else {
+			fmt.Fprintf(stderr, "warning: %v\n", err)
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -136,7 +139,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	url := serverURL(ln.Addr().String())
 
-	fmt.Fprintf(stderr, "serving cart %s on %s\n", displayPath(cart), url)
+	if cartExists {
+		fmt.Fprintf(stderr, "serving cart %s on %s\n", displayPath(cart), url)
+	} else {
+		fmt.Fprintf(stderr, "cart not found: %s\n", displayPath(cart))
+		fmt.Fprintf(stderr, "serving on %s (drag-and-drop a .wasm to start)\n", url)
+	}
 
 	if !in.noOpen {
 		if err := openBrowser(url); err != nil {
@@ -300,7 +308,9 @@ func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f, err := os.Open(path)
 		if err != nil {
-			fmt.Fprintf(stderr, "read %s: %v\n", displayPath(path), err)
+			if !os.IsNotExist(err) {
+				fmt.Fprintf(stderr, "read %s: %v\n", displayPath(path), err)
+			}
 			http.Error(w, "cart not found", http.StatusNotFound)
 			return
 		}
@@ -308,7 +318,9 @@ func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 
 		fi, err := f.Stat()
 		if err != nil {
-			fmt.Fprintf(stderr, "stat %s: %v\n", displayPath(path), err)
+			if !os.IsNotExist(err) {
+				fmt.Fprintf(stderr, "stat %s: %v\n", displayPath(path), err)
+			}
 			http.Error(w, "cart not found", http.StatusNotFound)
 			return
 		}
