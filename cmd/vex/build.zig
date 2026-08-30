@@ -64,9 +64,6 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    if (target.result.os.tag == .windows) {
-        exe.subsystem = .Windows;
-    }
     exe.root_module.addCSourceFile(.{
         .file = b.path("main.c"),
         // -ffp-contract=off keeps the triangle edge math bit-for-bit
