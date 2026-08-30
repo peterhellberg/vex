@@ -21,6 +21,23 @@
 #include "rlgl.h"
 #include "wasm3.h"
 #include "res/icon.h"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOGDI
+#define NOUSER
+#include <windows.h>
+static void attach_parent_console(void) {
+  if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+  // GUI subsystem has no console; attach to parent and reopen
+  // CONOUT$/CONIN$ so printf/fprintf become visible. Explorer has
+  // no parent console -> AttachConsole fails -> no window.
+  freopen("CONOUT$", "w", stdout);
+  freopen("CONOUT$", "w", stderr);
+  freopen("CONIN$", "r", stdin);
+  setvbuf(stdout, NULL, _IONBF, 0);
+  setvbuf(stderr, NULL, _IONBF, 0);
+}
+#endif
 
 #define VEX_W 320
 #define VEX_H 180
@@ -169,6 +186,10 @@ static void init_font(void) {
 // live" gate: with -n (headless) there is no window, and input queries must
 // return zero deterministically -- mirroring the Go host's uiReady flag.
 static bool g_window_open = false;
+
+// Title requested before the window exists (boot() runs before InitWindow()).
+// Stored and applied after the window opens.
+static char g_pending_title[128] = "";
 
 // Current framebuffer->window mapping (logical points), used to map raylib's
 // window-space mouse position back into the cart's logical coordinates.
@@ -552,14 +573,17 @@ m3ApiRawFunction(host_text) {
   m3ApiSuccess();
 }
 
-// title(s): set the window title from a cart string. No-op before the window
-// exists (headless -n mode).
+// title(s): set the window title from a cart string. Before the window
+// exists (boot() runs before InitWindow()) the title is stashed in
+// g_pending_title and applied after the window opens; headless -n mode
+// keeps g_window_open false. g_pending_title always tracks the last
+// requested title so reload can restore it if the new boot() traps.
 m3ApiRawFunction(host_title) {
   m3ApiGetArgMem(const char *, s) m3ApiCheckMem(s, 1);
-  if (!g_window_open)
-    m3ApiSuccess();
   char buf[128];
   cart_cstr(runtime, _mem, s, buf, sizeof(buf));
+  snprintf(g_pending_title, sizeof(g_pending_title), "%s", buf);
+  if (!g_window_open) m3ApiSuccess();
   SetWindowTitle(buf);
   m3ApiSuccess();
 }
@@ -1192,6 +1216,8 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart) {
   // original bug this comment now documents.
   uint32_t old_pal[16];
   memcpy(old_pal, g_palette, sizeof(g_palette));
+  char old_title[128];
+  memcpy(old_title, g_pending_title, sizeof(old_title));
   reset_palette();
   clear_audio();
 
@@ -1203,6 +1229,8 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart) {
     M3Result err = m3_CallV(fresh.f_boot);
     if (err) {
       memcpy(g_palette, old_pal, sizeof(g_palette));
+      memcpy(g_pending_title, old_title, sizeof(g_pending_title));
+      if (g_window_open && old_title[0]) SetWindowTitle(old_title);
       M3ErrorInfo info;
       m3_GetErrorInfo(fresh.rt, &info);
       fprintf(stderr, "vex: boot: %s (%s)\n", err,
@@ -1260,6 +1288,9 @@ static Texture2D make_screen_texture(void) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+  attach_parent_console();
+#endif
   int scale = VEX_SCALE;
   bool watch = false; // -w/--watch: auto-reload the cart when its file changes
   bool trace =
@@ -1402,6 +1433,7 @@ int main(int argc, char **argv) {
       UnloadImage(icon);
     }
   }
+  if (g_pending_title[0]) SetWindowTitle(g_pending_title);
   SetTargetFPS(60);
 
   Texture2D screen = make_screen_texture();
