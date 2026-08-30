@@ -76,25 +76,10 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c23", "-ffp-contract=off" },
     });
 
-    // Embed icon + manifest into the Windows executable. A tiny host-side
-    // generator writes a COFF object with a .rsrc section directly (no
-    // windres / mingw needed); offsets inside .rsrc are section-relative
-    // so the object carries no relocations.
     if (target.result.os.tag == .windows) {
-        const gen_res = b.addExecutable(.{
-            .name = "gen_res",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("tools/gen_res.zig"),
-                .target = b.graph.host,
-                .optimize = .Debug,
-            }),
+        exe.root_module.addWin32ResourceFile(.{
+            .file = b.path("res/app.rc"),
         });
-        const run_gen = b.addRunArtifact(gen_res);
-        run_gen.addArg(@tagName(target.result.cpu.arch));
-        run_gen.addFileArg(b.path("res/icon.ico"));
-        run_gen.addFileArg(b.path("res/app.manifest"));
-        const res_obj = run_gen.addOutputFileArg("vex_res.o");
-        exe.root_module.addObjectFile(res_obj);
     }
 
     // Compile raylib's sources directly into the executable and link the
