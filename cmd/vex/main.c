@@ -20,6 +20,7 @@
 #include "raylib.h"
 #include "rlgl.h"
 #include "wasm3.h"
+#include "res/icon.h"
 
 #define VEX_W 320
 #define VEX_H 180
@@ -1394,6 +1395,13 @@ int main(int argc, char **argv) {
 #endif
   InitWindow(VEX_W * scale, VEX_H * scale, "vex");
   g_window_open = true;
+  {
+    Image icon = LoadImageFromMemory(".png", vex_icon_png, vex_icon_png_len);
+    if (icon.data) {
+      SetWindowIcon(icon);
+      UnloadImage(icon);
+    }
+  }
   SetTargetFPS(60);
 
   Texture2D screen = make_screen_texture();
