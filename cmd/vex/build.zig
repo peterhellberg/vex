@@ -31,13 +31,18 @@ pub fn build(b: *std.Build) void {
         "raylib Linux display backend: X11 (default), Wayland, Both, None",
     ) orelse .X11;
 
-    // wasm3 core interpreter sources. The optional m3_api_*.c modules
-    // (WASI/libc/tracer) are skipped: the console supplies its own host
-    // functions.
+    // wasm3 core interpreter sources, vendored from the v0.9.0 release
+    // tag (see wasm3/README.md).
+    // Vendored rather than fetched: the pinned master build.zig predates
+    // current Zig's Build API and fails to even load as a dependency.
+    //
+    // The optional m3_api_*.c modules (WASI/libc/tracer) are skipped: the
+    // console supplies its own host functions. m3_emit/m3_optimize no longer
+    // exist upstream; m3_validate.c is new and required.
     const wasm3_core = [_][]const u8{
-        "m3_bind.c", "m3_code.c",   "m3_compile.c",  "m3_core.c",
-        "m3_emit.c", "m3_env.c",    "m3_exec.c",     "m3_function.c",
-        "m3_info.c", "m3_module.c", "m3_optimize.c", "m3_parse.c",
+        "m3_bind.c",  "m3_code.c",   "m3_compile.c", "m3_core.c",
+        "m3_env.c",   "m3_exec.c",   "m3_function.c",
+        "m3_info.c",  "m3_module.c", "m3_parse.c",   "m3_validate.c",
     };
 
     // macOS framework stubs (AppKit, IOKit, ...) for cross-compiling to
@@ -53,7 +58,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     }) orelse return; // raylib not yet fetched; exit cleanly so zig fetches it
-    const wasm3 = b.lazyDependency("wasm3", .{}) orelse return;
 
     const exe = b.addExecutable(.{
         .name = "vex",
@@ -87,7 +91,7 @@ pub fn build(b: *std.Build) void {
     }
 
     exe.root_module.addCSourceFiles(.{
-        .root = wasm3.path("source"),
+        .root = b.path("wasm3"),
         .files = &wasm3_core,
         // By default wasm3 packs its slot/constant tables as u32
         // (d_m3Use32BitSlots) and then stores 64-bit constants into them,
@@ -99,7 +103,7 @@ pub fn build(b: *std.Build) void {
         // every build mode.
         .flags = &.{ "-Dd_m3Use32BitSlots=0", "-fwrapv" },
     });
-    exe.root_module.addIncludePath(wasm3.path("source"));
+    exe.root_module.addIncludePath(b.path("wasm3"));
     if (xcode_frameworks) |fws| {
         exe.root_module.addSystemFrameworkPath(fws.path("Frameworks"));
         exe.root_module.addLibraryPath(fws.path("lib"));
