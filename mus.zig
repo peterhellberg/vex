@@ -158,7 +158,7 @@ pub fn tick() void {
             stop();
             return;
         }
-        inline for (0..CHANNELS) |ch| {
+        for (0..CHANNELS) |ch| {
             const ev = &pat.events[@as(usize, _row) * CHANNELS + ch];
 
             // note-off: silence the channel
