@@ -25,9 +25,9 @@ static const MusInst INSTS[] = {
 // A minor walk: A A E G / F F C D.  Speed 8 => ~7.5 rows/sec.
 #define ROWS 8
 #define SPD  8
-#define _(n, i) {(n), (i), 0, 0}
-#define O       {MUS_OFF, 0, 0, 0}
-#define R       {MUS_REST, 0, 0, 0}
+#define _(n, i) {(n), (i), 0}
+#define O       {MUS_OFF, 0, 0}
+#define R       {MUS_REST, 0, 0}
 
 // Events: rows * MUS_CHANNELS;
 

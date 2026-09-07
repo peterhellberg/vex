@@ -40,19 +40,18 @@ typedef struct {
     unsigned char duty;    // pulse duty: VEX_TONE_MODE0..3
     unsigned char attack;  // attack  length in frames (0..255)
     unsigned char decay;   // decay   length in frames
-    unsigned char sustain; // RESERVED: tone() has no per-phase sustain volume;
-                           // kept for data compatibility, currently unused
+    unsigned char sustain; // sustain length in frames (0..255) — currently unused,
+                           // reserved for ADSR completeness
     unsigned char release; // release length in frames
     unsigned char volume;  // default volume (0..100)
     unsigned char pan;     // 0=center, VEX_TONE_PAN_LEFT, VEX_TONE_PAN_RIGHT
 } MusInst;
 
-// A note event (4 bytes, one per channel per row).
+// A note event (3 bytes, one per channel per row).
 typedef struct {
     unsigned char note;    // MUS_REST, MUS_OFF, or MIDI note 1..127
     unsigned char inst;    // instrument index 1..num_insts (0 = no note)
     unsigned char vol;     // 0 = use instrument volume; 1..100 = override
-    unsigned char fx;      // reserved, must be 0
 } MusNote;
 
 // A pattern: `rows` rows, each with MUS_CHANNELS note events.
@@ -187,10 +186,10 @@ void mus_tick(void) {
             // envelope: hold at full volume for two rows' worth of frames,
             // then the instrument's release tail
             int dur = VEX_TONE_DURATION(
-                pat->speed * 2,
-                inst->release,
+                inst->attack,
                 inst->decay,
-                inst->attack);
+                pat->speed * 2,
+                inst->release);
 
             // play the note as an explicit Hz frequency
             tone(_mus_note_hz(ev->note), dur, vol, flags);
