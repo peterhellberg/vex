@@ -1066,10 +1066,12 @@ type toneTrigger struct {
 // applies them when the device pulls, which quantizes starts to at most
 // one buffer -- the same seam every host exposes.
 type toneEngine struct {
-	mu      sync.Mutex
-	pos     int64 // total frames produced (write head)
-	voices  [4]toneVoice
-	pending [4]*toneTrigger
+	mu       sync.Mutex
+	pos      int64 // total frames produced (write head)
+	voices   [4]toneVoice
+	pending  [4]*toneTrigger
+	delayBuf [toneDelaySamples * 2]float64
+	delayPos int
 }
 
 var (
@@ -1080,6 +1082,10 @@ var (
 
 const toneNoiseClkMin = 8000.0
 const toneNoiseClkMax = 48000.0
+
+// Short slap delay — 125ms at 48k, 25% feedback, adds space.
+const toneDelaySamples = 6000
+const toneDelayFeedback = 0.25
 
 // clear silences all voices and drops pending triggers. Called when a new
 // cart is loaded so a hostile cart's long note doesn't bleed into the next.
@@ -1102,6 +1108,10 @@ func (e *toneEngine) clear() {
 		v.noiseLp = 0
 		v.lp = 0
 	}
+	for i := range e.delayBuf {
+		e.delayBuf[i] = 0
+	}
+	e.delayPos = 0
 }
 
 // tone parses a cart's tone(freq, duration, volume, flags) call and parks
@@ -1270,6 +1280,17 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			if v.ph >= 1 {
 				v.ph -= math.Floor(v.ph)
 			}
+		}
+
+		// Short slap delay — 125ms, 25% feedback, adds space.
+		{
+			dl := e.delayBuf[e.delayPos]
+			dr := e.delayBuf[e.delayPos+1]
+			l += dl * toneDelayFeedback
+			r += dr * toneDelayFeedback
+			e.delayBuf[e.delayPos] = l
+			e.delayBuf[e.delayPos+1] = r
+			e.delayPos = (e.delayPos + 2) % len(e.delayBuf)
 		}
 
 		ls := int16(soft(l))

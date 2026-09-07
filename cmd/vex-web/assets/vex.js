@@ -438,6 +438,9 @@ class ToneMixer extends AudioWorkletProcessor {
     // Full-scale single-voice amplitude in s16 units, matching the C/Go
     // hosts; the final write divides by 32768 like the C mixer.
     this.fullAmp = 8000;
+    // Short slap delay — 125ms at 48k, 25% feedback.
+    this.delayBuf = new Float64Array(6000 * 2);
+    this.delayPos = 0;
     this.port.onmessage = e => {
       const t = e.data;
       if (t.clear) {
@@ -446,6 +449,8 @@ class ToneMixer extends AudioWorkletProcessor {
           v.seg = SEG_IDLE; v.level = 0; v.segLeft = 0; v.slope = 0;
           v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0; v.lp = 0;
         }
+        this.delayBuf.fill(0);
+        this.delayPos = 0;
         return;
       }
       this.pending[t.ch] = t;
@@ -569,6 +574,17 @@ class ToneMixer extends AudioWorkletProcessor {
 
         v.ph += v.freq / sampleRate;
         if (v.ph >= 1) v.ph -= Math.floor(v.ph);
+      }
+
+      // Short slap delay — 125ms, 25% feedback.
+      {
+        const dl = this.delayBuf[this.delayPos];
+        const dr = this.delayBuf[this.delayPos + 1];
+        l += dl * 0.25;
+        r += dr * 0.25;
+        this.delayBuf[this.delayPos] = l;
+        this.delayBuf[this.delayPos + 1] = r;
+        this.delayPos = (this.delayPos + 2) % this.delayBuf.length;
       }
 
       L[i] = soft(l) / 32768;
@@ -795,13 +811,7 @@ function readCString(ptr)
     if (end - ptr > 127)
         end = ptr + 127;
 
-    // Chunked String.fromCharCode keeps long strings O(n) instead of the
-    // O(n²) of repeated += concatenation.
-    let s = "";
-    for (let i = ptr; i < end; i += 4096)
-        s += String.fromCharCode.apply(null, mem8.subarray(i, Math.min(i + 4096, end)));
-
-    return s;
+    return new TextDecoder("utf-8").decode(mem8.subarray(ptr, end));
 }
 
 
