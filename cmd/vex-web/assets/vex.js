@@ -426,7 +426,7 @@ class ToneMixer extends AudioWorkletProcessor {
     super();
     const mk = () => ({ kind: 0, duty: 0.5, freq: 0, freqTo: 0,
                         freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0xACE1,
-                        noiseRaw: 0, noiseLp: 0,
+                        noiseRaw: 0, noiseLp: 0, lp: 0,
                         seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
                         segLen: [0, 0, 0, 0], segEnd: [0, 0, 0, 0],
                         gl: 0.70710678, gr: 0.70710678 });
@@ -444,7 +444,7 @@ class ToneMixer extends AudioWorkletProcessor {
         for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
         for (const v of this.voices) {
           v.seg = SEG_IDLE; v.level = 0; v.segLeft = 0; v.slope = 0;
-          v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0;
+          v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0; v.lp = 0;
         }
         return;
       }
@@ -479,7 +479,7 @@ class ToneMixer extends AudioWorkletProcessor {
     v.noiseRaw = 0;
     // Starting the noise filter from silence also gives noise hits a free
     // natural fade-in over its first few dozen samples.
-    v.noiseLp = 0;
+    v.noiseLp = 0; v.lp = 0;
     v.gl = t.gl; v.gr = t.gr;
     const frames = t.frames;
     const ends = [t.peak, t.sus, t.sus, 0];
@@ -542,12 +542,16 @@ class ToneMixer extends AudioWorkletProcessor {
           // coefficient = brighter/snapier; lower = darker.
           v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp);
           s = v.noiseLp * 1.4; // compensate filter gain loss
-        } else if (v.kind === 2) { // triangle
-          s = v.ph < 0.25 ? v.ph * 4
-            : v.ph < 0.75 ? 2 - v.ph * 4
-            : v.ph * 4 - 4;
-        } else { // pulse with duty cycle
-          s = v.ph < v.duty ? 1 : -1;
+        } else if (v.kind === 2) { // triangle — gentle lowpass tames aliasing
+          const raw = v.ph < 0.25 ? v.ph * 4
+                    : v.ph < 0.75 ? 2 - v.ph * 4
+                                  : v.ph * 4 - 4;
+          v.lp += 0.35 * (raw - v.lp);
+          s = v.lp;
+        } else { // pulse — naive square aliases hard, one-pole warms it
+          const raw = v.ph < v.duty ? 1 : -1;
+          v.lp += 0.28 * (raw - v.lp);
+          s = v.lp;
         }
 
         l += s * this.fullAmp * v.level * v.gl;
