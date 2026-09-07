@@ -702,6 +702,12 @@ static bool g_pending_set[VEX_TONE_CHANNELS];
 #define TONE_NOISE_CLK_MIN 8000.0
 #define TONE_NOISE_CLK_MAX 48000.0
 
+// Short slap delay — 125ms at 48k, 25% feedback, adds space without washing out.
+// One buffer for both channels, cleared with the voices.
+#define DELAY_SAMPLES 6000
+static float delayBuf[DELAY_SAMPLES * 2];
+static int delayPos = 0;
+
 static void tone_cleanup(void) {
   if (g_stream_ready) {
     UnloadAudioStream(g_stream);
@@ -730,6 +736,8 @@ static void clear_audio(void) {
     g_voice[i].noise_lp = 0.0;
     g_voice[i].lp = 0.0;
   }
+  for (int i = 0; i < DELAY_SAMPLES * 2; i++) delayBuf[i] = 0.0f;
+  delayPos = 0;
   pthread_mutex_unlock(&g_tone_lock);
 }
 
@@ -889,6 +897,17 @@ static void mix_callback(void *buffer, unsigned int frames) {
       v->ph += v->freq / rate;
       if (v->ph >= 1.0)
         v->ph -= floor(v->ph);
+    }
+
+    // Short slap delay — 125ms, 25% feedback, adds space.
+    {
+      float dl = delayBuf[delayPos];
+      float dr = delayBuf[delayPos + 1];
+      l += dl * 0.25;
+      r += dr * 0.25;
+      delayBuf[delayPos] = (float)l;
+      delayBuf[delayPos + 1] = (float)r;
+      delayPos = (delayPos + 2) % (DELAY_SAMPLES * 2);
     }
 
     // Soft clip each channel into the 16-bit range (linear below the
