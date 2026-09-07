@@ -51,8 +51,8 @@ static int failures = 0;
 
 // Fire a trigger through the same pending-slot path cart-side tone() uses,
 // then render `frames` stereo frames through the real mixer callback.
-// Sized for the largest render below (~19.3k frames of envelope sweep).
-#define OUT_FRAMES 20480
+// Sized for the largest render below (~19.3k + 4*6000 delay).
+#define OUT_FRAMES 50000
 static float g_out[OUT_FRAMES * 2];
 
 static void fire_and_run(int ch, ToneTrigger t, unsigned frames) {
@@ -107,6 +107,7 @@ int main(void) {
     // (0.28) to tame aliasing, so samples on the edge ramp — skip the
     // transition band and check sign away from it.
     {
+        memset(delayBuf, 0, sizeof(delayBuf)); delayPos = 0;
         ToneTrigger quarter = mk_pulse(1000, 0, 0, 0, 4, 0);
         quarter.duty = 0.25;
         fire_and_run(0, quarter, 96);
@@ -131,10 +132,13 @@ int main(void) {
     }
 
     // ---- envelope: linear attack, flat sustain, linear release ---------------
+    // Delay adds 25% echo for 6000 samples, so allow a bit over and check
+    // silence after 4 echoes have decayed.
     {
+        memset(delayBuf, 0, sizeof(delayBuf)); delayPos = 0;
         const int att = 8, sus = 8, rel = 8;
         fire_and_run(0, mk_pulse(440, 0, att, 0, sus, rel),
-                     (unsigned)(att * 800 + sus * 800 + rel * 800 + 64));
+                     (unsigned)(att * 800 + sus * 800 + rel * 800 + 4 * 6000 + 64));
 
         const int spf = 48000 / 60; // 800 samples per frame
         const int att_s = att * spf, sus_s = sus * spf, rel_s = rel * spf;
@@ -142,21 +146,21 @@ int main(void) {
         int mid = mag(att_s / 2);
         CHECK("attack ramps linearly (mid ~half scale)", mid > 2000 && mid < 3600);
         int full = mag(att_s - 1);
-        CHECK("end of attack reaches full scale", full > 4000 && full <= 5657);
+        CHECK("end of attack reaches full scale", full > 4000 && full <= 6000);
         int hold = mag(att_s + sus_s - 1);
-        CHECK("sustain holds near full scale",
-              hold > 4000 && hold <= 5657);
+        CHECK("sustain holds near full scale", hold > 4000);
         int tail = mag(att_s + sus_s + rel_s - 1);
-        CHECK("release decays to near silence", tail < 600);
+        CHECK("release decays to near silence", tail < 2000);
 
         int late = 0;
-        for (int i = att_s + sus_s + rel_s; i < att_s + sus_s + rel_s + 60; i++)
-            if (sample_at(i) != 0) late++;
-        CHECK("voice is idle after release", late == 0);
+        for (int i = att_s + sus_s + rel_s + 4 * 6000; i < att_s + sus_s + rel_s + 4 * 6000 + 60; i++)
+            if (mag(i) > 100) late++;
+        CHECK("voice is near silent after release+delay", late == 0);
     }
 
     // ---- kill idiom: all-zero duration silences the channel ------------------
     {
+        memset(delayBuf, 0, sizeof(delayBuf)); delayPos = 0;
         fire_and_run(0, mk_pulse(440, 0, 0, 0, 10, 0), 16);
         CHECK("sustained voice sounds before kill", sample_at(15) != 0);
         fire_and_run(0, mk_pulse(262, 0, 0, 0, 0, 0), 16);
@@ -168,6 +172,7 @@ int main(void) {
 
     // ---- slide: frequency glides toward the target ----------------------------
     {
+        memset(delayBuf, 0, sizeof(delayBuf)); delayPos = 0;
         ToneTrigger t = mk_pulse(220, 880, 0, 0, 20, 0);
         fire_and_run(0, t, 17600);
 
@@ -179,6 +184,7 @@ int main(void) {
 
     // ---- noise: LFSR taps, clock clamping, filtering and attack ---------------
     {
+        memset(delayBuf, 0, sizeof(delayBuf)); delayPos = 0;
         ToneTrigger t = {0};
         t.kind = 1; // noise
         t.duty = 0.5f;
