@@ -1080,7 +1080,7 @@ var (
 	tonePanR      = [3]float64{0.70710678, 0, 1}
 )
 
-const toneNoiseClkMin = 8000.0
+const toneNoiseClkMin = 3000.0
 const toneNoiseClkMax = 48000.0
 
 // Short slap delay — 125ms at 48k, 25% feedback, adds space.
