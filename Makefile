@@ -63,7 +63,7 @@ STAGING_DIR := $(RELEASE_DIR)/staging
 # with `--prefix ../..` so it lands in the same ./bin.
 all: ## Build vex + vex-init + vex-web + carts into ./bin
 	$(STEP) "Building vex"
-	@zig build --prefix . --release=fast
+	@zig build --prefix . -Dexamples=true --release=fast
 	@cd cmd/vex && zig build --prefix ../.. --release=fast
 	go build -o bin/vex-web ./cmd/vex-web
 	go build -o bin/vex-run ./cmd/vex-run
@@ -79,7 +79,7 @@ runz: all ## Build and run the Zig example cart
 web: ## Serve the browser build (CART=... to override)
 web:
 	$(STEP) "Serving browser build"
-	@zig build --prefix .
+	@zig build --prefix . -Dexamples=true
 	@go run ./cmd/vex-web $(CART)
 
 # Build the bundled cart so the test always exercises the embedded assets
@@ -116,7 +116,7 @@ test-hosts: ## Run Go and C conformance tests
 
 test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser tests
 	$(STEP) "Running browser tests"
-	@zig build --prefix .
+	@zig build --prefix . -Dexamples=true
 	@cd $(TEST_DIR) && node test_gamepad.js $(CURDIR)/$(CART)
 	@rm -rf $(CURDIR)/bundle
 
@@ -241,7 +241,7 @@ release-linux: ## Build Linux release archive
 	$(STEP) "Building Linux release"
 	@mkdir -p $(STAGING_DIR)/linux-amd64/vex-$(VERSION)
 	@zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
-		-Dtarget=native --release=fast
+		-Dtarget=native -Dexamples=true --release=fast
 	@cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
 		-Dtarget=native --release=fast -Dlinux_display_backend=$(LINUX_DISPLAY_BACKEND)
 	@$(call vex-web-cross,linux,amd64,linux-amd64/vex-$(VERSION),)
@@ -257,7 +257,7 @@ release-windows: ## Build Windows release archive
 	$(STEP) "Building Windows release"
 	@mkdir -p $(STAGING_DIR)/windows-amd64/vex-$(VERSION)
 	@zig build --prefix $(CURDIR)/$(STAGING_DIR)/windows-amd64/vex-$(VERSION) \
-		-Dtarget=x86_64-windows-gnu --release=fast
+		-Dtarget=x86_64-windows-gnu -Dexamples=true --release=fast
 	@cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/windows-amd64/vex-$(VERSION) \
 		-Dtarget=x86_64-windows-gnu --release=fast
 	@$(call vex-web-cross,windows,amd64,windows-amd64/vex-$(VERSION),.exe)
@@ -277,7 +277,7 @@ release-macos: ## Build macOS release archive
 	$(STEP) "Building macOS release"
 	@mkdir -p $(STAGING_DIR)/macos-aarch64/vex-$(VERSION)
 	@zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-aarch64/vex-$(VERSION) \
-		-Dtarget=aarch64-macos --release=fast
+		-Dtarget=aarch64-macos -Dexamples=true --release=fast
 	@cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/macos-aarch64/vex-$(VERSION) \
 		-Dtarget=aarch64-macos --release=fast
 	@$(call vex-web-cross,darwin,arm64,macos-aarch64/vex-$(VERSION),)
