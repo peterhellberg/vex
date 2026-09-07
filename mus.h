@@ -6,7 +6,7 @@
 //   #include "mus.h"
 //
 //   static const MusInst insts[] = { ... };
-//   static const MusNote events[] = { ... };
+//   static const MusEvent events[] = { ... };
 //   static const MusPat pat = { rows, speed, events };
 //   static const MusPat *const pats[] = { &pat };
 //   static const uint8_t orders[] = { 0 };
@@ -52,13 +52,13 @@ typedef struct {
     unsigned char note;    // MUS_REST, MUS_OFF, or MIDI note 1..127
     unsigned char inst;    // instrument index 1..num_insts (0 = no note)
     unsigned char vol;     // 0 = use instrument volume; 1..100 = override
-} MusNote;
+} MusEvent;
 
 // A pattern: `rows` rows, each with MUS_CHANNELS note events.
 typedef struct {
     unsigned char rows;          // row count (1..255)
     unsigned char speed;         // frames per row (controls tempo)
-    const MusNote *events;       // rows * MUS_CHANNELS events
+    const MusEvent *events;      // rows * MUS_CHANNELS events
 } MusPat;
 
 // A complete song.
@@ -159,7 +159,7 @@ void mus_tick(void) {
     if (_mus_tick == 0) {
         if (_mus_row >= pat->rows) { mus_stop(); return; }
         for (int ch = 0; ch < MUS_CHANNELS; ch++) {
-            const MusNote *ev = &pat->events[_mus_row * MUS_CHANNELS + ch];
+            const MusEvent *ev = &pat->events[_mus_row * MUS_CHANNELS + ch];
 
             // note-off: silence the channel
             if (ev->note == MUS_OFF) {
