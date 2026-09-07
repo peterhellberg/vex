@@ -31,13 +31,13 @@ pub const CHANNELS = vex.TONE_CHANNELS;
 pub const REST = 0; // no note (let previous ring)
 pub const OFF = 128; // note-off: silence the channel
 
-/// An instrument preset (8 bytes). Maps to tone() parameters.
+/// An instrument preset (8 bytes). Maps to tone() parameters. ADSR.
 pub const Inst = extern struct {
     wave: u8, // vex.TONE_PULSE, vex.TONE_NOISE, vex.TONE_TRI
     duty: u8, // vex.TONE_MODE0..3
     attack: u8, // attack  length in frames (0..255)
     decay: u8, // decay   length in frames
-    sustain: u8 = 0, // sustain length in frames — currently unused, reserved for ADSR
+    sustain: u8 = 0, // sustain length in frames — 0 means use pattern speed*2
     release: u8, // release length in frames
     volume: u8, // default volume (0..100)
     pan: u8, // 0=center, vex.TONE_PAN_LEFT, vex.TONE_PAN_RIGHT
@@ -186,10 +186,11 @@ pub fn tick() void {
             if (vol > 100) vol = 100;
             const packed_vol = (ToneVolume{ .level = vol, .peak = 0 }).pack();
 
-            // envelope: hold at full volume for two rows' worth of frames,
-            // then the instrument's release tail
+            // envelope: ADSR — sustain defaults to two rows so notes
+            // ring, but a non-zero inst sustain overrides for short hats
+            const sus: i32 = if (inst.sustain != 0) inst.sustain else @as(i32, pat.speed) * 2;
             const dur = (ToneDuration{
-                .sustain = @as(i32, pat.speed) * 2,
+                .sustain = sus,
                 .release = inst.release,
                 .decay = inst.decay,
                 .attack = inst.attack,
