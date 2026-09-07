@@ -147,7 +147,7 @@ fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32) void {
 
     const volume = (vex.ToneVolume{
         .level = vol,
-        .peak = 0,
+        .peak = vol,
     }).pack();
 
     const flags = vex.toneFlags(
@@ -170,7 +170,7 @@ fn playSustain(ch: usize, inst: *const Inst, note: i32, vol: i32, sus: i32) void
 
     const volume = (vex.ToneVolume{
         .level = vol,
-        .peak = 0,
+        .peak = vol,
     }).pack();
 
     const flags = vex.toneFlags(
