@@ -37,19 +37,17 @@ pub const Inst = extern struct {
     duty: u8, // vex.TONE_MODE0..3
     attack: u8, // attack  length in frames (0..255)
     decay: u8, // decay   length in frames
-    sustain: u8 = 0, // RESERVED: tone() has no per-phase sustain volume;
-    // kept for data compatibility with mus.h, currently unused
+    sustain: u8 = 0, // sustain length in frames — currently unused, reserved for ADSR
     release: u8, // release length in frames
     volume: u8, // default volume (0..100)
     pan: u8, // 0=center, vex.TONE_PAN_LEFT, vex.TONE_PAN_RIGHT
 };
 
-/// A note event (4 bytes, one per channel per row).
+/// A note event (3 bytes, one per channel per row).
 pub const Event = extern struct {
     note: u8, // REST, OFF, or MIDI note 1..127
     inst: u8, // instrument index 1..num_insts (0 = no note played)
     vol: u8, // 0 = use instrument volume; 1..100 = override
-    fx: u8 = 0, // reserved, must be 0
 };
 
 /// A pattern.
