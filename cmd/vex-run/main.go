@@ -1282,24 +1282,24 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			}
 		}
 
-		// Short slap delay — 125ms, 25% feedback, adds space.
-		{
-			dl := e.delayBuf[e.delayPos]
-			dr := e.delayBuf[e.delayPos+1]
-			l += dl * toneDelayFeedback
-			r += dr * toneDelayFeedback
-			e.delayBuf[e.delayPos] = l
-			e.delayBuf[e.delayPos+1] = r
-			e.delayPos = (e.delayPos + 2) % len(e.delayBuf)
-		}
+		// Short slap delay — 125ms, 25% feedback.
 
+		dl := e.delayBuf[e.delayPos]
+		dr := e.delayBuf[e.delayPos+1]
+		l += dl * toneDelayFeedback
+		r += dr * toneDelayFeedback
 		ls := int16(soft(l))
 		rs := int16(soft(r))
+		e.delayBuf[e.delayPos] = float64(ls)
+		e.delayBuf[e.delayPos+1] = float64(rs)
+		e.delayPos = (e.delayPos + 2) % len(e.delayBuf)
+
 		p[n] = byte(ls)
 		p[n+1] = byte(uint16(ls) >> 8)
 		p[n+2] = byte(rs)
 		p[n+3] = byte(uint16(rs) >> 8)
 		n += 4
+
 		e.pos++
 	}
 
