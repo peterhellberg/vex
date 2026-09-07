@@ -17,11 +17,23 @@
 //! ```
 //!
 //! All state lives in WASM linear memory; no host changes needed.
+//! All notes are MIDI note numbers (vex handles pitch via TONE_NOTE_MODE);
+//! there is no frequency math in this library.
 //!
-//! Notes ring past their row: `REST` does not cut off a previous note,
-//! it only declines to trigger a new one.  Use `OFF` to silence a channel.
+//! Note values on an Event:
+//!   REST (0)      no note: let the previous one ring
+//!   OFF (128)     note-off: apply the instrument's release envelope
+//!                 (noise instruments hard-cut instead — noise tails hiss)
+//!   1..127        MIDI note number
+//!   129..141      chord code, arpeggiated across the row (see `chordNote`);
+//!                 NOTE: minor codes only cover roots C3..F#3 (129..135),
+//!                 major codes roots G3..B3 (136..141)
+//!
+//! Sustain semantics on `Inst.sustain`:
+//!   0              default: pattern speed * 2 frames
+//!   1..254         fixed length in frames
+//!   255 (HOLD)     key-follow: rings until OFF / next note
 
-const std = @import("std");
 const vex = @import("vex");
 
 /// Number of mixer channels (same as vex.TONE_CHANNELS).
@@ -29,7 +41,10 @@ pub const CHANNELS = vex.TONE_CHANNELS;
 
 /// Note values.
 pub const REST = 0; // no note (let previous ring)
-pub const OFF = 128; // note-off: silence the channel
+pub const OFF = 128; // note-off: release / silence the channel
+
+/// Inst.sustain: hold until OFF (or next note on the channel).
+pub const SUSTAIN_HOLD: u8 = 255;
 
 /// An instrument preset (8 bytes). Maps to tone() parameters. ADSR.
 pub const Inst = extern struct {
@@ -37,15 +52,15 @@ pub const Inst = extern struct {
     duty: u8, // vex.TONE_MODE0..3
     attack: u8, // attack  length in frames (0..255)
     decay: u8, // decay   length in frames
-    sustain: u8 = 0, // sustain length in frames — 0 means use pattern speed*2
+    sustain: u8 = 0, // sustain length in frames (see SUSTAIN_HOLD)
     release: u8, // release length in frames
     volume: u8, // default volume (0..100)
     pan: u8, // 0=center, vex.TONE_PAN_LEFT, vex.TONE_PAN_RIGHT
 };
 
 /// A note event (3 bytes, one per channel per row).
-pub const Event = extern struct {
-    note: u8, // REST, OFF, or MIDI note 1..127
+pub const Event = struct {
+    note: u8, // REST, OFF, MIDI 1..127, or chord 129..141
     inst: u8, // instrument index 1..num_insts (0 = no note played)
     vol: u8, // 0 = use instrument volume; 1..100 = override
 };
@@ -76,6 +91,16 @@ var _ord: u8 = 0;
 var _row: u8 = 0;
 var _tick: u8 = 0;
 
+/// Per-channel playback memory, so OFF can apply a release tail and
+/// chord channels can arpeggiate.
+const Voice = struct {
+    inst: u8 = 0, // last triggered instrument (1-indexed), 0 = none
+    note: u8 = REST, // last triggered note / chord code
+    vol: u8 = 0, // resolved volume at trigger time
+    arp_step: u8 = 0, // arpeggio step counter
+};
+var _voice: [CHANNELS]Voice = @splat(.{});
+
 /// Load a song (resets position to the start).
 pub fn load(song: *const Song) void {
     _song = song;
@@ -83,6 +108,7 @@ pub fn load(song: *const Song) void {
     _ord = 0;
     _row = 0;
     _tick = 0;
+    _voice = @splat(.{});
 }
 
 /// Start playback.
@@ -91,6 +117,7 @@ pub fn play() void {
     _ord = 0;
     _row = 0;
     _tick = 0;
+    _voice = @splat(.{});
 }
 
 /// Current position: low 8 bits = order, bits 8..15 = row.
@@ -100,36 +127,110 @@ pub fn pos() i32 {
 
 // -- internal helpers --------------------------------------------------------
 
-/// Silence a channel: zero-volume, zero-envelope tone.
+/// Silence a channel: an all-zero duration ends whatever the voice plays.
 fn silence(ch: usize) void {
-    vex.tone(440, 0, 0, vex.toneFlags(@intCast(ch), 0, 0));
+    vex.silence(@intCast(ch));
+
+    _voice[ch] = .{};
 }
 
-/// MIDI note number -> frequency in Hz.  Equal temperament, A4=440 Hz.
-/// Fixed-point semitone ratios (1024 = 1.0), exact to within 1 Hz over range.
-/// Matches mus.h's `_mus_note_hz`.
-fn noteHz(note_in: i32) i32 {
-    // 2^(k/12) * 1024 for k = 0..11 (rounded to nearest)
-    const RATIO = [12]i32{
-        1024, 1085, 1150, 1218, 1291, 1367,
-        1448, 1533, 1624, 1721, 1822, 1930,
+/// Issue a tone for channel `ch`: MIDI `note` with the given instrument,
+/// using the instrument's own envelope. Pitch is exact — vex's
+/// TONE_NOTE_MODE interprets the freq parameter as a MIDI note number.
+fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32) void {
+    const duration = (vex.ToneDuration{
+        .sustain = inst.sustain,
+        .release = inst.release,
+        .decay = inst.decay,
+        .attack = inst.attack,
+    }).pack();
+
+    const volume = (vex.ToneVolume{
+        .level = vol,
+        .peak = 0,
+    }).pack();
+
+    const flags = vex.toneFlags(
+        @intCast(ch),
+        inst.duty,
+        inst.wave | inst.pan | vex.TONE_NOTE_MODE,
+    );
+
+    vex.tone(note, duration, volume, flags);
+}
+
+/// Issue a tone with an explicit sustain length (used for OFF tails).
+fn playSustain(ch: usize, inst: *const Inst, note: i32, vol: i32, sus: i32) void {
+    const duration = (vex.ToneDuration{
+        .sustain = sus,
+        .release = inst.release,
+        .decay = inst.decay,
+        .attack = inst.attack,
+    }).pack();
+
+    const volume = (vex.ToneVolume{
+        .level = vol,
+        .peak = 0,
+    }).pack();
+
+    const flags = vex.toneFlags(
+        @intCast(ch),
+        inst.duty,
+        inst.wave | inst.pan | vex.TONE_NOTE_MODE,
+    );
+
+    vex.tone(note, duration, volume, flags);
+}
+
+/// Apply the release tail of the channel's current instrument, or hard-cut
+/// if nothing is playing, the instrument is noise, or it has no release.
+fn releaseVoice(ch: usize) void {
+    const song = _song orelse return;
+    const v = &_voice[ch];
+
+    if (v.inst == 0 or v.inst > song.num_insts) {
+        silence(ch);
+        return;
+    }
+
+    const inst = &song.insts[v.inst - 1];
+
+    if (inst.wave == vex.TONE_NOISE or inst.release == 0) {
+        silence(ch);
+        return;
+    }
+
+    // Re-issue with minimal sustain so the envelope falls through into
+    // the release segment rather than restarting the gate.
+    playSustain(ch, inst, v.note, v.vol, 1);
+    v.inst = 0; // voice is finished; a second OFF hard-cuts
+}
+
+/// Chord code (129..141) -> the chord tone's MIDI note for arpeggio `step`.
+/// 129..135: minor triad, root = (code - 129) + 48   (C3..F#3)
+/// 136..141: major triad, root = (code - 136) + 51   (G3..B3)
+fn chordNote(code: u8, step: u8) i32 {
+    const is_major = code >= 136;
+
+    const root: i32 = if (is_major)
+        @as(i32, code - 136) + 51
+    else
+        @as(i32, code - 129) + 48;
+
+    const third: i32 = if (is_major) 4 else 3;
+
+    const interval = switch (step % 3) {
+        0 => 0,
+        1 => third,
+        else => 7,
     };
-    var note = note_in;
-    if (note < 12) note = 12; // clamp: C0
-    if (note > 119) note = 119; // clamp: B8
 
-    var semi = @rem(note - 69, 12);
-    if (semi < 0) semi += 12;
-    const oct = @divTrunc(note - 69 - semi, 12); // octaves below/above A4
-
-    const hz: i64 = @as(i64, 440) * RATIO[@intCast(semi)];
-    if (oct >= 0)
-        return @intCast((hz >> 10) << @intCast(oct));
-    return @intCast(hz >> @intCast(10 - oct));
+    return root + interval;
 }
 
 fn stop() void {
     _on = false;
+
     inline for (0..CHANNELS) |ch| {
         silence(ch);
     }
@@ -138,6 +239,7 @@ fn stop() void {
 /// Advance the sequencer by one frame. Call from update().
 pub fn tick() void {
     const song = _song orelse return;
+
     if (!_on) return;
 
     // resolve current order -> pattern, with bounds checks
@@ -145,12 +247,33 @@ pub fn tick() void {
         stop();
         return;
     }
+
     const pat_i = song.orders[_ord];
     if (pat_i >= song.num_pats) {
         stop();
         return;
     }
+
     const pat = song.pats[pat_i];
+
+    // Mid-row arpeggio retrigger: chord channels cycle their triad once
+    // per row. Retriggering restarts the envelope, so arps want
+    // attack=0 / decay=0 instruments with a long-ish sustain.
+    const arp_frame: u8 = pat.speed / 3;
+    if (arp_frame > 0 and _tick > 0 and _tick % arp_frame == 0) {
+        for (0..CHANNELS) |ch| {
+            const v = &_voice[ch];
+
+            if (v.note < 129) continue; // not a chord channel
+            if (v.inst == 0 or v.inst > song.num_insts) continue;
+
+            const inst = &song.insts[v.inst - 1];
+
+            v.arp_step +%= 1;
+
+            playInst(ch, inst, chordNote(v.note, v.arp_step), v.vol);
+        }
+    }
 
     // Trigger notes only on the first frame of a row.
     if (_tick == 0) {
@@ -158,12 +281,14 @@ pub fn tick() void {
             stop();
             return;
         }
+
         for (0..CHANNELS) |ch| {
             const ev = &pat.events[@as(usize, _row) * CHANNELS + ch];
+            const v = &_voice[ch];
 
-            // note-off: silence the channel
+            // note-off: release tail (or hard cut for noise / no tail)
             if (ev.note == OFF) {
-                silence(ch);
+                releaseVoice(ch);
                 continue;
             }
 
@@ -174,36 +299,31 @@ pub fn tick() void {
             if (ev.inst > song.num_insts) continue;
             const inst = &song.insts[ev.inst - 1];
 
-            // flags: channel, duty, waveform + pan
-            const flags = vex.toneFlags(
-                @intCast(ch),
-                inst.duty,
-                inst.wave | inst.pan,
-            );
-
             // volume: instrument default, overridden by per-note vol if set
             var vol: i32 = if (ev.vol > 0) ev.vol else inst.volume;
             if (vol > 100) vol = 100;
-            const packed_vol = (ToneVolume{ .level = vol, .peak = 0 }).pack();
 
-            // envelope: ADSR — sustain defaults to two rows so notes
-            // ring, but a non-zero inst sustain overrides for short hats
-            const sus: i32 = if (inst.sustain != 0) inst.sustain else @as(i32, pat.speed) * 2;
-            const dur = (ToneDuration{
-                .sustain = sus,
-                .release = inst.release,
-                .decay = inst.decay,
-                .attack = inst.attack,
-            }).pack();
+            // resolve note (plain MIDI note or chord root)
+            const note: i32 = if (ev.note >= 129)
+                chordNote(ev.note, 0)
+            else
+                @as(i32, ev.note);
 
-            // play the note as an explicit Hz frequency
-            vex.tone(noteHz(ev.note), dur, packed_vol, flags);
+            playInst(ch, inst, note, vol);
+
+            // remember voice state for OFF tails and arps
+            v.inst = ev.inst;
+            v.note = ev.note;
+            v.vol = @intCast(vol);
+            v.arp_step = 0;
         }
     }
 
     // advance tick counter
     _tick += 1;
+
     if (_tick < pat.speed) return;
+
     _tick = 0;
     _row += 1;
 
@@ -211,41 +331,14 @@ pub fn tick() void {
     if (_row >= pat.rows) {
         _row = 0;
         _ord += 1;
+
         if (_ord >= song.num_orders) {
             if (song.loop_ord >= song.num_orders) {
                 stop();
                 return;
             }
+
             _ord = song.loop_ord;
         }
     }
-}
-
-// -- internal helpers (match vex.h packed layouts) ---------------------------
-
-const ToneDuration = struct {
-    sustain: i32 = 0,
-    release: i32 = 0,
-    decay: i32 = 0,
-    attack: i32 = 0,
-
-    fn pack(d: ToneDuration) i32 {
-        return toneByte(d.sustain) |
-            (toneByte(d.release) << 8) |
-            (toneByte(d.decay) << 16) |
-            (toneByte(d.attack) << 24);
-    }
-};
-
-const ToneVolume = struct {
-    level: i32,
-    peak: i32 = 0,
-
-    fn pack(v: ToneVolume) i32 {
-        return toneByte(v.level) | (toneByte(v.peak) << 8);
-    }
-};
-
-fn toneByte(v: i32) i32 {
-    return if (v < 0) 0 else if (v > 255) 255 else v;
 }
