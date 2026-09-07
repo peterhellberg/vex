@@ -658,6 +658,7 @@ typedef struct {
   uint16_t lfsr;
   double noise_raw; // last raw LFSR output (+1/-1)
   double noise_lp;  // one-pole lowpassed noise value
+  double lp;        // one-pole lowpass for pulse/triangle — tames aliasing
 
   int seg;           // 0 attack, 1 decay, 2 sustain, 3 release, 4 idle
   long seg_left;     // samples remaining in the current segment
@@ -727,6 +728,7 @@ static void clear_audio(void) {
     g_voice[i].lfsr = 0xACE1;
     g_voice[i].noise_raw = 0.0;
     g_voice[i].noise_lp = 0.0;
+    g_voice[i].lp = 0.0;
   }
   pthread_mutex_unlock(&g_tone_lock);
 }
@@ -776,6 +778,7 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
   // Starting the noise filter from silence also gives noise hits a free
   // natural fade-in over its first few dozen samples.
   v->noise_lp = 0.0;
+  v->lp = 0.0;
   v->gl = t->gl;
   v->gr = t->gr;
 
@@ -851,14 +854,20 @@ static void mix_callback(void *buffer, unsigned int frames) {
         s = v->noise_lp * 1.4; // compensate filter gain loss
         break;
       }
-      case 2: // triangle
-        s = v->ph < 0.25   ? v->ph * 4.0
-            : v->ph < 0.75 ? 2.0 - v->ph * 4.0
-                           : v->ph * 4.0 - 4.0;
+      case 2: { // triangle — gentle lowpass tames aliasing above ~8k
+        double raw = v->ph < 0.25   ? v->ph * 4.0
+                   : v->ph < 0.75 ? 2.0 - v->ph * 4.0
+                                  : v->ph * 4.0 - 4.0;
+        v->lp += 0.35 * (raw - v->lp);
+        s = v->lp;
         break;
-      default: // pulse with duty cycle
-        s = v->ph < v->duty ? 1.0 : -1.0;
+      }
+      default: { // pulse — naive square aliases hard, one-pole warms it
+        double raw = v->ph < v->duty ? 1.0 : -1.0;
+        v->lp += 0.28 * (raw - v->lp);
+        s = v->lp;
         break;
+      }
       }
 
       l += s * TONE_FULL_AMP * v->level * v->gl;

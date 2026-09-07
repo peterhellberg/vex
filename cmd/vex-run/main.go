@@ -960,6 +960,7 @@ type toneVoice struct {
 	lfsr      uint16
 	noiseRaw  float64 // last raw LFSR output (+1/-1)
 	noiseLp   float64 // one-pole lowpassed noise value
+	lp        float64 // one-pole lowpass for pulse/triangle — tames aliasing
 
 	seg     int
 	segLeft int64
@@ -1014,6 +1015,7 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 	// Starting the noise filter from silence also gives noise hits a free
 	// natural fade-in over its first few dozen samples.
 	v.noiseLp = 0
+	v.lp = 0
 	v.gl = t.gl
 	v.gr = t.gr
 
@@ -1098,6 +1100,7 @@ func (e *toneEngine) clear() {
 		v.lfsr = 0xACE1
 		v.noiseRaw = 0
 		v.noiseLp = 0
+		v.lp = 0
 	}
 }
 
@@ -1225,21 +1228,25 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				// Higher coefficient = brighter/snapier; lower = darker.
 				v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp)
 				s = v.noiseLp * 1.4 // compensate filter gain loss
-			case 2: // triangle
+			case 2: // triangle — gentle lowpass tames aliasing above ~8k
+				var raw float64
 				switch {
 				case v.ph < 0.25:
-					s = v.ph * 4
+					raw = v.ph * 4
 				case v.ph < 0.75:
-					s = 2 - v.ph*4
+					raw = 2 - v.ph*4
 				default:
-					s = v.ph*4 - 4
+					raw = v.ph*4 - 4
 				}
-			default: // pulse with duty cycle
-				if v.ph < v.duty {
-					s = 1
-				} else {
-					s = -1
+				v.lp += 0.35 * (raw - v.lp)
+				s = v.lp
+			default: // pulse — naive square aliases hard, one-pole warms it
+				raw := 1.0
+				if v.ph >= v.duty {
+					raw = -1
 				}
+				v.lp += 0.28 * (raw - v.lp)
+				s = v.lp
 			}
 
 			l += s * toneFullAmp * v.level * v.gl

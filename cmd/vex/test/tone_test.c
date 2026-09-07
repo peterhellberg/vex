@@ -103,9 +103,9 @@ int main(void) {
 
     // ---- duty cycle: 25% pulse flips at a quarter period --------------------
     // The engine pads zero-length attacks to 32 samples, so verify duty
-    // after the fade-in where level is stable. Use the same double
-    // accumulation as the mixer (now double in all hosts) so the
-    // quarter-point lands on the same sample.
+    // after the fade-in where level is stable. Pulse is now low-passed
+    // (0.28) to tame aliasing, so samples on the edge ramp — skip the
+    // transition band and check sign away from it.
     {
         ToneTrigger quarter = mk_pulse(1000, 0, 0, 0, 4, 0);
         quarter.duty = 0.25;
@@ -114,11 +114,15 @@ int main(void) {
         const double inc = 1000.0 / 48000.0;
         int duty_bad = 0;
         for (unsigned i = 0; i < 96; i++) {
-            int wantHigh = ph < 0.25;
             if (i >= 32) {
-                int16_t s = sample_at(i);
-                if (wantHigh && s != 5656) duty_bad++;
-                if (!wantHigh && s != -5656) duty_bad++;
+                if (ph < 0.10 || fabs(ph - 0.25) < 0.10) {
+                    // transition band — filtered edge is intermediate
+                } else {
+                    int wantHigh = ph < 0.25;
+                    int16_t s = sample_at(i);
+                    if (wantHigh && s <= 0) duty_bad++;
+                    if (!wantHigh && s >= 0) duty_bad++;
+                }
             }
             ph += inc;
             if (ph >= 1.0) ph -= floor(ph);
@@ -138,10 +142,10 @@ int main(void) {
         int mid = mag(att_s / 2);
         CHECK("attack ramps linearly (mid ~half scale)", mid > 2000 && mid < 3600);
         int full = mag(att_s - 1);
-        CHECK("end of attack reaches full scale", full > 5400 && full <= 5657);
+        CHECK("end of attack reaches full scale", full > 4000 && full <= 5657);
         int hold = mag(att_s + sus_s - 1);
-        CHECK("sustain holds full scale",
-              hold - full <= 1 && hold >= full - 1);
+        CHECK("sustain holds near full scale",
+              hold > 4000 && hold <= 5657);
         int tail = mag(att_s + sus_s + rel_s - 1);
         CHECK("release decays to near silence", tail < 600);
 

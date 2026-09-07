@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"math"
 	"testing"
 	"unsafe"
 )
@@ -225,17 +226,22 @@ func TestToneEngineDutyFlipsAtQuarter(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	sample := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
-	// After attack the envelope is at full scale, so magnitude is 5656.
+	// After attack the envelope is at full scale, so magnitude is ~5656.
+	// Pulse is now low-passed (0.28/0.35) to tame aliasing, so samples
+	// on the edge ramp — check sign away from the transition.
 	for i := 32; i < 96; i++ {
 		ph := float64(i) * 1000.0 / float64(toneRate)
 		ph -= float64(int(ph))
+		if ph < 0.10 || math.Abs(ph-0.25) < 0.10 {
+			continue
+		}
 		wantHigh := ph < 0.25
 		s := sample(i)
-		if wantHigh && s != 5656 {
-			t.Fatalf("sample %d ph=%.3f should be high 5656, got %d", i, ph, s)
+		if wantHigh && s <= 0 {
+			t.Fatalf("sample %d ph=%.3f should be high, got %d", i, ph, s)
 		}
-		if !wantHigh && s != -5656 {
-			t.Fatalf("sample %d ph=%.3f should be low -5656, got %d", i, ph, s)
+		if !wantHigh && s >= 0 {
+			t.Fatalf("sample %d ph=%.3f should be low, got %d", i, ph, s)
 		}
 	}
 }
