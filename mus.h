@@ -34,14 +34,14 @@
 #define MUS_REST 0     // no note (let previous ring)
 #define MUS_OFF  128   // note-off: silence the channel
 
-// An instrument preset (8 bytes).  Maps to tone() parameters.
+// An instrument preset (8 bytes).  Maps to tone() parameters. ADSR.
 typedef struct {
     unsigned char wave;    // waveform: VEX_TONE_PULSE, VEX_TONE_NOISE, VEX_TONE_TRI
     unsigned char duty;    // pulse duty: VEX_TONE_MODE0..3
     unsigned char attack;  // attack  length in frames (0..255)
     unsigned char decay;   // decay   length in frames
-    unsigned char sustain; // sustain length in frames (0..255) — currently unused,
-                           // reserved for ADSR completeness
+    unsigned char sustain; // sustain length in frames (0..255) — 0 means use
+                           // pattern speed*2, so hats can be short
     unsigned char release; // release length in frames
     unsigned char volume;  // default volume (0..100)
     unsigned char pan;     // 0=center, VEX_TONE_PAN_LEFT, VEX_TONE_PAN_RIGHT
@@ -183,12 +183,13 @@ void mus_tick(void) {
             if (vol > 100) vol = 100;
             vol = VEX_TONE_VOLUME(vol, 0);
 
-            // envelope: hold at full volume for two rows' worth of frames,
-            // then the instrument's release tail
+            // envelope: ADSR — sustain defaults to two rows so notes
+            // ring, but a non-zero inst sustain overrides for short hats
+            int sus = inst->sustain ? inst->sustain : pat->speed * 2;
             int dur = VEX_TONE_DURATION(
                 inst->attack,
                 inst->decay,
-                pat->speed * 2,
+                sus,
                 inst->release);
 
             // play the note as an explicit Hz frequency
