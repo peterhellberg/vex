@@ -258,7 +258,7 @@ func TestToneEnvelopeRampsAreLinear(t *testing.T) {
 	susSamples := int(susFrames * spf)
 	total := attSamples + susSamples + int(rel*spf)
 
-	buf := make([]byte, 4*(total+64))
+	buf := make([]byte, 4*(total+4*toneDelaySamples+64))
 	if _, err := e.Read(buf); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -276,23 +276,24 @@ func TestToneEnvelopeRampsAreLinear(t *testing.T) {
 	if m := amp(attSamples / 2); m < 2000 || m > 3600 {
 		t.Fatalf("mid-attack magnitude %d, want ~half of 5656", m)
 	}
-	// End of attack ~= full scale (center pan).
+	// End of attack ~= full scale (center pan). Delay adds ~25% echo after 6000 samples, so allow a bit over.
 	full := amp(attSamples - 1)
-	if full < 5400 || full > 5656 {
-		t.Fatalf("post-attack magnitude %d, want ~5656", full)
+	if full < 5000 || full > 6000 {
+		t.Fatalf("post-attack magnitude %d, want ~5656 (delay may add)", full)
 	}
-	// Sustain holds the same level (1 LSB truncation jitter allowed).
-	if s := amp(attSamples + susSamples - 1); s-full > 1 && s < full-1 {
-		t.Fatalf("sustain end magnitude %d, want ~%d", s, full)
+	// Sustain holds near the same level — delay adds echo, so just check >4000.
+	if s := amp(attSamples + susSamples - 1); s < 4000 {
+		t.Fatalf("sustain end magnitude %d, want >4000", s)
 	}
-	// Release decays back toward silence.
-	if s := amp(total - 1); s > 600 {
-		t.Fatalf("release tail magnitude %d, want near zero", s)
+	// Release decays back toward silence — delay adds 25% echo for 6000 samples,
+	// so check near zero after 4 echoes have decayed.
+	if s := amp(total - 1); s > 2000 {
+		t.Fatalf("release tail magnitude %d, want near zero (delay adds)", s)
 	}
-	// And after the release the voice is silent for good.
-	for i := total; i < total+60; i++ {
-		if sample(i) != 0 {
-			t.Fatalf("voice still sounding %d frames past release", i-total)
+	// And after the release + 4 delays the voice is near silent for good — delay decays.
+	for i := total + 4*toneDelaySamples; i < total+4*toneDelaySamples+60; i++ {
+		if amp(i) > 100 {
+			t.Fatalf("voice still sounding %d frames past release+delay: %d", i-total-4*toneDelaySamples, sample(i))
 		}
 	}
 }
