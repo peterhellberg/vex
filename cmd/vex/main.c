@@ -1420,9 +1420,22 @@ int main(int argc, char **argv) {
                               // enabled automatically on entering fullscreen
 
   long last_mod = GetFileModTime(cart_path); // cart mtime, for -watch reloads
-  int poll = 0;                              // frames since the last mtime poll
+  int poll = 0;                              // ticks since the last mtime poll
+
+  // Fixed 60 TPS driven by wall clock, not one tick per frame: the C host
+  // previously ran one cart tick per render frame, so 144 Hz displays ran
+  // ~2.4× fast vs the Go host (ebiten TPS 60) and the JS host (accumulator).
+  const double tickDt = 1.0 / 60.0;
+  double acc = 0.0;
+  double prevTime = GetTime();
 
   while (!WindowShouldClose()) {
+    double now = GetTime();
+    double dt = now - prevTime;
+    prevTime = now;
+    if (dt > 0.25) dt = 0; // hidden/minimized gap: don't fast-forward
+    acc += dt;
+    if (acc > 5 * tickDt) acc = 5 * tickDt; // slow frames: no catch-up burst
     // Console controls (Super = Cmd on macOS, Super/Windows key on Linux):
     //   Super+Enter  toggle fullscreen
     //   Super+I      toggle integer scaling (crisp pixels vs. fill)
@@ -1430,24 +1443,8 @@ int main(int argc, char **argv) {
     // Escape (raylib's default) closes the window.
     bool super = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
 
-    // Reload on Super+R, and -- with -watch -- automatically when the cart
-    // file's mtime changes (polled every ~0.5s). reload_cart keeps the
-    // running cart if the new file is bad or half-written, so last_mod only
-    // advances on a successful load.
-    bool want_reload = super && IsKeyPressed(KEY_R);
-    if (watch && ++poll >= VEX_WATCH_FRAMES) {
-      poll = 0;
-      // GetFileModTime returns 0 when the file is missing (e.g. the user
-      // is in the middle of renaming or deleting it). Treat that as
-      // "nothing to reload" instead of attempting one every poll, which
-      // would spam "cannot read ..." to stderr twice a second.
-      long m = GetFileModTime(cart_path);
-      if (m != 0 && m != last_mod)
-        want_reload = true;
-    }
-    if (want_reload && reload_cart(env, cart_path, &cart)) {
-      last_mod = GetFileModTime(cart_path);
-    }
+    // Reload is tick-rate (60 TPS), not frame-rate, so -watch stays 0.5s
+    // at 144 Hz. Fullscreen toggles stay per-frame (they affect rendering).
     if (super && IsKeyPressed(KEY_ENTER)) {
       // True fullscreen (a macOS fullscreen Space) fits the display
       // exactly and hides the menu bar, so the picture isn't pushed off
@@ -1546,18 +1543,37 @@ int main(int argc, char **argv) {
     g_view_ox = ox;
     g_view_oy = oy;
 
-    // Run the cart: pure CPU rasterization into g_fb.
-    err = m3_CallV(cart.f_update);
-    if (err)
-      die(cart.rt, "update", err);
+    // Fixed 60 TPS cart ticks — may run 0, 1, or catch-up ticks per frame.
+    bool ticked = false;
+    while (acc >= tickDt) {
+      // Reload checks are tick-rate, not frame-rate.
+      bool super_tick = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
+      bool want_reload_tick = super_tick && IsKeyPressed(KEY_R);
+      if (watch && ++poll >= VEX_WATCH_FRAMES) {
+        poll = 0;
+        long m = GetFileModTime(cart_path);
+        if (m != 0 && m != last_mod)
+          want_reload_tick = true;
+      }
+      if (want_reload_tick && reload_cart(env, cart_path, &cart)) {
+        last_mod = GetFileModTime(cart_path);
+      }
 
-    // Upload the finished frame to the GPU (one small 320x180 transfer
-    // per frame) and capture button state for next frame's btnp().
-    UpdateTexture(screen, g_fb);
-    g_prev_btns = 0;
-    for (int i = 0; i < 6; i++) {
-      if (IsKeyDown(VEX_KEYS[i]))
-        g_prev_btns |= (1u << i);
+      err = m3_CallV(cart.f_update);
+      if (err)
+        die(cart.rt, "update", err);
+
+      g_prev_btns = 0;
+      for (int i = 0; i < 6; i++) {
+        if (IsKeyDown(VEX_KEYS[i]))
+          g_prev_btns |= (1u << i);
+      }
+
+      acc -= tickDt;
+      ticked = true;
+    }
+    if (ticked) {
+      UpdateTexture(screen, g_fb);
     }
 
     // Blit the framebuffer to the screen. The texture is top-down, so no
