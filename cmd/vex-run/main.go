@@ -1080,7 +1080,7 @@ var (
 	tonePanR      = [3]float64{0.70710678, 0, 1}
 )
 
-const toneNoiseClkMin = 3000.0
+const toneNoiseClkMin = 8000.0
 const toneNoiseClkMax = 48000.0
 
 // Short slap delay — 125ms at 48k, 25% feedback, adds space.
@@ -1182,23 +1182,30 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 // returns io.EOF. Idle channels contribute silence; the sum is soft-clipped
 // exactly like the C host (linear below the knee, tanh above).
 func (e *toneEngine) Read(p []byte) (int, error) {
+	var pendingCopy [4]*toneTrigger
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	for ch := range e.pending {
 		if t := e.pending[ch]; t != nil {
+			pendingCopy[ch] = t
 			e.pending[ch] = nil
+		}
+	}
+	e.mu.Unlock()
+	for ch := range pendingCopy {
+		if t := pendingCopy[ch]; t != nil {
 			e.voices[ch].apply(t, float64(toneRate)/60.0)
 		}
 	}
 
 	const knee, top = 24000.0, 32767.0
+	const rng = 8767.0
+	// inline soft clip to avoid closure alloc per Read
 	soft := func(x float64) float64 {
 		if x > knee {
-			return knee + (top-knee)*math.Tanh((x-knee)/(top-knee))
+			return knee + rng*math.Tanh((x-knee)/rng)
 		}
 		if x < -knee {
-			return -knee + (top-knee)*math.Tanh((x+knee)/(top-knee))
+			return -knee + rng*math.Tanh((x+knee)/rng)
 		}
 		return x
 	}
@@ -1223,13 +1230,12 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 					nclk = toneNoiseClkMax
 				}
 				v.nph += nclk / toneRate
-				for v.nph >= 1 {
+				if v.nph >= 1 {
 					v.nph--
 					fb := uint16(1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1))
 					v.lfsr = v.lfsr<<1 | fb
-					if v.lfsr&1 == 1 {
-						v.noiseRaw = 1
-					} else {
+					v.noiseRaw = 1
+					if v.lfsr&1 == 0 {
 						v.noiseRaw = -1
 					}
 				}
@@ -1278,7 +1284,10 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 
 			v.ph += v.freq / toneRate
 			if v.ph >= 1 {
-				v.ph -= math.Floor(v.ph)
+				v.ph -= 1
+				if v.ph >= 1 {
+					v.ph -= math.Floor(v.ph)
+				}
 			}
 		}
 
@@ -1288,12 +1297,12 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 		dr := e.delayBuf[e.delayPos+1]
 		l += dl * toneDelayFeedback
 		r += dr * toneDelayFeedback
-		ls := int16(soft(l))
-		rs := int16(soft(r))
-		e.delayBuf[e.delayPos] = float64(ls)
-		e.delayBuf[e.delayPos+1] = float64(rs)
+		e.delayBuf[e.delayPos] = l
+		e.delayBuf[e.delayPos+1] = r
 		e.delayPos = (e.delayPos + 2) % len(e.delayBuf)
 
+		ls := int16(soft(l))
+		rs := int16(soft(r))
 		p[n] = byte(ls)
 		p[n+1] = byte(uint16(ls) >> 8)
 		p[n+2] = byte(rs)
