@@ -659,6 +659,8 @@ typedef struct {
   double noise_raw; // last raw LFSR output (+1/-1)
   double noise_lp;  // one-pole lowpassed noise value
   double lp;        // one-pole lowpass for pulse/triangle — tames aliasing
+  double dc;        // DC blocker state for pulse
+  double dc_prev;   // previous input for DC blocker
 
   int seg;           // 0 attack, 1 decay, 2 sustain, 3 release, 4 idle
   long seg_left;     // samples remaining in the current segment
@@ -735,6 +737,8 @@ static void clear_audio(void) {
     g_voice[i].noise_raw = 0.0;
     g_voice[i].noise_lp = 0.0;
     g_voice[i].lp = 0.0;
+    g_voice[i].dc = 0.0;
+    g_voice[i].dc_prev = 0.0;
   }
   for (int i = 0; i < DELAY_SAMPLES * 2; i++) delayBuf[i] = 0.0f;
   delayPos = 0;
@@ -787,6 +791,8 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
   // natural fade-in over its first few dozen samples.
   v->noise_lp = 0.0;
   v->lp = 0.0;
+  v->dc = 0.0;
+  v->dc_prev = 0.0;
   v->gl = t->gl;
   v->gr = t->gr;
 
@@ -820,6 +826,19 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
   voice_next_segment(v);
 }
 
+// PolyBLEP bandlimited step — tames aliasing on pulse edges without
+// a heavy lowpass. dt = freq/rate.
+static inline double poly_blep(double t, double dt) {
+  if (t < dt) {
+    t /= dt;
+    return t + t - t * t - 1.0;
+  } else if (t > 1.0 - dt) {
+    t = (t - 1.0) / dt;
+    return t * t + t + t + 1.0;
+  }
+  return 0.0;
+}
+
 static void mix_callback(void *buffer, unsigned int frames) {
   float *out = buffer;
 
@@ -841,7 +860,7 @@ static void mix_callback(void *buffer, unsigned int frames) {
       // Oscillator value in -1..1.
       double s;
       switch (v->kind) {
-      case 1: { // noise: 15-bit LFSR, clock clamped to the crisp band
+      case 1: { // noise: 15-bit LFSR, clock clamped, one-pole hiss
         double nclk = 2.0 * v->freq;
         if (nclk < TONE_NOISE_CLK_MIN)
           nclk = TONE_NOISE_CLK_MIN;
@@ -855,25 +874,34 @@ static void mix_callback(void *buffer, unsigned int frames) {
           v->lfsr = (uint16_t)(v->lfsr << 1 | fb);
           v->noise_raw = (v->lfsr & 1) ? 1.0 : -1.0;
         }
-        // One-pole lowpass rounds each raw step edge into a ramp:
-        // turns raw sample-and-hold hash into classic chip hiss.
-        // Higher coefficient = brighter/snapier; lower = darker.
         v->noise_lp += 0.18 * (v->noise_raw - v->noise_lp);
-        s = v->noise_lp * 1.4; // compensate filter gain loss
+        s = v->noise_lp * 1.4;
         break;
       }
-      case 2: { // triangle — gentle lowpass tames aliasing above ~8k
+      case 2: { // triangle — gentle lowpass, keep naive shape (less alias than pulse)
         double raw = v->ph < 0.25   ? v->ph * 4.0
                    : v->ph < 0.75 ? 2.0 - v->ph * 4.0
                                   : v->ph * 4.0 - 4.0;
-        v->lp += 0.35 * (raw - v->lp);
+        v->lp += 0.22 * (raw - v->lp);
         s = v->lp;
         break;
       }
-      default: { // pulse — naive square aliases hard, one-pole warms it
+      default: { // pulse — polyBLEP bandlimited, DC blocked
+        double dt = v->freq / rate;
         double raw = v->ph < v->duty ? 1.0 : -1.0;
-        v->lp += 0.28 * (raw - v->lp);
-        s = v->lp;
+        raw += poly_blep(v->ph, dt);
+        double t2 = v->ph + 1.0 - v->duty;
+        if (t2 >= 1.0)
+          t2 -= 1.0;
+        raw -= poly_blep(t2, dt);
+        // gentle one-pole warmth (0.12 vs 0.28) — polyBLEP already tames alias
+        v->lp += 0.12 * (raw - v->lp);
+        double y = v->lp;
+        // DC blocker for asymmetric duty (e.g. 0.75)
+        double dc = y - v->dc_prev + 0.995 * v->dc;
+        v->dc = dc;
+        v->dc_prev = y;
+        s = dc;
         break;
       }
       }
