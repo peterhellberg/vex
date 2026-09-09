@@ -427,12 +427,18 @@ const SEG_SUSTAIN = 2, SEG_RELEASE = 3, SEG_IDLE = 4;
 // inside this band.
 const TONE_NOISE_CLK_MIN = 8000, TONE_NOISE_CLK_MAX = 48000;
 
+function polyBlep(t, dt) {
+  if (t < dt) { t /= dt; return t + t - t * t - 1; }
+  if (t > 1 - dt) { t = (t - 1) / dt; return t * t + t + t + 1; }
+  return 0;
+}
+
 class ToneMixer extends AudioWorkletProcessor {
   constructor() {
     super();
     const mk = () => ({ kind: 0, duty: 0.5, freq: 0, freqTo: 0,
                         freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0xACE1,
-                        noiseRaw: 0, noiseLp: 0, lp: 0,
+                        noiseRaw: 0, noiseLp: 0, lp: 0, dc: 0, dcPrev: 0,
                         seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
                         segLen: [0, 0, 0, 0], segEnd: [0, 0, 0, 0],
                         gl: 0.70710678, gr: 0.70710678 });
@@ -453,7 +459,7 @@ class ToneMixer extends AudioWorkletProcessor {
         for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
         for (const v of this.voices) {
           v.seg = SEG_IDLE; v.level = 0; v.segLeft = 0; v.slope = 0;
-          v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0; v.lp = 0;
+          v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0; v.lp = 0; v.dc = 0; v.dcPrev = 0;
         }
         this.delayBuf.fill(0);
         this.delayPos = 0;
@@ -490,7 +496,7 @@ class ToneMixer extends AudioWorkletProcessor {
     v.noiseRaw = 0;
     // Starting the noise filter from silence also gives noise hits a free
     // natural fade-in over its first few dozen samples.
-    v.noiseLp = 0; v.lp = 0;
+    v.noiseLp = 0; v.lp = 0; v.dc = 0; v.dcPrev = 0;
     v.gl = t.gl; v.gr = t.gr;
     const frames = t.frames;
     const ends = [t.peak, t.sus, t.sus, 0];
@@ -553,12 +559,21 @@ class ToneMixer extends AudioWorkletProcessor {
         } else if (v.kind === 2) {
           const ph = v.ph;
           const raw = ph < 0.25 ? ph * 4 : ph < 0.75 ? 2 - ph * 4 : ph * 4 - 4;
-          v.lp += 0.35 * (raw - v.lp);
+          v.lp += 0.22 * (raw - v.lp);
           s = v.lp;
         } else {
-          const raw = v.ph < v.duty ? 1 : -1;
-          v.lp += 0.28 * (raw - v.lp);
-          s = v.lp;
+          const dt = v.freq / sr;
+          let raw = v.ph < v.duty ? 1 : -1;
+          raw += polyBlep(v.ph, dt);
+          let t2 = v.ph + 1 - v.duty;
+          if (t2 >= 1) t2 -= 1;
+          raw -= polyBlep(t2, dt);
+          v.lp += 0.12 * (raw - v.lp);
+          const y = v.lp;
+          const dc = y - v.dcPrev + 0.995 * v.dc;
+          v.dc = dc;
+          v.dcPrev = y;
+          s = dc;
         }
         const amp = fullAmp * v.level;
         l += s * amp * v.gl;
