@@ -27,6 +27,7 @@ const pixels = image.data;
 // every browser platform is little-endian, so the u32 layout is
 // 0xAABBGGRR (alpha in the high byte) -- see packColor().
 const pixels32 = new Uint32Array(pixels.buffer);
+const textDecoder = new TextDecoder("utf-8");
 
 // Pack an 0xRRGGBB color into the u32 layout above, with alpha forced to FF.
 // Doing this once in pal()/palreset() takes the per-pixel shifting out of
@@ -69,6 +70,11 @@ function palreset()
     for (let i = 0; i < 16; i++)
         palette[i] = packColor(DEFAULT_PALETTE[i]);
 }
+
+// MIDI note 0..127 -> Hz, precomputed to avoid Math.pow per tone() call.
+// 69 = A4 = 440Hz.
+const MIDI_FREQ = new Float64Array(128);
+for (let n = 0; n < 128; n++) MIDI_FREQ[n] = 440 * Math.pow(2, (n - 69) / 12);
 
 //// Part 3: Input
 
@@ -439,7 +445,7 @@ class ToneMixer extends AudioWorkletProcessor {
     // hosts; the final write divides by 32768 like the C mixer.
     this.fullAmp = 8000;
     // Short slap delay — 125ms at 48k, 25% feedback.
-    this.delayBuf = new Float64Array(6000 * 2);
+    this.delayBuf = new Float32Array(6000 * 2);
     this.delayPos = 0;
     this.port.onmessage = e => {
       const t = e.data;
@@ -511,58 +517,52 @@ class ToneMixer extends AudioWorkletProcessor {
     void inputs;
     const out = outputs[0];
     const L = out[0], R = out.length > 1 ? out[1] : out[0];
-
+    const voices = this.voices;
+    const pending = this.pending;
     for (let ch = 0; ch < 4; ch++) {
-      const t = this.pending[ch];
-      if (t) { this.pending[ch] = null; this.apply(this.voices[ch], t); }
+      const t = pending[ch];
+      if (t) { pending[ch] = null; this.apply(voices[ch], t); }
     }
-
-    // Soft clip each channel into the 16-bit range (linear below the knee),
-    // then scale like the C host's float output.
-    const knee = 24000, top = 32767;
-    const soft = x => x > knee ? knee + (top - knee) * Math.tanh((x - knee) / (top - knee))
-                  : x < -knee ? -knee + (top - knee) * Math.tanh((x + knee) / (top - knee))
-                  : x;
-
+    const knee = 24000, top = 32767, range = 8767;
+    const delayBuf = this.delayBuf;
+    const delayLen = delayBuf.length;
+    let dpos = this.delayPos;
+    const fullAmp = this.fullAmp;
+    const sr = sampleRate;
     for (let i = 0; i < L.length; i++) {
       let l = 0, r = 0;
       for (let ch = 0; ch < 4; ch++) {
-        const v = this.voices[ch];
+        const v = voices[ch];
         if (v.seg === SEG_IDLE) continue;
-
         let s;
-        if (v.kind === 1) { // noise: 15-bit LFSR, clock clamped to the crisp band
+        if (v.kind === 1) {
           let nclk = 2 * v.freq;
           if (nclk < TONE_NOISE_CLK_MIN) nclk = TONE_NOISE_CLK_MIN;
-          if (nclk > TONE_NOISE_CLK_MAX) nclk = TONE_NOISE_CLK_MAX;
-          v.nph += nclk / sampleRate;
-          while (v.nph >= 1) {
-            v.nph -= 1;
-            const fb = 1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1);
-            v.lfsr = ((v.lfsr << 1) | fb) & 0xFFFF;
-            v.noiseRaw = (v.lfsr & 1) ? 1 : -1;
+          else if (nclk > TONE_NOISE_CLK_MAX) nclk = TONE_NOISE_CLK_MAX;
+          v.nph += nclk / sr;
+          if (v.nph >= 1) {
+            do {
+              v.nph -= 1;
+              const fb = 1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1);
+              v.lfsr = ((v.lfsr << 1) | fb) & 0xFFFF;
+              v.noiseRaw = (v.lfsr & 1) ? 1 : -1;
+            } while (v.nph >= 1);
           }
-          // One-pole lowpass rounds each raw step edge into a ramp: turns
-          // raw sample-and-hold hash into classic chip hiss. Higher
-          // coefficient = brighter/snapier; lower = darker.
           v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp);
-          s = v.noiseLp * 1.4; // compensate filter gain loss
-        } else if (v.kind === 2) { // triangle — gentle lowpass tames aliasing
-          const raw = v.ph < 0.25 ? v.ph * 4
-                    : v.ph < 0.75 ? 2 - v.ph * 4
-                                  : v.ph * 4 - 4;
+          s = v.noiseLp * 1.4;
+        } else if (v.kind === 2) {
+          const ph = v.ph;
+          const raw = ph < 0.25 ? ph * 4 : ph < 0.75 ? 2 - ph * 4 : ph * 4 - 4;
           v.lp += 0.35 * (raw - v.lp);
           s = v.lp;
-        } else { // pulse — naive square aliases hard, one-pole warms it
+        } else {
           const raw = v.ph < v.duty ? 1 : -1;
           v.lp += 0.28 * (raw - v.lp);
           s = v.lp;
         }
-
-        l += s * this.fullAmp * v.level * v.gl;
-        r += s * this.fullAmp * v.level * v.gr;
-
-        // Envelope advances after the sample that used this level.
+        const amp = fullAmp * v.level;
+        l += s * amp * v.gl;
+        r += s * amp * v.gr;
         if (v.segLeft > 0) v.segLeft--;
         if (v.segLeft <= 0) {
           v.level = v.segEnd[v.seg];
@@ -571,25 +571,26 @@ class ToneMixer extends AudioWorkletProcessor {
           v.level += v.slope;
           if (v.seg === SEG_SUSTAIN && v.freqStep !== 0) v.freq += v.freqStep;
         }
-
-        v.ph += v.freq / sampleRate;
-        if (v.ph >= 1) v.ph -= Math.floor(v.ph);
+        v.ph += v.freq / sr;
+        if (v.ph >= 1) v.ph -= (v.ph | 0);
       }
-
-      // Short slap delay — 125ms, 25% feedback.
-      {
-        const dl = this.delayBuf[this.delayPos];
-        const dr = this.delayBuf[this.delayPos + 1];
-        l += dl * 0.25;
-        r += dr * 0.25;
-        this.delayBuf[this.delayPos] = l;
-        this.delayBuf[this.delayPos + 1] = r;
-        this.delayPos = (this.delayPos + 2) % this.delayBuf.length;
-      }
-
-      L[i] = soft(l) / 32768;
-      R[i] = soft(r) / 32768;
+      const dl = delayBuf[dpos];
+      const dr = delayBuf[dpos + 1];
+      l += dl * 0.25;
+      r += dr * 0.25;
+      delayBuf[dpos] = l;
+      delayBuf[dpos + 1] = r;
+      dpos += 2;
+      if (dpos >= delayLen) dpos = 0;
+      let sl = l, sR = r;
+      if (sl > knee) sl = knee + range * Math.tanh((sl - knee) / range);
+      else if (sl < -knee) sl = -knee + range * Math.tanh((sl + knee) / range);
+      if (sR > knee) sR = knee + range * Math.tanh((sR - knee) / range);
+      else if (sR < -knee) sR = -knee + range * Math.tanh((sR + knee) / range);
+      L[i] = sl / 32768;
+      R[i] = sR / 32768;
     }
+    this.delayPos = dpos;
     return true;
   }
 }
@@ -743,7 +744,7 @@ function tone(freq, duration, volume, flags)
 
     let f0, f1 = 0;
     if (flags & 0x100) { // note mode: MIDI note number
-        f0 = 440 * Math.pow(2, (freq - 69) / 12);
+        f0 = (freq >= 0 && freq < 128) ? MIDI_FREQ[freq] : 440 * Math.pow(2, (freq - 69) / 12);
     } else {
         f0 = freq & 0xFFFF;
         f1 = (freq >>> 16) & 0xFFFF;
@@ -811,7 +812,7 @@ function readCString(ptr)
     if (end - ptr > 127)
         end = ptr + 127;
 
-    return new TextDecoder("utf-8").decode(mem8.subarray(ptr, end));
+    return textDecoder.decode(mem8.subarray(ptr, end));
 }
 
 
@@ -915,15 +916,12 @@ function rect(x, y, w, h, color)
     let y1 = Math.min(VEX_H, y + h);
 
     const c = palette[color & 15];
-
+    const span = x1 - x0;
+    if (span <= 0) return;
     for (let yy = y0; yy < y1; yy++)
     {
-        let i = yy * VEX_W + x0;
-
-        for (let xx = x0; xx < x1; xx++)
-        {
-            pixels32[i++] = c;
-        }
+        const start = yy * VEX_W + x0;
+        pixels32.fill(c, start, start + span);
     }
 }
 
@@ -1024,13 +1022,8 @@ function hline(x0, x1, y, color)
     x1 = Math.min(VEX_W - 1, x1);
 
     const c = palette[color & 15];
-
-    let i = y * VEX_W + x0;
-
-    for (let x = x0; x <= x1; x++)
-    {
-        pixels32[i++] = c;
-    }
+    const start = y * VEX_W + x0;
+    pixels32.fill(c, start, start + (x1 - x0 + 1));
 }
 
 // =========================================================================
