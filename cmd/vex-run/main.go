@@ -961,6 +961,8 @@ type toneVoice struct {
 	noiseRaw  float64 // last raw LFSR output (+1/-1)
 	noiseLp   float64 // one-pole lowpassed noise value
 	lp        float64 // one-pole lowpass for pulse/triangle — tames aliasing
+	dc        float64 // DC blocker state for pulse
+	dcPrev    float64 // previous input for DC blocker
 
 	seg     int
 	segLeft int64
@@ -970,6 +972,18 @@ type toneVoice struct {
 	segEnd  [4]float64
 
 	gl, gr float64 // constant-power pan gains
+}
+
+func polyBlep(t, dt float64) float64 {
+	if t < dt {
+		t /= dt
+		return t + t - t*t - 1
+	}
+	if t > 1-dt {
+		t = (t - 1) / dt
+		return t*t + t + t + 1
+	}
+	return 0
 }
 
 // nextSegment advances into the next non-empty envelope segment, skipping
@@ -1016,6 +1030,8 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 	// natural fade-in over its first few dozen samples.
 	v.noiseLp = 0
 	v.lp = 0
+	v.dc = 0
+	v.dcPrev = 0
 	v.gl = t.gl
 	v.gr = t.gr
 
@@ -1107,6 +1123,8 @@ func (e *toneEngine) clear() {
 		v.noiseRaw = 0
 		v.noiseLp = 0
 		v.lp = 0
+		v.dc = 0
+		v.dcPrev = 0
 	}
 	for i := range e.delayBuf {
 		e.delayBuf[i] = 0
@@ -1244,7 +1262,7 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				// Higher coefficient = brighter/snapier; lower = darker.
 				v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp)
 				s = v.noiseLp * 1.4 // compensate filter gain loss
-			case 2: // triangle — gentle lowpass tames aliasing above ~8k
+			case 2: // triangle — gentle lowpass
 				var raw float64
 				switch {
 				case v.ph < 0.25:
@@ -1254,15 +1272,26 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				default:
 					raw = v.ph*4 - 4
 				}
-				v.lp += 0.35 * (raw - v.lp)
+				v.lp += 0.22 * (raw - v.lp)
 				s = v.lp
-			default: // pulse — naive square aliases hard, one-pole warms it
+			default: // pulse — polyBLEP bandlimited, DC blocked
+				dt := v.freq / toneRate
 				raw := 1.0
 				if v.ph >= v.duty {
 					raw = -1
 				}
-				v.lp += 0.28 * (raw - v.lp)
-				s = v.lp
+				raw += polyBlep(v.ph, dt)
+				t2 := v.ph + 1 - v.duty
+				if t2 >= 1 {
+					t2 -= 1
+				}
+				raw -= polyBlep(t2, dt)
+				v.lp += 0.12 * (raw - v.lp)
+				y := v.lp
+				dc := y - v.dcPrev + 0.995*v.dc
+				v.dc = dc
+				v.dcPrev = y
+				s = dc
 			}
 
 			l += s * toneFullAmp * v.level * v.gl
