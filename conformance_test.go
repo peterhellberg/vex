@@ -208,3 +208,56 @@ func TestToneTablesMatchAcrossHosts(t *testing.T) {
 		t.Fatalf("soft-clip knee diverges: c=%v go=%v", ck[0], gk[0])
 	}
 }
+
+// The mixer voice model (noise clock band, one-pole filter coefficients,
+// full-scale amplitude, slap delay length/feedback) is hand-mirrored across
+// all three hosts; pin the literals so a retune in one host fails loudly
+// instead of silently diverging the mix.
+func TestToneMixerMatchAcrossHosts(t *testing.T) {
+	cSrc := section(mustRead(t, "cmd/vex/main.c"),
+		"// ---- audio (tone)", "static M3Result link_host")
+	goSrc := mustRead(t, "cmd/vex-run/main.go")
+	jsSrc := mustRead(t, "cmd/vex-web/assets/vex.js")
+
+	// Literals shared verbatim by all three mixer loops.
+	shared := []string{
+		"0.18 *",  // noise one-pole coefficient
+		"1.4",     // noise filter gain compensation
+		"0.22 *",  // triangle one-pole coefficient
+		"0.12 *",  // pulse one-pole warmth
+		"0.995",   // pulse DC blocker pole
+	}
+	for _, lit := range shared {
+		if !strings.Contains(cSrc, lit) {
+			t.Errorf("C mixer moved: %q missing from audio section", lit)
+		}
+		if !strings.Contains(goSrc, lit) {
+			t.Errorf("Go mixer moved: %q missing", lit)
+		}
+		if !strings.Contains(jsSrc, lit) {
+			t.Errorf("JS mixer moved: %q missing", lit)
+		}
+	}
+
+	// Same values, spelled per host (8000 vs 8000.0, named consts).
+	pinned := []struct {
+		desc, c, go_, js string
+	}{
+		{"full-scale amplitude", "TONE_FULL_AMP 8000.0", "toneFullAmp = 8000.0", "this.fullAmp = 8000"},
+		{"noise clock min", "TONE_NOISE_CLK_MIN 8000.0", "toneNoiseClkMin = 8000.0", "TONE_NOISE_CLK_MIN = 8000"},
+		{"noise clock max", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "TONE_NOISE_CLK_MAX = 48000"},
+		{"delay length", "DELAY_SAMPLES 6000", "toneDelaySamples = 6000", "Float32Array(6000 * 2)"},
+		{"delay feedback", "dl * 0.25", "toneDelayFeedback = 0.25", "dl * 0.25"},
+	}
+	for _, p := range pinned {
+		if !strings.Contains(cSrc, p.c) {
+			t.Errorf("C %s moved: %q missing from audio section", p.desc, p.c)
+		}
+		if !strings.Contains(goSrc, p.go_) {
+			t.Errorf("Go %s moved: %q missing", p.desc, p.go_)
+		}
+		if !strings.Contains(jsSrc, p.js) {
+			t.Errorf("JS %s moved: %q missing", p.desc, p.js)
+		}
+	}
+}
