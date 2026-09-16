@@ -587,7 +587,7 @@ class ToneMixer extends AudioWorkletProcessor {
           if (v.seg === SEG_SUSTAIN && v.freqStep !== 0) v.freq += v.freqStep;
         }
         v.ph += v.freq / sr;
-        if (v.ph >= 1) v.ph -= (v.ph | 0);
+        if (v.ph >= 1) v.ph -= Math.floor(v.ph);
       }
       const dl = delayBuf[dpos];
       const dr = delayBuf[dpos + 1];
