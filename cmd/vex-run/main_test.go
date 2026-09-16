@@ -185,6 +185,61 @@ func TestToneEngineReadPhaseAndEnd(t *testing.T) {
 	}
 }
 
+func TestToneEngineClearSilencesOnRead(t *testing.T) {
+	e := &toneEngine{}
+
+	silent := func(buf []byte) bool {
+		for _, b := range buf {
+			if b != 0 {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Start a sustained voice so voices and the delay buffer are non-silent.
+	e.tone(440, 10, 100, 0)
+	buf := make([]byte, 4*64)
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if silent(buf) {
+		t.Fatal("voice should sound before clear")
+	}
+
+	// Park a trigger, then clear before the device pulls: the pending
+	// trigger must be dropped and voices silenced on the next Read.
+	e.tone(440, 10, 100, 0)
+	e.clear()
+	out := make([]byte, 4*64)
+	if _, err := e.Read(out); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !silent(out) {
+		t.Fatal("expected silence after clear dropped the pending trigger")
+	}
+
+	// The delay buffer was cleared too: no echo of the pre-clear voice
+	// arrives when the 6000-sample delay wraps around.
+	tail := make([]byte, 4*(toneDelaySamples+64))
+	if _, err := e.Read(tail); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !silent(tail) {
+		t.Fatal("expected no delay echo after clear")
+	}
+
+	// A tone after the clear still sounds: the flag is consumed by one Read.
+	e.tone(440, 10, 100, 0)
+	again := make([]byte, 4*64)
+	if _, err := e.Read(again); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if silent(again) {
+		t.Fatal("tone after clear should sound")
+	}
+}
+
 func TestToneEngineKillAndClamps(t *testing.T) {
 	e := &toneEngine{}
 
