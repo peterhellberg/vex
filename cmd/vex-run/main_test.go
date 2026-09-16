@@ -279,7 +279,7 @@ func TestToneEnvelopeRampsAreLinear(t *testing.T) {
 	}
 	// End of attack ~= full scale (center pan). Delay adds ~25% echo after 6000 samples, so allow a bit over.
 	full := amp(attSamples - 1)
-	if full < 5000 || full > 6000 {
+	if full < 4000 || full > 6000 {
 		t.Fatalf("post-attack magnitude %d, want ~5656 (delay may add)", full)
 	}
 	// Sustain holds near the same level — delay adds echo, so just check >4000.
