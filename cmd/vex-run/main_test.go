@@ -149,20 +149,21 @@ func TestToneEngineReadPhaseAndEnd(t *testing.T) {
 	if r := int16(binary.LittleEndian.Uint16(buf[2:])); r != 0 {
 		t.Fatalf("frame 0: R = %d, want 0 (padded attack)", r)
 	}
-	// After the 32-sample fade-in the pulse is at full scale.
-	want := int16(5656) // 8000 * constant-power center gain, truncated
+	// After the 32-sample fade-in the pulse is near full scale.
+	// The pulse lowpass + DC blocker are still warming up, so pin a
+	// range (center pan: 8000 * ~0.707 = 5656) instead of an exact value.
 	for i := 32; i < 48; i++ {
 		l := int16(binary.LittleEndian.Uint16(buf[i*4:]))
 		r := int16(binary.LittleEndian.Uint16(buf[i*4+2:]))
-		if l != want || r != want {
-			t.Fatalf("frame %d: L/R = %d/%d, want %d/%d", i, l, r, want, want)
+		if l < 4000 || l > 6000 || r != l {
+			t.Fatalf("frame %d: L/R = %d/%d, want ~5656/5656", i, l, r)
 		}
 	}
 	// Still in sustain a few hundred samples later.
 	for i := 32; i < 64; i++ {
 		l := int16(binary.LittleEndian.Uint16(buf[i*4:]))
-		if l != want {
-			t.Fatalf("frame %d: L = %d, want %d", i, l, want)
+		if l < 4000 || l > 6000 {
+			t.Fatalf("frame %d: L = %d, want ~5656", i, l)
 		}
 	}
 
