@@ -112,7 +112,10 @@ test-hosts: ## Run Go and C conformance tests
 	@zig cc -std=c2x -Wno-gcc-install-dir-libstdcxx -I cmd/vex/test -o cmd/vex/test/tone_test.bin \
 		cmd/vex/test/tone_test.c -lm -lpthread
 	@cmd/vex/test/tone_test.bin
-	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
+	@zig cc -std=c2x -Wno-gcc-install-dir-libstdcxx -I . -o cmd/vex/test/mus_test.bin \
+		cmd/vex/test/mus_test.c
+	@cmd/vex/test/mus_test.bin
+	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin cmd/vex/test/mus_test.bin
 
 test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser tests
 	$(STEP) "Running browser tests"
