@@ -178,10 +178,12 @@ void mus_tick(void) {
             int flags = VEX_TONE_FLAGS(ch, inst->duty,
                 inst->wave | inst->pan);
 
-            // volume: instrument default, overridden by per-note vol if set
-            int vol = ev->vol > 0 ? ev->vol : inst->volume;
-            if (vol > 100) vol = 100;
-            vol = VEX_TONE_VOLUME(vol, 0);
+            // volume: instrument default, overridden by per-note vol if set.
+            // Peak tracks level (like mus.zig) so the attack has no extra
+            // punch; peak 0 would mean full-scale during the attack.
+            int level = ev->vol > 0 ? ev->vol : inst->volume;
+            if (level > 100) level = 100;
+            int vol = VEX_TONE_VOLUME(level, level);
 
             // envelope: ADSR — sustain defaults to two rows so notes
             // ring, but a non-zero inst sustain overrides for short hats
