@@ -1086,6 +1086,7 @@ type toneEngine struct {
 	pos      int64 // total frames produced (write head)
 	voices   [4]toneVoice
 	pending  [4]*toneTrigger
+	clearReq bool // silence voices/delay on the audio goroutine (see clear)
 	delayBuf [toneDelaySamples * 2]float64
 	delayPos int
 }
@@ -1105,31 +1106,15 @@ const toneDelayFeedback = 0.25
 
 // clear silences all voices and drops pending triggers. Called when a new
 // cart is loaded so a hostile cart's long note doesn't bleed into the next.
+// Only parks a flag: voices and the delay buffer live on the audio goroutine
+// (see Read), so mutating them here would race with the DSP loop.
 func (e *toneEngine) clear() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for i := range e.pending {
 		e.pending[i] = nil
 	}
-	for i := range e.voices {
-		v := &e.voices[i]
-		v.seg = segIdle
-		v.level = 0
-		v.segLeft = 0
-		v.slope = 0
-		v.ph = 0
-		v.nph = 0
-		v.lfsr = 0xACE1
-		v.noiseRaw = 0
-		v.noiseLp = 0
-		v.lp = 0
-		v.dc = 0
-		v.dcPrev = 0
-	}
-	for i := range e.delayBuf {
-		e.delayBuf[i] = 0
-	}
-	e.delayPos = 0
+	e.clearReq = true
 }
 
 // tone parses a cart's tone(freq, duration, volume, flags) call and parks
@@ -1208,7 +1193,30 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			e.pending[ch] = nil
 		}
 	}
+	clearReq := e.clearReq
+	e.clearReq = false
 	e.mu.Unlock()
+	if clearReq {
+		for i := range e.voices {
+			v := &e.voices[i]
+			v.seg = segIdle
+			v.level = 0
+			v.segLeft = 0
+			v.slope = 0
+			v.ph = 0
+			v.nph = 0
+			v.lfsr = 0xACE1
+			v.noiseRaw = 0
+			v.noiseLp = 0
+			v.lp = 0
+			v.dc = 0
+			v.dcPrev = 0
+		}
+		for i := range e.delayBuf {
+			e.delayBuf[i] = 0
+		}
+		e.delayPos = 0
+	}
 	for ch := range pendingCopy {
 		if t := pendingCopy[ch]; t != nil {
 			e.voices[ch].apply(t, float64(toneRate)/60.0)
