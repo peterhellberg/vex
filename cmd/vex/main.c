@@ -1489,6 +1489,10 @@ int main(int argc, char **argv) {
     //   Super+R      reload the cart from disk (also automatic with -watch)
     // Escape (raylib's default) closes the window.
     bool super = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
+    // Latch the reload edge per-frame: IsKeyPressed is true for exactly one
+    // frame, but a 144 Hz frame often runs 0 ticks, which would drop the
+    // press if polled inside the tick loop. Consumed by the first tick below.
+    bool reload_key = super && IsKeyPressed(KEY_R);
 
     // Reload is tick-rate (60 TPS), not frame-rate, so -watch stays 0.5s
     // at 144 Hz. Fullscreen toggles stay per-frame (they affect rendering).
@@ -1594,8 +1598,8 @@ int main(int argc, char **argv) {
     bool ticked = false;
     while (acc >= tickDt) {
       // Reload checks are tick-rate, not frame-rate.
-      bool super_tick = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
-      bool want_reload_tick = super_tick && IsKeyPressed(KEY_R);
+      bool want_reload_tick = reload_key;
+      reload_key = false;
       if (watch && ++poll >= VEX_WATCH_FRAMES) {
         poll = 0;
         long m = GetFileModTime(cart_path);
