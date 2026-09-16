@@ -1256,7 +1256,7 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 					nclk = toneNoiseClkMax
 				}
 				v.nph += nclk / toneRate
-				if v.nph >= 1 {
+				for v.nph >= 1 {
 					v.nph--
 					fb := uint16(1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1))
 					v.lfsr = v.lfsr<<1 | fb
