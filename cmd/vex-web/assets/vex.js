@@ -1123,39 +1123,7 @@ function blit(ptr, x, y, w, h, key)
     if (ptr < 0 || ptr + w * h > mem8.length)
         return;
 
-    for (let row = 0; row < h; row++)
-    {
-        const yy = y + row;
-
-        if (yy < 0 || yy >= VEX_H)
-            continue;
-
-        const dst = yy * VEX_W;
-        const src = ptr + row * w;
-
-        let col = 0;
-        while (col < w)
-        {
-            while (col < w && mem8[src + col] === key)
-                col++;
-
-            if (col >= w)
-                break;
-
-            const start = col;
-            const run = mem8[src + col];
-
-            while (col < w && mem8[src + col] === run)
-                col++;
-
-            let sx = Math.max(0, x + start);
-            const ex = Math.min(VEX_W, x + col);
-            const v = palette[run & 15];
-
-            for (; sx < ex; sx++)
-                pixels32[dst + sx] = v;
-        }
-    }
+    blitRows(ptr, w, h, x, y, key, -1);
 }
 
 function blitm(ptr, x, y, w, h, key, mapptr)
@@ -1183,6 +1151,13 @@ function blitm(ptr, x, y, w, h, key, mapptr)
     if (mapptr < 0 || mapptr + 16 > mem8.length)
         return;
 
+    blitRows(ptr, w, h, x, y, key, mapptr);
+}
+
+// Shared stamp loop for blit (mapptr < 0: palette indices straight) and
+// blitm (through the 16-byte map) — the single line they ever differed on.
+function blitRows(ptr, w, h, x, y, key, mapptr)
+{
     for (let row = 0; row < h; row++)
     {
         const yy = y + row;
@@ -1210,7 +1185,8 @@ function blitm(ptr, x, y, w, h, key, mapptr)
 
             let sx = Math.max(0, x + start);
             const ex = Math.min(VEX_W, x + col);
-            const v = palette[mem8[mapptr + (run & 15)] & 15];
+            const idx = mapptr < 0 ? run & 15 : mem8[mapptr + (run & 15)] & 15;
+            const v = palette[idx];
 
             for (; sx < ex; sx++)
                 pixels32[dst + sx] = v;
