@@ -1048,7 +1048,6 @@ type toneTrigger struct {
 // one buffer -- the same seam every host exposes.
 type toneEngine struct {
 	mu       sync.Mutex
-	pos      int64 // total frames produced (write head)
 	voices   [4]toneVoice
 	pending  [4]*toneTrigger
 	clearReq bool // silence voices/delay on the audio goroutine (see clear)
@@ -1068,6 +1067,18 @@ const toneNoiseClkMax = 48000.0
 // Short slap delay — 125ms at 48k, 25% feedback, adds space.
 const toneDelaySamples = 6000
 const toneDelayFeedback = 0.25
+
+// softClip matches the C host: linear below the knee, tanh above.
+func softClip(x float64) float64 {
+	const knee, rng = 24000.0, 8767.0
+	if x > knee {
+		return knee + rng*math.Tanh((x-knee)/rng)
+	}
+	if x < -knee {
+		return -knee + rng*math.Tanh((x+knee)/rng)
+	}
+	return x
+}
 
 // clear silences all voices and drops pending triggers. Called when a new
 // cart is loaded so a hostile cart's long note doesn't bleed into the next.
@@ -1177,9 +1188,7 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			v.dc = 0
 			v.dcPrev = 0
 		}
-		for i := range e.delayBuf {
-			e.delayBuf[i] = 0
-		}
+		clear(e.delayBuf[:])
 		e.delayPos = 0
 	}
 	for ch := range pendingCopy {
@@ -1188,18 +1197,6 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 		}
 	}
 
-	const knee, top = 24000.0, 32767.0
-	const rng = 8767.0
-	// inline soft clip to avoid closure alloc per Read
-	soft := func(x float64) float64 {
-		if x > knee {
-			return knee + rng*math.Tanh((x-knee)/rng)
-		}
-		if x < -knee {
-			return -knee + rng*math.Tanh((x+knee)/rng)
-		}
-		return x
-	}
 	n := 0
 	for n+4 <= len(p) {
 		var l, r float64
@@ -1303,15 +1300,13 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 		e.delayBuf[e.delayPos+1] = r
 		e.delayPos = (e.delayPos + 2) % len(e.delayBuf)
 
-		ls := int16(soft(l))
-		rs := int16(soft(r))
+		ls := int16(softClip(l))
+		rs := int16(softClip(r))
 		p[n] = byte(ls)
 		p[n+1] = byte(uint16(ls) >> 8)
 		p[n+2] = byte(rs)
 		p[n+3] = byte(uint16(rs) >> 8)
 		n += 4
-
-		e.pos++
 	}
 
 	return n, nil
