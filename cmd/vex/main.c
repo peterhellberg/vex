@@ -740,7 +740,7 @@ static void clear_audio(void) {
     g_voice[i].dc = 0.0;
     g_voice[i].dc_prev = 0.0;
   }
-  for (int i = 0; i < DELAY_SAMPLES * 2; i++) delayBuf[i] = 0.0f;
+  memset(delayBuf, 0, sizeof(delayBuf));
   delayPos = 0;
   pthread_mutex_unlock(&g_tone_lock);
 }
