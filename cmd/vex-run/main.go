@@ -648,6 +648,45 @@ func (g *Game) blit(m api.Module, ptr uint32, x, y, w, h int32, key uint32) {
 		return
 	}
 
+	g.blitRows(data, w, h, x, y, key, nil)
+}
+
+func (g *Game) blitm(m api.Module, ptr uint32, x, y, w, h int32, key uint32, mapptr uint32) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+
+	if !g.coordOK(x) || !g.coordOK(y) {
+		return
+	}
+
+	if w > VEX_W {
+		w = VEX_W
+	}
+
+	if h > VEX_H {
+		h = VEX_H
+	}
+
+	size := uint32(w) * uint32(h)
+
+	data, ok := m.Memory().Read(ptr, size)
+	if !ok {
+		return
+	}
+
+	mapData, ok := m.Memory().Read(mapptr, 16)
+	if !ok {
+		return
+	}
+
+	g.blitRows(data, w, h, x, y, key, mapData)
+}
+
+// blitRows stamps the row runs of a w*h bitmap onto the frame, skipping key.
+// A nil remap draws palette indices straight; otherwise through the 16-byte
+// map — the single line blit and blitm ever differed on.
+func (g *Game) blitRows(data []byte, w, h, x, y int32, key uint32, remap []byte) {
 	for row := int32(0); row < h; row++ {
 		yy := y + row
 		if yy < 0 || yy >= VEX_H {
@@ -688,85 +727,11 @@ func (g *Game) blit(m api.Module, ptr uint32, x, y, w, h int32, key uint32) {
 			}
 
 			if x0 <= x1 {
-				v := g.palette[uint32(run)&15]
-				start := rowStart + int(x0)
-				end := rowStart + int(x1) + 1
-				for i := start; i < end; i++ {
-					frame[i] = v
+				idx := uint32(run) & 15
+				if remap != nil {
+					idx = uint32(remap[idx]) & 15
 				}
-			}
-		}
-	}
-}
-
-func (g *Game) blitm(m api.Module, ptr uint32, x, y, w, h int32, key uint32, mapptr uint32) {
-	if w <= 0 || h <= 0 {
-		return
-	}
-
-	if !g.coordOK(x) || !g.coordOK(y) {
-		return
-	}
-
-	if w > VEX_W {
-		w = VEX_W
-	}
-
-	if h > VEX_H {
-		h = VEX_H
-	}
-
-	size := uint32(w) * uint32(h)
-
-	data, ok := m.Memory().Read(ptr, size)
-	if !ok {
-		return
-	}
-
-	mapData, ok := m.Memory().Read(mapptr, 16)
-	if !ok {
-		return
-	}
-
-	for row := int32(0); row < h; row++ {
-		yy := y + row
-		if yy < 0 || yy >= VEX_H {
-			continue
-		}
-
-		src := data[row*w : (row+1)*w]
-		frame := g.frame
-		rowStart := int(yy) * VEX_W
-
-		col := int32(0)
-		for col < w {
-			for col < w && uint32(src[col]) == key {
-				col++
-			}
-
-			if col >= w {
-				break
-			}
-
-			start := col
-
-			run := src[col]
-			for col < w && src[col] == run {
-				col++
-			}
-
-			x0 := x + start
-			x1 := x + col - 1
-			if x0 < 0 {
-				x0 = 0
-			}
-
-			if x1 >= VEX_W {
-				x1 = VEX_W - 1
-			}
-
-			if x0 <= x1 {
-				v := g.palette[mapData[run&15]&15]
+				v := g.palette[idx]
 				start := rowStart + int(x0)
 				end := rowStart + int(x1) + 1
 				for i := start; i < end; i++ {
