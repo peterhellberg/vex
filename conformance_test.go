@@ -173,7 +173,7 @@ func TestToneTablesMatchAcrossHosts(t *testing.T) {
 	if len(gd) != 4 || len(gl) != 3 || len(gr) != 3 {
 		t.Fatalf("Go tone tables moved: duty=%v panL=%v panR=%v", gd, gl, gr)
 	}
-	gKnee := section(gs, "const knee, top = ", "\n")
+	gKnee := section(gs, "func softClip(x float64) float64 {", "\n}")
 
 	jsSrc := mustRead(t, "cmd/vex-web/assets/vex.js")
 	jsDuty := section(jsSrc, "this.dutyTable = ", ";")
@@ -221,11 +221,11 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 
 	// Literals shared verbatim by all three mixer loops.
 	shared := []string{
-		"0.18 *",  // noise one-pole coefficient
-		"1.4",     // noise filter gain compensation
-		"0.22 *",  // triangle one-pole coefficient
-		"0.12 *",  // pulse one-pole warmth
-		"0.995",   // pulse DC blocker pole
+		"0.18 *", // noise one-pole coefficient
+		"1.4",    // noise filter gain compensation
+		"0.22 *", // triangle one-pole coefficient
+		"0.12 *", // pulse one-pole warmth
+		"0.995",  // pulse DC blocker pole
 	}
 	for _, lit := range shared {
 		if !strings.Contains(cSrc, lit) {
