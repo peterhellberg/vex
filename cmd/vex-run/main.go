@@ -227,7 +227,6 @@ func run(args []string) error {
 	if err := ebiten.RunGame(game); err != nil && err != ebiten.Termination {
 		if isAudioError(err) {
 			game.audioCtx = nil
-			game.audioReady = true
 		} else {
 			return err
 		}
@@ -275,21 +274,18 @@ type Game struct {
 
 	// Audio for tone(): one shared context and a single persistent mixer
 	// player that renders the four-voice software mixer (see toneEngine).
-	audioCtx   *audio.Context
-	audio      *toneEngine
-	audioPl    *audio.Player
-	audioOn    bool // the persistent player has been created
-	audioReady bool // the device has started consuming the stream
-	startedAt  time.Time
+	audioCtx *audio.Context
+	audio    *toneEngine
+	audioPl  *audio.Player
+	audioOn  bool // the persistent player has been created
 }
 
 func NewGame() *Game {
 	pixels := make([]byte, VEX_W*VEX_H*4)
 	g := &Game{
-		pixels:    pixels,
-		frame:     unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
-		audio:     &toneEngine{},
-		startedAt: time.Now(),
+		pixels: pixels,
+		frame:  unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
+		audio:  &toneEngine{},
 	}
 	// Audio on Linux needs ALSA; in headless/containers it may be missing.
 	// Fall back to silent (no audioCtx) instead of crashing the host.
@@ -297,7 +293,6 @@ func NewGame() *Game {
 		defer func() {
 			if r := recover(); r != nil {
 				g.audioCtx = nil
-				g.audioReady = true
 				suppressAudioHookError()
 			}
 		}()
@@ -882,16 +877,6 @@ const (
 	// buffer is 0.5s of audio, which would postpone every trigger; a short
 	// buffer keeps the device pulling the stream within a few milliseconds.
 	audioBufferSize = 40 * time.Millisecond
-
-	// audioReadyTimeout is how long Update() may hold off starting the cart
-	// clock while the audio device warms up (it is typically ready in a few
-	// frames; the timeout only guards headless/CI runs).
-	audioReadyTimeout = 2 * time.Second
-
-	// audioReadyBytes is how much of the stream (in bytes; 48000 Hz × stereo ×
-	// 16-bit = 192000 bytes/sec) the device must have consumed before the cart
-	// clock starts.
-	audioReadyBytes = toneRate * 4 * 80 / 100 // 80% of one second
 )
 
 // Envelope segments, in trigger order.
@@ -972,6 +957,11 @@ func (v *toneVoice) nextSegment() {
 		n := v.segLen[v.seg]
 		if n <= 0 {
 			v.level = v.segEnd[v.seg]
+			if v.seg == segSustain && v.hold {
+				v.segLeft = 1
+				v.slope = 0
+				return
+			}
 			continue
 		}
 		v.segLeft = n
@@ -1384,9 +1374,8 @@ func suppressAudioHookError() {
 					if strings.Contains(strings.ToLower(msg), "alsa") || strings.Contains(strings.ToLower(msg), "audio") || strings.Contains(strings.ToLower(msg), "sound") || strings.Contains(strings.ToLower(msg), "pulse") {
 						continue
 					}
-					// Generic fallback: if we are in the audio init window
-					// (audioReady not yet true) swallow any hook error to
-					// keep the window alive. This catches WSL2-specific
+					// Generic fallback: swallow hook errors during early
+					// audio init to keep the window alive. This catches WSL2-specific
 					// ALSA messages that don't match above.
 					continue
 				}
@@ -1418,7 +1407,6 @@ func (g *Game) ensureAudio() {
 	}
 	g.audioOn = true
 	if g.audioCtx == nil {
-		g.audioReady = true
 		return
 	}
 
@@ -1426,24 +1414,12 @@ func (g *Game) ensureAudio() {
 	if err != nil {
 		// ALSA unavailable under Linux (container, no sound card) -> silent fallback.
 		g.audioCtx = nil
-		g.audioReady = true
 		suppressAudioHookError()
 		return
 	}
 	p.SetBufferSize(audioBufferSize)
 	p.Play()
 	g.audioPl = p
-}
-
-// audioFlowStarted reports whether the audio device has started consuming the
-// persistent stream. The player is "playing" from the moment Play() is called,
-// but the device needs a few frames to spin up; triggers queued before that
-// are inaudible, which is how the C host's very first note mostly gets lost.
-func (g *Game) audioFlowStarted() bool {
-	if g.audioPl == nil {
-		return false
-	}
-	return g.audioPl.Position() > audioReadyBytes || time.Since(g.startedAt) > audioReadyTimeout
 }
 
 // tone(freq, duration, volume, flags): trigger a voice on the mixer.
@@ -1487,17 +1463,8 @@ func (g *Game) Update() error {
 	}
 
 	// Start the audio player immediately (not on the first tone) so the
-	// device warms up while the cart is loading, then hold the cart clock
-	// until the device is actually consuming the stream. Otherwise the first
-	// tone lands before the device produces sound and the opening note is
-	// lost -- exactly the ~150ms of inaudible startup the C host suffers.
+	// device warms up while the cart is loading.
 	g.ensureAudio()
-	if !g.audioReady {
-		g.audioReady = g.audioFlowStarted()
-		if !g.audioReady {
-			return nil
-		}
-	}
 
 	reload := super && inpututil.IsKeyJustPressed(ebiten.KeyR)
 

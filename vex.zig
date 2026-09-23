@@ -129,6 +129,7 @@ pub extern "env" fn palreset() void;
 /// `ToneDuration`, `ToneVolume`, and `toneFlags` -- layouts:
 ///   freq     low 16: start Hz; high 16: slide target over the sustain
 ///   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
+///            (attack 0 uses a short host fade-in to prevent trigger clicks)
 ///   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
 ///   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
 ///            bit 8 note mode | bit 9 hold sustain | bit 10 release |
@@ -186,8 +187,8 @@ pub const ToneVolume = struct {
     peak: i32 = 0,
 
     pub fn pack(v: ToneVolume) i32 {
-        return toneByte(v.level) |
-            (toneByte(v.peak) << 8);
+        return toneVolumeByte(v.level) |
+            (toneVolumeByte(v.peak) << 8);
     }
 };
 
@@ -253,4 +254,8 @@ pub fn silence(channel: i32) void {
 
 fn toneByte(v: i32) i32 {
     return if (v < 0) 0 else if (v > 255) 255 else v;
+}
+
+fn toneVolumeByte(v: i32) i32 {
+    return if (v < 0) 0 else if (v > 100) 100 else v;
 }

@@ -478,7 +478,15 @@ class ToneMixer extends AudioWorkletProcessor {
       v.seg++;
       if (v.seg > SEG_RELEASE) { v.seg = SEG_IDLE; v.level = 0; return; }
       const n = v.segLen[v.seg];
-      if (n <= 0) { v.level = v.segEnd[v.seg]; continue; }
+      if (n <= 0) {
+        v.level = v.segEnd[v.seg];
+        if (v.seg === SEG_SUSTAIN && v.hold) {
+          v.segLeft = 1;
+          v.slope = 0;
+          return;
+        }
+        continue;
+      }
       v.segLeft = n;
       v.slope = (v.segEnd[v.seg] - v.level) / n;
       if (v.seg === SEG_SUSTAIN) {
@@ -702,6 +710,12 @@ function startToneGraph(ctx)
         try {
             toneNode = startToneFallback(ctx);
             toneNodeReady = true;
+            for (let ch = 0; ch < 4; ch++) {
+                if (parkedTriggers[ch]) {
+                    toneNode.port.postMessage(parkedTriggers[ch]);
+                    parkedTriggers[ch] = null;
+                }
+            }
         } catch (err2) {
             console.error("tone fallback:", err2);
         }
@@ -761,7 +775,7 @@ window.addEventListener("keydown", unlockAudio);
 
 function tone(freq, duration, volume, flags)
 {
-    if (!audioCtx || !toneNodeReady || audioCtx.state !== "running")
+    if (!audioCtx || audioCtx.state !== "running")
         return; // not unlocked yet: dropping matches the C host's lost first note
 
     const ch = flags & 3;
@@ -798,7 +812,7 @@ function tone(freq, duration, volume, flags)
     let vp = (volume >>> 8) & 0xFF;
     if (vp === 0 || vp > 100) vp = 100; // unset peak defaults to full
 
-    toneNode.port.postMessage({
+    const trigger = {
         ch,
         kind: wave,
         duty,
@@ -811,7 +825,12 @@ function tone(freq, duration, volume, flags)
         sus: vs / 100,
         gl: [0.70710678, 1, 0][pan],
         gr: [0.70710678, 0, 1][pan],
-    });
+    };
+    if (!toneNodeReady) {
+        parkedTriggers[ch] = trigger;
+        return;
+    }
+    toneNode.port.postMessage(trigger);
 }
 
 //// Part 4: WASM state and string helpers (C string reader)
