@@ -250,6 +250,8 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		{"noise clock max", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "TONE_NOISE_CLK_MAX = 48000"},
 		{"delay length", "DELAY_SAMPLES 6000", "toneDelaySamples = 6000", "Math.round(sampleRate * 0.125)"},
 		{"delay feedback", "dl * 0.25", "toneDelayFeedback = 0.25", "dl * 0.25"},
+		{"release trigger field", "release_only", "releaseOnly", "releaseOnly"},
+		{"release branch", "t->release_only", "t.releaseOnly", "t.releaseOnly"},
 	}
 	for _, p := range pinned {
 		if !strings.Contains(cSrc, p.c) {

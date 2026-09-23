@@ -987,6 +987,24 @@ func (v *toneVoice) nextSegment() {
 // apply resets the oscillator and lays out the four envelope segments in
 // samples at the stream rate.
 func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
+	if t.releaseOnly {
+		if v.seg == segIdle {
+			return
+		}
+		n := int64(float64(t.frames[3])*samplesPerFrame + 0.5)
+		if t.frames[3] <= 0 || n <= 0 {
+			v.seg = segIdle
+			v.level = 0
+			return
+		}
+		v.seg = segRelease
+		v.segEnd[segRelease] = 0
+		v.segLeft = n
+		v.slope = -v.level / float64(n)
+		v.freqStep = 0
+		return
+	}
+
 	v.kind = t.kind
 	v.duty = t.duty
 	v.freqStart = t.f0
@@ -1041,13 +1059,14 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 
 // toneTrigger is the parsed form of one cart-side tone() call.
 type toneTrigger struct {
-	kind      int
-	duty      float64
-	hold      bool
-	f0, f1    float64
-	frames    [4]int32 // attack, decay, sustain, release
-	peak, sus float64
-	gl, gr    float64
+	kind        int
+	duty        float64
+	hold        bool
+	releaseOnly bool
+	f0, f1      float64
+	frames      [4]int32 // attack, decay, sustain, release
+	peak, sus   float64
+	gl, gr      float64
 }
 
 // toneEngine renders four tone voices into the persistent audio player.
@@ -1141,6 +1160,7 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 	sus := duration & 0xFF
 	rel := (duration >> 8) & 0xFF
 	hold := flags&(1<<9) != 0
+	releaseOnly := flags&(1<<10) != 0
 	dec := (duration >> 16) & 0xFF
 	att := (duration >> 24) & 0xFF
 
@@ -1154,16 +1174,17 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 	}
 
 	e.pending[ch] = &toneTrigger{
-		kind:   int(wave),
-		duty:   toneDutyTable[mode],
-		hold:   hold,
-		f0:     f0,
-		f1:     f1,
-		frames: [4]int32{int32(att), int32(dec), int32(sus), int32(rel)},
-		peak:   float64(vp) / 100,
-		sus:    float64(vs) / 100,
-		gl:     tonePanL[pan],
-		gr:     tonePanR[pan],
+		kind:        int(wave),
+		duty:        toneDutyTable[mode],
+		hold:        hold,
+		releaseOnly: releaseOnly,
+		f0:          f0,
+		f1:          f1,
+		frames:      [4]int32{int32(att), int32(dec), int32(sus), int32(rel)},
+		peak:        float64(vp) / 100,
+		sus:         float64(vs) / 100,
+		gl:          tonePanL[pan],
+		gr:          tonePanR[pan],
 	}
 }
 

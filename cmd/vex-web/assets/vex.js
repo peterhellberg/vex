@@ -495,6 +495,17 @@ class ToneMixer extends AudioWorkletProcessor {
 
   apply(v, t) {
     const spf = sampleRate / 60; // samples per frame at the context rate
+    if (t.releaseOnly) {
+      if (v.seg === SEG_IDLE) return;
+      const n = t.frames[3] > 0 ? Math.round(t.frames[3] * spf) : 0;
+      if (n <= 0) { v.seg = SEG_IDLE; v.level = 0; return; }
+      v.seg = SEG_RELEASE;
+      v.segEnd[SEG_RELEASE] = 0;
+      v.segLeft = n;
+      v.slope = -v.level / n;
+      v.freqStep = 0;
+      return;
+    }
     v.kind = t.kind; v.duty = t.duty;
     v.freqStart = t.f0; v.freqTo = t.f1; v.freq = t.f0; v.freqStep = 0;
     v.hold = !!t.hold;
@@ -759,6 +770,7 @@ function tone(freq, duration, volume, flags)
     const ch = flags & 3;
     const mode = (flags >>> 2) & 3;
     const hold = (flags & 0x200) !== 0;
+    const releaseOnly = (flags & 0x400) !== 0;
     let pan = (flags >>> 4) & 3;
     if (pan > 2) pan = 0;
     let wave = (flags >>> 6) & 3;
@@ -791,6 +803,7 @@ function tone(freq, duration, volume, flags)
         kind: wave,
         duty: [0.5, 0.25, 0.125, 0.75][mode],
         hold,
+        releaseOnly,
         f0, f1,
         frames: [att, dec, sus, rel],
         peak: vp / 100,
