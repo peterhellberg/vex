@@ -42,7 +42,7 @@ STEP := @printf "\033[32m==>\033[0m %s\n"
 # Do not print entering directories
 MAKEFLAGS += --no-print-directory
 
-.PHONY: all run runz web test test-web test-hosts
+.PHONY: all run runz web test test-web test-hosts test-mus
 .PHONY: install uninstall clean distclean test-deps docs help
 .PHONY: release release-linux release-windows release-macos
 
@@ -103,7 +103,7 @@ web:
 #     only C compiler this repo uses)
 ##@ Test
 
-test-hosts: ## Run Go and C conformance tests
+test-hosts: test-mus ## Run Go and C conformance tests
 	$(STEP) "Running conformance tests"
 	@cd cmd/vex-run && go test ./...
 	@go test ./...
@@ -112,10 +112,14 @@ test-hosts: ## Run Go and C conformance tests
 	@zig cc -std=c2x -Wno-gcc-install-dir-libstdcxx -I cmd/vex/test -o cmd/vex/test/tone_test.bin \
 		cmd/vex/test/tone_test.c -lm -lpthread
 	@cmd/vex/test/tone_test.bin
+	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
+
+test-mus:
+	$(STEP) "Running music tracker test"
 	@zig cc -std=c2x -Wno-gcc-install-dir-libstdcxx -I . -o cmd/vex/test/mus_test.bin \
 		cmd/vex/test/mus_test.c
 	@cmd/vex/test/mus_test.bin
-	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin cmd/vex/test/mus_test.bin
+	@rm -f cmd/vex/test/mus_test.bin
 
 test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser tests
 	$(STEP) "Running browser tests"

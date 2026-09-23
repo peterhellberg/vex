@@ -190,7 +190,7 @@ fn releaseVoice(ch: usize) void {
     }
 
     releaseTone(ch, inst.release);
-    v.inst = 0; // voice is finished; a second OFF hard-cuts
+    v.* = .{};
 }
 
 /// Chord code (129..141) -> the chord tone's MIDI note for arpeggio `step`.
@@ -301,6 +301,10 @@ pub fn tick() void {
             // volume: instrument default, overridden by per-note vol if set
             var vol: i32 = if (ev.vol > 0) ev.vol else inst.volume;
             if (vol > 100) vol = 100;
+            if (vol == 0) {
+                silence(ch);
+                continue;
+            }
 
             // resolve note (plain MIDI note or chord root)
             const note: i32 = if (ev.note >= 129)

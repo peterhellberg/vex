@@ -225,6 +225,10 @@ void mus_tick(void) {
             // punch; peak 0 would mean full-scale during the attack.
             int level = ev->vol > 0 ? ev->vol : inst->volume;
             if (level > 100) level = 100;
+            if (level == 0) {
+                _mus_silence(ch);
+                continue;
+            }
             int vol = VEX_TONE_VOLUME(level, level);
 
             // envelope: ADSR — sustain defaults to two rows so notes

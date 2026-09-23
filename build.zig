@@ -119,15 +119,43 @@ pub fn build(b: *std.Build) void {
     }
 
     // --- tests: run the SDK's zig test blocks (`zig build test`) -------------
+    const test_target = b.resolveTargetQuery(.{});
     const sdk_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("spr.zig"),
-        .target = b.resolveTargetQuery(.{}),
+        .target = test_target,
         .optimize = optimize,
         .strip = strip,
     }) });
     const run_sdk_tests = b.addRunArtifact(sdk_tests);
-    const test_step = b.step("test", "Run SDK tests (spr.zig)");
+
+    const test_vex_mod = b.createModule(.{
+        .root_source_file = b.path("cmd/vex/test/vex.zig"),
+        .target = test_target,
+        .optimize = optimize,
+        .strip = strip,
+    });
+    const test_mus_mod = b.createModule(.{
+        .root_source_file = b.path("mus.zig"),
+        .target = test_target,
+        .optimize = optimize,
+        .strip = strip,
+        .imports = &.{.{ .name = "vex", .module = test_vex_mod }},
+    });
+    const mus_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("cmd/vex/test/mus_test.zig"),
+        .target = test_target,
+        .optimize = optimize,
+        .strip = strip,
+        .imports = &.{
+            .{ .name = "mus", .module = test_mus_mod },
+            .{ .name = "vex", .module = test_vex_mod },
+        },
+    }) });
+    const run_mus_tests = b.addRunArtifact(mus_tests);
+
+    const test_step = b.step("test", "Run SDK tests (spr.zig, mus.zig)");
     test_step.dependOn(&run_sdk_tests.step);
+    test_step.dependOn(&run_mus_tests.step);
 
     // --- vex-init: scaffold a new cart project ------------------------------
     const init_exe = b.addExecutable(.{
