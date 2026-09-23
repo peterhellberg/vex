@@ -33,6 +33,8 @@
 // Note values.
 #define MUS_REST 0     // no note (let previous ring)
 #define MUS_OFF  128   // note-off: release the channel (noise hard-cuts)
+#define MUS_CHORD_MIN 129
+#define MUS_CHORD_MAX 141
 #define MUS_SUSTAIN_HOLD 255 // sustain indefinitely until OFF or a new note
 
 // An instrument preset. Maps to tone() parameters. ADSR.
@@ -55,7 +57,7 @@ typedef struct {
 
 // A note event (3 bytes, one per channel per row).
 typedef struct {
-    unsigned char note;    // MUS_REST, MUS_OFF, MIDI note 1..127, or chord 129..141
+    unsigned char note;    // MUS_REST, MUS_OFF, MIDI note 1..127, or chord MUS_CHORD_MIN..MUS_CHORD_MAX
     unsigned char inst;    // instrument index 1..num_insts (0 = no note)
     unsigned char vol;     // 0 = use instrument volume; 1..100 = override
 } MusEvent;
@@ -131,7 +133,7 @@ static void _mus_release(int ch) {
         _mus_silence(ch);
         return;
     }
-    tone(440, VEX_TONE_DURATION(0, 0, 0, inst->release), 0,
+    tone(0, VEX_TONE_DURATION(0, 0, 0, inst->release), 0,
          VEX_TONE_FLAGS(ch, 0, VEX_TONE_RELEASE));
     _mus_voice[ch] = (MusVoice){0};
 }
@@ -146,8 +148,15 @@ void mus_mute(int ch, int muted) {
     }
 }
 
+// Chord code (129..141) -> the chord tone's MIDI note for arpeggio `step`.
+// 129..135: C/D/E/F/G/A/B minor; 136..141: G/A/B/C/D/E major.
+// Use plain MIDI events for other roots or qualities.
 static int _mus_chord_note(int code, int step) {
-    int root = code >= 136 ? code - 136 + 55 : code - 129 + 48;
+    static const int roots[] = {48, 50, 52, 53, 55, 57, 59,
+                                55, 57, 59, 60, 62, 64};
+    if (code < MUS_CHORD_MIN || code > MUS_CHORD_MAX) return MUS_REST;
+
+    int root = roots[code - MUS_CHORD_MIN];
     int third = code >= 136 ? 4 : 3;
     int interval = step % 3 == 0 ? 0 : step % 3 == 1 ? third : 7;
     return root + interval;
@@ -188,6 +197,7 @@ void mus_tick(void) {
     if (pat_i >= _mus_song->num_pats) { mus_stop(); return; }
     const MusPat *pat = _mus_song->pats[pat_i];
 
+    // This runs before row triggers; a row trigger replaces the voice below.
     int arp_step = pat->speed >= 3 ? _mus_tick * 3 / pat->speed : 0;
     int arp_prev = pat->speed >= 3 && _mus_tick > 0
                        ? (_mus_tick - 1) * 3 / pat->speed
@@ -196,7 +206,8 @@ void mus_tick(void) {
         for (int ch = 0; ch < MUS_CHANNELS; ch++) {
             if (_mus_muted & (1u << ch)) continue;
             MusVoice *v = &_mus_voice[ch];
-            if (v->note < 129 || v->inst == 0 || v->inst > _mus_song->num_insts)
+            if (v->note < MUS_CHORD_MIN || v->note > MUS_CHORD_MAX ||
+                v->inst == 0 || v->inst > _mus_song->num_insts)
                 continue;
             const MusInst *inst = &_mus_song->insts[v->inst - 1];
             int pwm = inst->pwm
@@ -246,6 +257,11 @@ void mus_tick(void) {
                 continue;
             }
             const MusInst *inst = &_mus_song->insts[ev->inst - 1];
+            int is_chord = ev->note >= MUS_CHORD_MIN && ev->note <= MUS_CHORD_MAX;
+            if (ev->note > 127 && !is_chord) {
+                _mus_voice[ch].note = MUS_REST;
+                continue;
+            }
 
             // flags: channel, duty, waveform + pan
             int pwm = inst->pwm
@@ -281,7 +297,7 @@ void mus_tick(void) {
                 inst->release);
 
             // play the note using host MIDI note mode
-            int note = ev->note >= 129 ? _mus_chord_note(ev->note, 0) : ev->note;
+            int note = is_chord ? _mus_chord_note(ev->note, 0) : ev->note;
             tone(note, dur, vol, flags);
             _mus_voice[ch] = (MusVoice){ev->inst, ev->note, (unsigned char)level};
         }

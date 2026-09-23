@@ -68,8 +68,8 @@ const fm_instruments = [_]mus.Inst{
     },
 };
 const fm_events = [_]mus.Event{
-    .{ .note = 60, .inst = 1, .vol = 0 },
-    .{ .note = mus.REST, .inst = 0, .vol = 0 },
+    .{ .note = 139, .inst = 1, .vol = 0 },
+    .{ .note = 142, .inst = 1, .vol = 0 },
     .{ .note = mus.REST, .inst = 0, .vol = 0 },
     .{ .note = mus.REST, .inst = 0, .vol = 0 },
 };
@@ -122,9 +122,21 @@ test "FM instrument" {
     vex.reset();
     mus.tick();
     try std.testing.expectEqual(@as(usize, 1), vex.call_count);
+    try std.testing.expectEqual(@as(i32, 60), vex.calls[0].freq);
     try std.testing.expect(vex.calls[0].flags & vex.TONE_FM != 0);
     try std.testing.expectEqual(@as(i32, 2), (vex.calls[0].volume >> 16) & 255);
     try std.testing.expectEqual(@as(i32, 128), (vex.calls[0].volume >> 24) & 255);
+}
+
+test "release ignores frequency" {
+    mus.load(&fm_song);
+    mus.play();
+    vex.reset();
+    mus.tick();
+    mus.mute(0, true);
+    try std.testing.expectEqual(@as(usize, 2), vex.call_count);
+    try std.testing.expectEqual(@as(i32, 0), vex.calls[1].freq);
+    try std.testing.expect(vex.calls[1].flags & vex.TONE_RELEASE != 0);
 }
 
 test "mute" {

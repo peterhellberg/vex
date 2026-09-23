@@ -25,9 +25,9 @@
 //!   OFF (128)     note-off: apply the instrument's release envelope
 //!                 (noise instruments hard-cut instead — noise tails hiss)
 //!   1..127        MIDI note number
-//!   129..141      chord code, arpeggiated across the row (see `chordNote`);
-//!                 NOTE: minor codes only cover roots C3..F#3 (129..135),
-//!                 major codes roots G3..B3 (136..141)
+//!   129..141      compact chord palette, arpeggiated across the row (see
+//!                 `chordNote`): C/D/E/F/G/A/B minor, then G/A/B/C/D/E major;
+//!                 use plain MIDI events for other roots or qualities
 //!
 //! Sustain semantics on `Inst.sustain`:
 //!   0              default: pattern speed * 2 frames
@@ -42,6 +42,8 @@ pub const CHANNELS = vex.TONE_CHANNELS;
 /// Note values.
 pub const REST = 0; // no note (let previous ring)
 pub const OFF = 128; // note-off: release / silence the channel
+pub const CHORD_MIN: u8 = 129;
+pub const CHORD_MAX: u8 = 141;
 
 /// Hold the sustain level until the channel is retriggered or silenced.
 pub const SUSTAIN_HOLD: u8 = 255;
@@ -65,7 +67,7 @@ pub const Inst = extern struct {
 };
 
 /// A note event (3 bytes, one per channel per row).
-pub const Event = struct {
+pub const Event = extern struct {
     note: u8, // REST, OFF, MIDI 1..127, or chord 129..141
     inst: u8, // instrument index 1..num_insts (0 = no note played)
     vol: u8, // 0 = use instrument volume; 1..100 = override
@@ -181,7 +183,7 @@ fn releaseTone(ch: usize, release: i32) void {
         .release = release,
     }).pack();
     const flags = vex.toneFlags(@intCast(ch), 0, vex.TONE_RELEASE);
-    vex.tone(440, duration, 0, flags);
+    vex.tone(0, duration, 0, flags);
 }
 
 fn sustainFor(inst: *const Inst, speed: u8) i32 {
@@ -221,17 +223,13 @@ pub fn mute(ch: usize, muted: bool) void {
 }
 
 /// Chord code (129..141) -> the chord tone's MIDI note for arpeggio `step`.
-/// 129..135: minor triad, root = (code - 129) + 48   (C3..F#3)
-/// 136..141: major triad, root = (code - 136) + 55   (G3..B3)
+/// 129..135: C/D/E/F/G/A/B minor; 136..141: G/A/B/C/D/E major.
 fn chordNote(code: u8, step: u8) i32 {
-    const is_major = code >= 136;
+    if (code < CHORD_MIN or code > CHORD_MAX) return REST;
 
-    const root: i32 = if (is_major)
-        @as(i32, code - 136) + 55
-    else
-        @as(i32, code - 129) + 48;
-
-    const third: i32 = if (is_major) 4 else 3;
+    const roots = [_]i32{ 48, 50, 52, 53, 55, 57, 59, 55, 57, 59, 60, 62, 64 };
+    const root = roots[@intCast(code - CHORD_MIN)];
+    const third: i32 = if (code >= 136) 4 else 3;
 
     const interval = switch (step % 3) {
         0 => 0,
@@ -274,6 +272,7 @@ pub fn tick() void {
     // Mid-row arpeggio retrigger: chord channels cycle their triad once
     // per row. Retriggering restarts the envelope, so arps want
     // attack=0 / decay=0 instruments with a long-ish sustain.
+    // This runs before row triggers; a row trigger replaces the voice below.
     const arp_step: u8 = if (pat.speed >= 3)
         @intCast(@as(u16, _tick) * 3 / pat.speed)
     else
@@ -287,7 +286,7 @@ pub fn tick() void {
             if ((_muted & (@as(u8, 1) << @intCast(ch))) != 0) continue;
             const v = &_voice[ch];
 
-            if (v.note < 129) continue; // not a chord channel
+            if (v.note < CHORD_MIN or v.note > CHORD_MAX) continue;
             if (v.inst == 0 or v.inst > song.num_insts) continue;
 
             const inst = &song.insts[v.inst - 1];
@@ -329,6 +328,11 @@ pub fn tick() void {
                 continue;
             }
             const inst = &song.insts[ev.inst - 1];
+            const is_chord = ev.note >= CHORD_MIN and ev.note <= CHORD_MAX;
+            if (ev.note > 127 and !is_chord) {
+                v.note = REST;
+                continue;
+            }
 
             // volume: instrument default, overridden by per-note vol if set
             var vol: i32 = if (ev.vol > 0) ev.vol else inst.volume;
@@ -339,7 +343,7 @@ pub fn tick() void {
             }
 
             // resolve note (plain MIDI note or chord root)
-            const note: i32 = if (ev.note >= 129)
+            const note: i32 = if (is_chord)
                 chordNote(ev.note, 0)
             else
                 @as(i32, ev.note);

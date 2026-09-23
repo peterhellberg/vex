@@ -88,7 +88,7 @@ static const MusInst FM_INSTS[] = {
     {VEX_TONE_PULSE, VEX_TONE_MODE0, 0, 0, 2, 2, 50, 0, 0, 0, 0, 1, 2, 128},
 };
 static const MusEvent FM_EVENTS[MUS_CHANNELS] = {
-    {60, 1, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
+    {139, 1, 0}, {142, 1, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
 };
 static const MusPat FM_PAT = {1, 1, FM_EVENTS};
 static const MusPat *const FM_PATS[] = {&FM_PAT};
@@ -101,7 +101,9 @@ static void tick_n(int n) {
 
 int main(void) {
     CHECK("minor chord root", _mus_chord_note(129, 0) == 48);
+    CHECK("minor chord palette", _mus_chord_note(134, 0) == 57);
     CHECK("major chord root", _mus_chord_note(136, 0) == 55);
+    CHECK("major chord palette", _mus_chord_note(139, 0) == 60);
 
     mus_load(&SONG);
     CHECK("load resets position", mus_pos() == 0);
@@ -122,7 +124,7 @@ int main(void) {
 
     tick_n(2);
     CHECK("OFF releases the current voice",
-          g_ncalls == 3 &&
+          g_ncalls == 3 && g_calls[2].freq == 0 &&
               g_calls[2].dur == VEX_TONE_DURATION(0, 0, 0, 4) &&
               (g_calls[2].flags & VEX_TONE_RELEASE));
 
@@ -207,6 +209,7 @@ int main(void) {
     g_ncalls = 0;
     tick_n(1);
     CHECK("tracker FM emits one note", g_ncalls == 5);
+    CHECK("tracker FM chord root", g_calls[0].freq == 60);
     CHECK("tracker FM enable bit", g_calls[0].flags & VEX_TONE_FM);
     uint32_t fm_volume = (uint32_t)g_calls[0].vol;
     CHECK("tracker FM ratio", ((fm_volume >> 16) & 255) == 2);
