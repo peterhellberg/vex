@@ -79,6 +79,7 @@ pub const TONE_HOLD: i32 = 1 << 9;
 pub const TONE_RELEASE: i32 = 1 << 10;
 /// Enable 8-bit pulse-width modulation using the packed start/end widths.
 pub const TONE_PWM: i32 = 1 << 11;
+pub const TONE_FM: i32 = 1 << 30;
 
 /// Clear the whole screen to `color`.
 pub extern "env" fn cls(color: i32) void;
@@ -167,6 +168,13 @@ pub fn tonePulseWidth(start: i32, end: i32) i32 {
     return TONE_PWM | (toneByte(start) << 12) | (toneByte(end) << 20);
 }
 
+/// Optional 2-op FM payload for the upper 16 volume bits.
+pub fn toneFmParams(ratio: i32, index: i32) i32 {
+    const value: u32 = (@as(u32, @intCast(ratio & 0xFF)) << 16) |
+        (@as(u32, @intCast(index & 0xFF)) << 24);
+    return @bitCast(value);
+}
+
 /// ADSR duration in frames (each segment clamps to 0..255).
 pub const ToneDuration = struct {
     attack: i32 = 0,
@@ -222,6 +230,12 @@ pub const Note = struct {
     pan: i32 = 0,
     /// Extra `TONE_*` bits (e.g. `TONE_NOTE_MODE`), ORed into the flags.
     extra: i32 = 0,
+    /// Enable the optional two-operator FM voice.
+    fm: bool = false,
+    /// Modulator/carrier frequency ratio.
+    fm_ratio: i32 = 2,
+    /// Modulation index in 0..255.
+    fm_index: i32 = 64,
 
     pub fn play(n: Note) void {
         tone(
@@ -235,11 +249,11 @@ pub const Note = struct {
             (ToneVolume{
                 .level = n.volume,
                 .peak = n.peak,
-            }).pack(),
+            }).pack() | if (n.fm) toneFmParams(n.fm_ratio, n.fm_index) else 0,
             toneFlags(
                 n.channel,
                 n.mode,
-                n.wave | n.pan | n.extra,
+                n.wave | n.pan | n.extra | if (n.fm) TONE_FM else 0,
             ),
         );
     }

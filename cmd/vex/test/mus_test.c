@@ -4,6 +4,7 @@
 // end-of-song stop, and out-of-range instrument bounds checks.
 
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 // Redirect tone() to a recorder before mus.h (via vex.h) declares it.
@@ -82,6 +83,16 @@ static const MusEvent PWM_EVENTS[MUS_CHANNELS] = {
 static const MusPat PWM_PAT = {1, 1, PWM_EVENTS};
 static const MusPat *const PWM_PATS[] = {&PWM_PAT};
 static const MusSong PWM_SONG = {1, 1, 1, 0xFF, PWM_INSTS, PWM_PATS, ORDERS};
+
+static const MusInst FM_INSTS[] = {
+    {VEX_TONE_PULSE, VEX_TONE_MODE0, 0, 0, 2, 2, 50, 0, 0, 0, 0, 1, 2, 128},
+};
+static const MusEvent FM_EVENTS[MUS_CHANNELS] = {
+    {60, 1, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
+};
+static const MusPat FM_PAT = {1, 1, FM_EVENTS};
+static const MusPat *const FM_PATS[] = {&FM_PAT};
+static const MusSong FM_SONG = {1, 1, 1, 0xFF, FM_INSTS, FM_PATS, ORDERS};
 
 static void tick_n(int n) {
     for (int i = 0; i < n; i++)
@@ -190,6 +201,16 @@ int main(void) {
     CHECK("tracker PWM enable bit", g_calls[0].flags & VEX_TONE_PWM);
     CHECK("tracker PWM start width", ((g_calls[0].flags >> 12) & 255) == 64);
     CHECK("tracker PWM end width", ((g_calls[0].flags >> 20) & 255) == 192);
+
+    mus_load(&FM_SONG);
+    mus_play();
+    g_ncalls = 0;
+    tick_n(1);
+    CHECK("tracker FM emits one note", g_ncalls == 5);
+    CHECK("tracker FM enable bit", g_calls[0].flags & VEX_TONE_FM);
+    uint32_t fm_volume = (uint32_t)g_calls[0].vol;
+    CHECK("tracker FM ratio", ((fm_volume >> 16) & 255) == 2);
+    CHECK("tracker FM index", ((fm_volume >> 24) & 255) == 128);
 
     if (failures) {
         fprintf(stderr, "MUS: %d failure(s)\n", failures);

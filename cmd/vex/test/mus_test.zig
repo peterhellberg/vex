@@ -52,6 +52,40 @@ const song = mus.Song{
     .orders = &orders,
 };
 
+const fm_instruments = [_]mus.Inst{
+    .{
+        .wave = vex.TONE_PULSE,
+        .duty = vex.TONE_MODE0,
+        .attack = 0,
+        .decay = 0,
+        .sustain = 2,
+        .release = 2,
+        .volume = 50,
+        .pan = 0,
+        .fm = 1,
+        .fm_ratio = 2,
+        .fm_index = 128,
+    },
+};
+const fm_events = [_]mus.Event{
+    .{ .note = 60, .inst = 1, .vol = 0 },
+    .{ .note = mus.REST, .inst = 0, .vol = 0 },
+    .{ .note = mus.REST, .inst = 0, .vol = 0 },
+    .{ .note = mus.REST, .inst = 0, .vol = 0 },
+};
+const fm_pattern = mus.Pat{ .rows = 1, .speed = 7, .events = &fm_events };
+const fm_patterns = [_]*const mus.Pat{&fm_pattern};
+const fm_orders = [_]u8{0};
+const fm_song = mus.Song{
+    .num_insts = fm_instruments.len,
+    .num_pats = fm_patterns.len,
+    .num_orders = fm_orders.len,
+    .loop_ord = 0xFF,
+    .insts = &fm_instruments,
+    .pats = &fm_patterns,
+    .orders = &fm_orders,
+};
+
 test "zero volume, arpeggio, and rest" {
     mus.load(&song);
     mus.play();
@@ -80,6 +114,17 @@ test "zero volume, arpeggio, and rest" {
         try std.testing.expectEqual(@as(i32, 0), call.volume);
         try std.testing.expectEqual(@as(i32, @intCast(channel)), call.flags & 3);
     }
+}
+
+test "FM instrument" {
+    mus.load(&fm_song);
+    mus.play();
+    vex.reset();
+    mus.tick();
+    try std.testing.expectEqual(@as(usize, 1), vex.call_count);
+    try std.testing.expect(vex.calls[0].flags & vex.TONE_FM != 0);
+    try std.testing.expectEqual(@as(i32, 2), (vex.calls[0].volume >> 16) & 255);
+    try std.testing.expectEqual(@as(i32, 128), (vex.calls[0].volume >> 24) & 255);
 }
 
 test "mute" {

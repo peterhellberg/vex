@@ -220,6 +220,20 @@ func TestToneEngineSlideReachesTarget(t *testing.T) {
 	}
 }
 
+func TestToneEngineFM(t *testing.T) {
+	e := &toneEngine{}
+	volume := uint32(100) | uint32(2)<<16 | uint32(128)<<24
+	e.tone(220, 1, volume, 1<<30)
+	buf := make([]byte, 4*34)
+	if n, err := e.Read(buf); err != nil || n != len(buf) {
+		t.Fatalf("FM Read = (%d, %v)", n, err)
+	}
+	v := &e.voices[0]
+	if !v.fm || v.fmRatio != 2 || v.fmIndex <= 0 || v.modPh <= 0 {
+		t.Fatalf("FM voice = enabled %v ratio %d index %v phase %v", v.fm, v.fmRatio, v.fmIndex, v.modPh)
+	}
+}
+
 func TestToneEngineClearSilencesOnRead(t *testing.T) {
 	e := &toneEngine{}
 

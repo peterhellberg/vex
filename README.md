@@ -367,8 +367,8 @@ envelopes itself, so carts never need an audio clock:
 |---|---|
 | `freq` | low 16 bits: start frequency in Hz (clamps to 1..20000); high 16 bits: optional slide target reached linearly over the sustain |
 | `duration` | four ADSR segment lengths in frames, each 0..255: `sustain \| release << 8 \| decay << 16 \| attack << 24` |
-| `volume` | low byte: sustain level 0..100; high byte: optional attack-time peak (`0` means 100 during the attack) |
-| `flags` | channel (0..3), duty cycle, panning, waveform, note mode, hold, release, PWM |
+| `volume` | low byte: sustain level 0..100; high byte: optional attack-time peak (`0` means 100 during the attack); when FM is enabled, ratio at bits 16..23 and index at bits 24..31 |
+| `flags` | channel (0..3), duty cycle, panning, waveform, note mode, hold, release, PWM, FM |
 
 Waveforms: pulse (default; duty cycles via `VEX_TONE_MODE0`-`VEX_TONE_MODE3`),
 `VEX_TONE_NOISE` (an LFSR stepped at 2x freq, clamped by the host to a safe audible range), and `VEX_TONE_TRI`. `VEX_TONE_NOTE_MODE`
@@ -376,10 +376,11 @@ interprets the frequency parameter as a MIDI note number instead of Hz.
 `VEX_TONE_HOLD` holds the sustain level, while `VEX_TONE_RELEASE` ramps the
 current voice down over the release duration; its frequency and volume are ignored.
 `VEX_TONE_PULSE_WIDTH(start, end)` enables 8-bit pulse-width control, with an
-optional sweep from start to end over the sustain segment.
+optional sweep from start to end over the sustain segment. `VEX_TONE_FM` enables
+an optional two-operator FM voice; pack its ratio/index with `VEX_TONE_FM_PARAMS`.
 Use the SDK helpers (`VEX_TONE_DURATION`, `VEX_TONE_VOLUME`, `VEX_TONE_FLAGS`,
-`VEX_TONE_SLIDE` in C / `ToneDuration`, `ToneVolume`, `toneFlags`, `toneSlide`
-in Zig) rather than packing by hand.
+`VEX_TONE_SLIDE`, `VEX_TONE_FM_PARAMS` in C / `ToneDuration`, `ToneVolume`,
+`toneFlags`, `toneSlide`, `toneFmParams` in Zig) rather than packing by hand.
 
 ```c
 // Middle C for one second on channel 0:

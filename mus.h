@@ -48,6 +48,9 @@ typedef struct {
     unsigned char pwm;       // 0 disables PWM; otherwise start/end are widths
     unsigned char pwm_start; // 0..255 start width
     unsigned char pwm_end;   // 0..255 sweep target width
+    unsigned char fm;        // 0 disables 2-op FM
+    unsigned char fm_ratio;  // modulator/carrier frequency ratio
+    unsigned char fm_index;  // modulation index 0..255
 } MusInst;
 
 // A note event (3 bytes, one per channel per row).
@@ -199,15 +202,19 @@ void mus_tick(void) {
             int pwm = inst->pwm
                           ? VEX_TONE_PULSE_WIDTH(inst->pwm_start, inst->pwm_end)
                           : 0;
+            int fm = inst->fm ? VEX_TONE_FM : 0;
+            int fm_payload = inst->fm
+                                 ? VEX_TONE_FM_PARAMS(inst->fm_ratio, inst->fm_index)
+                                 : 0;
             int mode = pwm ? 0 : inst->duty;
             int flags = VEX_TONE_FLAGS(ch, mode,
-                inst->wave | inst->pan | VEX_TONE_NOTE_MODE | pwm |
+                inst->wave | inst->pan | VEX_TONE_NOTE_MODE | pwm | fm |
                 (inst->sustain == MUS_SUSTAIN_HOLD ? VEX_TONE_HOLD : 0));
             int sus = inst->sustain ? inst->sustain : pat->speed * 2;
             tone(_mus_chord_note(v->note, arp_step),
                  VEX_TONE_DURATION(inst->attack, inst->decay,
                                   sus, inst->release),
-                 VEX_TONE_VOLUME(v->vol, v->vol), flags);
+                 VEX_TONE_VOLUME(v->vol, v->vol) | fm_payload, flags);
         }
     }
 
@@ -244,9 +251,13 @@ void mus_tick(void) {
             int pwm = inst->pwm
                           ? VEX_TONE_PULSE_WIDTH(inst->pwm_start, inst->pwm_end)
                           : 0;
+            int fm = inst->fm ? VEX_TONE_FM : 0;
+            int fm_payload = inst->fm
+                                 ? VEX_TONE_FM_PARAMS(inst->fm_ratio, inst->fm_index)
+                                 : 0;
             int mode = pwm ? 0 : inst->duty;
             int flags = VEX_TONE_FLAGS(ch, mode,
-                inst->wave | inst->pan | VEX_TONE_NOTE_MODE | pwm |
+                inst->wave | inst->pan | VEX_TONE_NOTE_MODE | pwm | fm |
                 (inst->sustain == MUS_SUSTAIN_HOLD ? VEX_TONE_HOLD : 0));
 
             // volume: instrument default, overridden by per-note vol if set.
@@ -258,7 +269,7 @@ void mus_tick(void) {
                 _mus_silence(ch);
                 continue;
             }
-            int vol = VEX_TONE_VOLUME(level, level);
+            int vol = VEX_TONE_VOLUME(level, level) | fm_payload;
 
             // envelope: ADSR — sustain defaults to two rows so notes
             // ring, but a non-zero inst sustain overrides for short hats

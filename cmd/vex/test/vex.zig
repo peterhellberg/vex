@@ -12,6 +12,7 @@ pub const TONE_NOTE_MODE: i32 = 1 << 8;
 pub const TONE_HOLD: i32 = 1 << 9;
 pub const TONE_RELEASE: i32 = 1 << 10;
 pub const TONE_PWM: i32 = 1 << 11;
+pub const TONE_FM: i32 = 1 << 30;
 
 pub const ToneDuration = struct {
     attack: i32 = 0,
@@ -38,6 +39,12 @@ pub const ToneVolume = struct {
 
 pub fn tonePulseWidth(start: i32, end: i32) i32 {
     return TONE_PWM | (toneByte(start) << 12) | (toneByte(end) << 20);
+}
+
+pub fn toneFmParams(ratio: i32, index: i32) i32 {
+    const value: u32 = (@as(u32, @intCast(ratio & 0xFF)) << 16) |
+        (@as(u32, @intCast(index & 0xFF)) << 24);
+    return @bitCast(value);
 }
 
 pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
