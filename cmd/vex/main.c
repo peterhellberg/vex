@@ -762,6 +762,11 @@ static void voice_next_segment(ToneVoice *v) {
     long n = v->seg_len[v->seg];
     if (n <= 0) {
       v->level = v->seg_end[v->seg];
+      if (v->seg == 2 && v->hold) {
+        v->seg_left = 1;
+        v->slope = 0.0;
+        return;
+      }
       continue;
     }
     v->seg_left = n;

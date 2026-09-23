@@ -182,6 +182,21 @@ int main(void) {
         CHECK("zero release cuts active voice", v->seg == 4 && v->level == 0.0);
     }
 
+    {
+        ToneTrigger held = mk_pulse(440, 0, 0, 0, 0, 8);
+        held.hold = 1;
+        fire_and_run(0, held, 2000);
+        CHECK("zero-sustain hold remains active",
+              g_voice[0].seg == 2 && g_voice[0].level > 0.99);
+
+        ToneTrigger release = {0};
+        release.release_only = 1;
+        release.frames[3] = 1;
+        fire_and_run(0, release, 800);
+        CHECK("zero-sustain hold releases on request",
+              g_voice[0].seg == 4 && g_voice[0].level == 0.0);
+    }
+
     // ---- kill idiom: all-zero duration silences the channel ------------------
     {
         fire_and_run(0, mk_pulse(440, 0, 0, 0, 10, 0), 16);

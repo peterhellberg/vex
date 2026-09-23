@@ -82,6 +82,7 @@ VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 // with the VEX_TONE_* helpers below:
 //   freq     low 16: start Hz; high 16: slide target over the sustain
 //   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
+//            (attack 0 uses a short host fade-in to prevent trigger clicks)
 //   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
 //   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
 //            bit 8 note mode | bit 9 hold sustain | bit 10 release |
@@ -94,23 +95,27 @@ VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
 // Slide from `freq` to `to` over the sustain duration (linear in Hz).
 #define VEX_TONE_SLIDE(freq, to) \
-  (((freq) & 0xFFFF) | (((to) & 0xFFFF) << 16))
+  ((unsigned int)((freq) & 0xFFFFu) | \
+   ((unsigned int)((to) & 0xFFFFu) << 16))
 
 #define VEX_TONE_DUR_BYTE(v) ((v) < 0 ? 0 : (v) > 255 ? 255 : (v))
 
 #define VEX_TONE_DURATION(attack, decay, sustain, release) \
-  (VEX_TONE_DUR_BYTE(sustain) | (VEX_TONE_DUR_BYTE(release) << 8) | \
-   (VEX_TONE_DUR_BYTE(decay) << 16) | (VEX_TONE_DUR_BYTE(attack) << 24))
+  ((unsigned int)VEX_TONE_DUR_BYTE(sustain) | \
+   ((unsigned int)VEX_TONE_DUR_BYTE(release) << 8) | \
+   ((unsigned int)VEX_TONE_DUR_BYTE(decay) << 16) | \
+   ((unsigned int)VEX_TONE_DUR_BYTE(attack) << 24))
 
 #define VEX_TONE_PULSE_WIDTH(start, end) \
-  (VEX_TONE_PWM | (VEX_TONE_DUR_BYTE(start) << 12) | \
-   (VEX_TONE_DUR_BYTE(end) << 20))
+  (VEX_TONE_PWM | ((unsigned int)VEX_TONE_DUR_BYTE(start) << 12) | \
+   ((unsigned int)VEX_TONE_DUR_BYTE(end) << 20))
 
 #define VEX_TONE_VOL_BYTE(v) ((v) < 0 ? 0 : (v) > 100 ? 100 : (v))
 
 // Sustain volume 0..100 with optional attack-time peak (peak 0 = full).
 #define VEX_TONE_VOLUME(volume, peak) \
-  (VEX_TONE_VOL_BYTE(volume) | (VEX_TONE_VOL_BYTE(peak) << 8))
+  ((unsigned int)VEX_TONE_VOL_BYTE(volume) | \
+   ((unsigned int)VEX_TONE_VOL_BYTE(peak) << 8))
 
 // Channel 0..3, duty mode, plus any VEX_TONE_* extras ORed together.
 #define VEX_TONE_FLAGS(channel, mode, extra) \

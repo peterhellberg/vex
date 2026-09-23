@@ -185,6 +185,28 @@ func TestToneEngineReadPhaseAndEnd(t *testing.T) {
 	}
 }
 
+func TestToneEngineZeroSustainHold(t *testing.T) {
+	e := &toneEngine{}
+	e.tone(440, 8<<8, 100, 1<<9)
+	buf := make([]byte, 4*2000)
+	if n, err := e.Read(buf); err != nil || n != len(buf) {
+		t.Fatalf("hold Read = (%d, %v)", n, err)
+	}
+	v := &e.voices[0]
+	if v.seg != segSustain || v.level < 0.99 {
+		t.Fatalf("zero-sustain hold = segment %d level %v", v.seg, v.level)
+	}
+
+	e.tone(440, 1<<8, 100, 1<<10)
+	buf = make([]byte, 4*800)
+	if n, err := e.Read(buf); err != nil || n != len(buf) {
+		t.Fatalf("release Read = (%d, %v)", n, err)
+	}
+	if v.seg != segIdle || v.level != 0 {
+		t.Fatalf("held release = segment %d level %v", v.seg, v.level)
+	}
+}
+
 func TestToneEngineClearSilencesOnRead(t *testing.T) {
 	e := &toneEngine{}
 
