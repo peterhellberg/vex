@@ -97,27 +97,25 @@ const Voice = struct {
     inst: u8 = 0, // last triggered instrument (1-indexed), 0 = none
     note: u8 = REST, // last triggered note / chord code
     vol: u8 = 0, // resolved volume at trigger time
-    arp_step: u8 = 0, // arpeggio step counter
 };
 var _voice: [CHANNELS]Voice = @splat(.{});
 
 /// Load a song (resets position to the start).
 pub fn load(song: *const Song) void {
+    stop();
     _song = song;
-    _on = false;
     _ord = 0;
     _row = 0;
     _tick = 0;
-    _voice = @splat(.{});
 }
 
 /// Start playback.
 pub fn play() void {
+    stop();
     _on = true;
     _ord = 0;
     _row = 0;
     _tick = 0;
-    _voice = @splat(.{});
 }
 
 /// Current position: low 8 bits = order, bits 8..15 = row.
@@ -160,27 +158,13 @@ fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32, sustain: i32) voi
     vex.tone(note, duration, volume, flags);
 }
 
-/// Issue a tone with an explicit sustain length (used for OFF tails).
-fn playSustain(ch: usize, inst: *const Inst, note: i32, vol: i32, sus: i32) void {
+/// Release a channel from its current envelope level.
+fn releaseTone(ch: usize, release: i32) void {
     const duration = (vex.ToneDuration{
-        .sustain = sus,
-        .release = inst.release,
-        .decay = 0,
-        .attack = 0,
+        .release = release,
     }).pack();
-
-    const volume = (vex.ToneVolume{
-        .level = vol,
-        .peak = vol,
-    }).pack();
-
-    const flags = vex.toneFlags(
-        @intCast(ch),
-        inst.duty,
-        inst.wave | inst.pan | vex.TONE_NOTE_MODE,
-    );
-
-    vex.tone(note, duration, volume, flags);
+    const flags = vex.toneFlags(@intCast(ch), 0, vex.TONE_RELEASE);
+    vex.tone(440, duration, 0, flags);
 }
 
 fn sustainFor(inst: *const Inst, speed: u8) i32 {
@@ -205,21 +189,18 @@ fn releaseVoice(ch: usize) void {
         return;
     }
 
-    // Re-issue with minimal sustain so the envelope falls through into
-    // the release segment rather than restarting the gate.
-    const note = if (v.note >= 129) chordNote(v.note, v.arp_step) else @as(i32, v.note);
-    playSustain(ch, inst, note, v.vol, 1);
+    releaseTone(ch, inst.release);
     v.inst = 0; // voice is finished; a second OFF hard-cuts
 }
 
 /// Chord code (129..141) -> the chord tone's MIDI note for arpeggio `step`.
 /// 129..135: minor triad, root = (code - 129) + 48   (C3..F#3)
-/// 136..141: major triad, root = (code - 136) + 51   (G3..B3)
+/// 136..141: major triad, root = (code - 136) + 55   (G3..B3)
 fn chordNote(code: u8, step: u8) i32 {
     const is_major = code >= 136;
 
     const root: i32 = if (is_major)
-        @as(i32, code - 136) + 51
+        @as(i32, code - 136) + 55
     else
         @as(i32, code - 129) + 48;
 
@@ -234,7 +215,8 @@ fn chordNote(code: u8, step: u8) i32 {
     return root + interval;
 }
 
-fn stop() void {
+/// Stop playback and silence all channels.
+pub fn stop() void {
     _on = false;
 
     inline for (0..CHANNELS) |ch| {
@@ -265,8 +247,15 @@ pub fn tick() void {
     // Mid-row arpeggio retrigger: chord channels cycle their triad once
     // per row. Retriggering restarts the envelope, so arps want
     // attack=0 / decay=0 instruments with a long-ish sustain.
-    const arp_frame: u8 = pat.speed / 3;
-    if (arp_frame > 0 and _tick > 0 and _tick % arp_frame == 0) {
+    const arp_step: u8 = if (pat.speed >= 3)
+        @intCast(@as(u16, _tick) * 3 / pat.speed)
+    else
+        0;
+    const arp_prev: u8 = if (pat.speed >= 3 and _tick > 0)
+        @intCast((@as(u16, _tick) - 1) * 3 / pat.speed)
+    else
+        0;
+    if (arp_step > arp_prev) {
         for (0..CHANNELS) |ch| {
             const v = &_voice[ch];
 
@@ -275,9 +264,7 @@ pub fn tick() void {
 
             const inst = &song.insts[v.inst - 1];
 
-            v.arp_step +%= 1;
-
-            playInst(ch, inst, chordNote(v.note, v.arp_step), v.vol, sustainFor(inst, pat.speed));
+            playInst(ch, inst, chordNote(v.note, arp_step), v.vol, sustainFor(inst, pat.speed));
         }
     }
 
@@ -299,10 +286,16 @@ pub fn tick() void {
             }
 
             // rest or no instrument: nothing to trigger
-            if (ev.note == REST or ev.inst == 0) continue;
+            if (ev.note == REST or ev.inst == 0) {
+                v.note = REST;
+                continue;
+            }
 
             // resolve instrument (1-indexed), bounds-checked
-            if (ev.inst > song.num_insts) continue;
+            if (ev.inst > song.num_insts) {
+                v.note = REST;
+                continue;
+            }
             const inst = &song.insts[ev.inst - 1];
 
             // volume: instrument default, overridden by per-note vol if set
@@ -321,7 +314,6 @@ pub fn tick() void {
             v.inst = ev.inst;
             v.note = ev.note;
             v.vol = @intCast(vol);
-            v.arp_step = 0;
         }
     }
 
