@@ -69,6 +69,7 @@ static ToneTrigger mk_pulse(float f0, float f1, int att, int dec,
     ToneTrigger t = {0};
     t.kind = 0;
     t.duty = 0.5f;
+    t.duty_to = t.duty;
     t.f0 = f0;
     t.f1 = f1;
     t.frames[0] = att; t.frames[1] = dec; t.frames[2] = sus; t.frames[3] = rel;
@@ -201,6 +202,20 @@ int main(void) {
         double end_hz = hz_between(13600, 15800);    // last stretch of sustain
         CHECK("slide starts near 220 Hz", start_hz > 180 && start_hz < 280);
         CHECK("slide approaches 880 Hz", end_hz > 700 && end_hz < 1060);
+    }
+
+    {
+        ToneTrigger pwm = mk_pulse(1000, 0, 0, 0, 2, 0);
+        pwm.duty = 32.0 / 255.0;
+        pwm.duty_to = 224.0 / 255.0;
+        pwm.hold = 1;
+        fire_and_run(0, pwm, 32 + 2 * 800);
+        CHECK("PWM reaches its end width",
+              fabs(g_voice[0].duty - pwm.duty_to) < 1e-12);
+        CHECK("PWM sweep finishes at sustain end", g_voice[0].duty_left == 0);
+        mix_callback(g_out, 800);
+        CHECK("held PWM stays at its end width",
+              fabs(g_voice[0].duty - pwm.duty_to) < 1e-12);
     }
 
     // ---- noise: full-period LFSR, clock clamping and attack -------------------

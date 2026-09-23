@@ -432,6 +432,29 @@ func TestToneSlideReachesTarget(t *testing.T) {
 	}
 }
 
+func TestTonePulseWidthSweep(t *testing.T) {
+	e := &toneEngine{}
+	e.tone(1000, 2, 100, (1<<9)|(1<<11)|(32<<12)|(224<<20))
+	trigger := e.pending[0]
+	if trigger == nil {
+		t.Fatal("PWM trigger not parsed")
+	}
+	e.voices[0].apply(trigger, float64(toneRate)/60)
+	e.pending[0] = nil
+	if math.Abs(e.voices[0].duty-32.0/255.0) > 1e-12 {
+		t.Fatalf("initial PWM width = %g", e.voices[0].duty)
+	}
+	if _, err := e.Read(make([]byte, 4*(32+2*toneRate/60+toneRate/60))); err != nil {
+		t.Fatalf("PWM Read: %v", err)
+	}
+	if math.Abs(e.voices[0].duty-224.0/255.0) > 1e-12 {
+		t.Fatalf("final PWM width = %g", e.voices[0].duty)
+	}
+	if e.voices[0].dutyLeft != 0 || e.voices[0].dutyStep != 0 {
+		t.Fatalf("PWM sweep did not stop: left=%d step=%g", e.voices[0].dutyLeft, e.voices[0].dutyStep)
+	}
+}
+
 func TestToneNoiseMatchesLFSR(t *testing.T) {
 	e := &toneEngine{}
 	e.tone(8000, 8, 100, 1<<6) // noise on channel 0

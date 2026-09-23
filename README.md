@@ -368,13 +368,15 @@ envelopes itself, so carts never need an audio clock:
 | `freq` | low 16 bits: start frequency in Hz (clamps to 1..20000); high 16 bits: optional slide target reached linearly over the sustain |
 | `duration` | four ADSR segment lengths in frames, each 0..255: `sustain \| release << 8 \| decay << 16 \| attack << 24` |
 | `volume` | low byte: sustain level 0..100; high byte: optional attack-time peak (`0` means 100 during the attack) |
-| `flags` | channel (0..3), duty cycle, panning, waveform, note mode, hold, release |
+| `flags` | channel (0..3), duty cycle, panning, waveform, note mode, hold, release, PWM |
 
 Waveforms: pulse (default; duty cycles via `VEX_TONE_MODE0`-`VEX_TONE_MODE3`),
 `VEX_TONE_NOISE` (an LFSR stepped at 2x freq), and `VEX_TONE_TRI`. `VEX_TONE_NOTE_MODE`
 interprets the frequency parameter as a MIDI note number instead of Hz.
 `VEX_TONE_HOLD` holds the sustain level, while `VEX_TONE_RELEASE` ramps the
 current voice down over the release duration; its frequency and volume are ignored.
+`VEX_TONE_PULSE_WIDTH(start, end)` enables 8-bit pulse-width control, with an
+optional sweep from start to end over the sustain segment.
 Use the SDK helpers (`tone_duration`, `tone_volume`, `tone_flags`,
 `tone_slide` in C / `ToneDuration`, `ToneVolume`, `toneFlags`, `toneSlide`
 in Zig) rather than packing by hand.

@@ -18,6 +18,9 @@ const INSTS = [_]mus.Inst{
         .release = 10,
         .volume = 92,
         .pan = 0,
+        .pwm = 1,
+        .pwm_start = 192,
+        .pwm_end = 192,
     },
     // 1: Für Elise lead - pulse 12.5% but down 12 semitones (E4 not E5), thin/dark
     .{
@@ -29,6 +32,9 @@ const INSTS = [_]mus.Inst{
         .release = 7,
         .volume = 52,
         .pan = vex.TONE_PAN_LEFT,
+        .pwm = 1,
+        .pwm_start = 32,
+        .pwm_end = 192,
     },
     // 2: sub - TRI 2 octaves below lead, just to rattle the chest.
     //    SUSTAIN_HOLD: maximum-length sustain, gated by the pattern's OFFs.

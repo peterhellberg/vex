@@ -218,8 +218,8 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		"// ---- audio (tone)", "static M3Result link_host")
 	goSrc := section(mustRead(t, "cmd/vex-run/main.go"),
 		"const toneRate = 48000", "func suppressAudioHookError")
-	jsSrc := section(mustRead(t, "cmd/vex-web/assets/vex.js"),
-		"function toneWorkletMain", "registerProcessor")
+	jsAll := mustRead(t, "cmd/vex-web/assets/vex.js")
+	jsSrc := section(jsAll, "function toneWorkletMain", "registerProcessor")
 
 	// Literals shared verbatim by all three mixer loops.
 	shared := []string{
@@ -250,6 +250,7 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		{"noise right shift", "v->lfsr >> 1", "v.lfsr >> 1", "v.lfsr >> 1"},
 		{"noise output", "s = (v->lfsr & 1) ? 1.0 : -1.0", "if v.lfsr&1 == 1", "s = (v.lfsr & 1) ? 1 : -1"},
 		{"web noise Nyquist clamp", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "Math.min(Math.max(nclk, TONE_NOISE_CLK_MIN), Math.min(TONE_NOISE_CLK_MAX, sr / 2))"},
+		{"PWM motion", "v->duty_left", "v.dutyLeft", "v.dutyLeft"},
 		{"pulse warmth", "v->lp += 0.5 *", "v.lp += 0.5 * (raw - v.lp)", "v.lp += 0.5 * (raw - v.lp)"},
 		{"release trigger field", "release_only", "releaseOnly", "releaseOnly"},
 		{"release branch", "t->release_only", "t.releaseOnly", "t.releaseOnly"},
@@ -263,6 +264,14 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		}
 		if !strings.Contains(jsSrc, p.js) {
 			t.Errorf("JS %s moved: %q missing", p.desc, p.js)
+		}
+	}
+	for _, lit := range []string{
+		"const pwm = (flags & 0x800) !== 0",
+		"const duty = pwm ?",
+	} {
+		if !strings.Contains(jsAll, lit) {
+			t.Errorf("JS PWM parser moved: %q missing", lit)
 		}
 	}
 }

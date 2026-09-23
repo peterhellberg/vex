@@ -11,6 +11,7 @@ pub const TONE_PAN_RIGHT: i32 = 2 << 4;
 pub const TONE_NOTE_MODE: i32 = 1 << 8;
 pub const TONE_HOLD: i32 = 1 << 9;
 pub const TONE_RELEASE: i32 = 1 << 10;
+pub const TONE_PWM: i32 = 1 << 11;
 
 pub const ToneDuration = struct {
     attack: i32 = 0,
@@ -34,6 +35,10 @@ pub const ToneVolume = struct {
         return toneByte(value.level) | (toneByte(value.peak) << 8);
     }
 };
+
+pub fn tonePulseWidth(start: i32, end: i32) i32 {
+    return TONE_PWM | (toneByte(start) << 12) | (toneByte(end) << 20);
+}
 
 pub fn toneFlags(channel: i32, mode: i32, extra: i32) i32 {
     return (channel & 3) | (mode & (3 << 2)) | (extra & ~@as(i32, 3 | (3 << 2)));

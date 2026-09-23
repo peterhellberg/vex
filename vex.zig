@@ -77,6 +77,8 @@ pub const TONE_NOTE_MODE: i32 = 1 << 8;
 pub const TONE_HOLD: i32 = 1 << 9;
 /// Release the current voice from its current envelope level.
 pub const TONE_RELEASE: i32 = 1 << 10;
+/// Enable 8-bit pulse-width modulation using the packed start/end widths.
+pub const TONE_PWM: i32 = 1 << 11;
 
 /// Clear the whole screen to `color`.
 pub extern "env" fn cls(color: i32) void;
@@ -129,7 +131,8 @@ pub extern "env" fn palreset() void;
 ///   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
 ///   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
 ///   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
-///            bit 8 note mode | bit 9 hold sustain | bit 10 release
+///            bit 8 note mode | bit 9 hold sustain | bit 10 release |
+///            bit 11 PWM | bits 12..19 start width | bits 20..27 end width
 pub extern "env" fn tone(freq: i32, duration: i32, volume: i32, flags: i32) void;
 
 // ---- input -----------------------------------------------------------------
@@ -154,6 +157,11 @@ pub fn pressed(button: i32) bool {
 /// Slide from `freq` to `to` over the sustain duration (linear in Hz).
 pub fn toneSlide(freq: i32, to: i32) i32 {
     return (freq & 0xFFFF) | ((to & 0xFFFF) << 16);
+}
+
+/// 8-bit pulse width in 0..255, optionally sweeping to `end` over sustain.
+pub fn tonePulseWidth(start: i32, end: i32) i32 {
+    return TONE_PWM | (toneByte(start) << 12) | (toneByte(end) << 20);
 }
 
 /// ADSR duration in frames (each segment clamps to 0..255).

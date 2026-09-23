@@ -649,6 +649,9 @@ m3ApiRawFunction(host_palreset) {
 typedef struct {
   int kind;          // 0 pulse, 1 noise, 2 triangle
   double duty;       // pulse flip point within the period (0..1)
+  double duty_to;    // pulse-width sweep target
+  double duty_step;  // per-sample pulse-width delta
+  long duty_left;    // samples remaining in pulse-width sweep
   double freq;       // current frequency in Hz
   double freq_to;    // slide target Hz (0 = no slide)
   double freq_start; // frequency at slide start
@@ -680,6 +683,7 @@ static bool g_stream_ready = false;
 typedef struct {
   int kind;
   double duty;
+  double duty_to;
   double f0, f1;
   int frames[4]; // attack, decay, sustain, release
   int hold;
@@ -730,6 +734,9 @@ static void clear_audio(void) {
     g_voice[i].ph = 0.0;
     g_voice[i].nph = 0.0;
     g_voice[i].lfsr = 0x2CE1;
+    g_voice[i].duty_to = g_voice[i].duty;
+    g_voice[i].duty_step = 0.0;
+    g_voice[i].duty_left = 0;
     g_voice[i].lp = 0.0;
     g_voice[i].dc = 0.0;
     g_voice[i].dc_prev = 0.0;
@@ -759,10 +766,16 @@ static void voice_next_segment(ToneVoice *v) {
     }
     v->seg_left = n;
     v->slope = (v->seg_end[v->seg] - v->level) / (double)n;
-    if (v->seg == 2 && v->freq_to > 0.0) {
-      // The slide rides the sustain segment: linear in Hz from the
-      // start frequency to the target across its samples.
-      v->freq_step = (v->freq_to - v->freq_start) / (double)n;
+    if (v->seg == 2) {
+      if (v->freq_to > 0.0) {
+        // The slide rides the sustain segment: linear in Hz from the
+        // start frequency to the target across its samples.
+        v->freq_step = (v->freq_to - v->freq_start) / (double)n;
+      }
+      if (v->duty_to != v->duty) {
+        v->duty_left = n;
+        v->duty_step = (v->duty_to - v->duty) / (double)n;
+      }
     }
     return;
   }
@@ -789,11 +802,16 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
     v->seg_left = n;
     v->slope = -v->level / (double)n;
     v->freq_step = 0.0;
+    v->duty_step = 0.0;
+    v->duty_left = 0;
     return;
   }
 
   v->kind = t->kind;
   v->duty = t->duty;
+  v->duty_to = t->duty_to;
+  v->duty_step = 0.0;
+  v->duty_left = 0;
   v->freq_start = t->f0;
   v->freq_to = t->f1;
   v->freq = t->f0;
@@ -929,6 +947,15 @@ static void mix_callback(void *buffer, unsigned int frames) {
           v->freq += v->freq_step;
         }
       }
+      if (v->duty_left > 0) {
+        v->duty_left--;
+        if (v->duty_left <= 0) {
+          v->duty = v->duty_to;
+          v->duty_step = 0.0;
+        } else {
+          v->duty += v->duty_step;
+        }
+      }
 
       v->ph += v->freq / rate;
       if (v->ph >= 1.0)
@@ -978,6 +1005,7 @@ m3ApiRawFunction(host_tone) {
 
   const int ch = flags & 3;
   const int mode = (flags >> 2) & 3;
+  const int pwm = (flags >> 11) & 1;
   int pan = (flags >> 4) & 3;
   if (pan > 2)
     pan = 0;
@@ -1007,6 +1035,10 @@ m3ApiRawFunction(host_tone) {
   const int release_only = (flags >> 10) & 1;
   const int dec = (duration >> 16) & 0xFF;
   const int att = (duration >> 24) & 0xFF;
+  const double duty = pwm ? (double)((flags >> 12) & 255) / 255.0
+                          : duty_table[mode];
+  const double duty_to = pwm ? (double)((flags >> 20) & 255) / 255.0
+                            : duty;
 
   int vs = volume & 0xFF;
   if (vs > 100)
@@ -1017,7 +1049,8 @@ m3ApiRawFunction(host_tone) {
 
   const ToneTrigger t = {
       .kind = wave,
-      .duty = duty_table[mode],
+      .duty = duty,
+      .duty_to = duty_to,
       .f0 = f0,
       .f1 = f1,
       .frames = {att, dec, sus, rel},

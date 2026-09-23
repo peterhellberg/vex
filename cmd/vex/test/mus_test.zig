@@ -22,6 +22,9 @@ const instruments = [_]mus.Inst{
         .release = 4,
         .volume = 60,
         .pan = 0,
+        .pwm = 1,
+        .pwm_start = 32,
+        .pwm_end = 192,
     },
 };
 
@@ -67,6 +70,9 @@ test "zero volume, arpeggio, and rest" {
         try std.testing.expectEqual(note, vex.calls[index].freq);
         try std.testing.expectEqual(@as(i32, 14), vex.calls[index].duration & 0xFF);
         try std.testing.expect(vex.calls[index].flags & vex.TONE_NOTE_MODE != 0);
+        try std.testing.expect(vex.calls[index].flags & vex.TONE_PWM != 0);
+        try std.testing.expectEqual(@as(i32, 32), (vex.calls[index].flags >> 12) & 255);
+        try std.testing.expectEqual(@as(i32, 192), (vex.calls[index].flags >> 20) & 255);
     }
 
     for (vex.calls[5..9], 0..4) |call, channel| {
