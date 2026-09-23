@@ -7,8 +7,8 @@ const std = @import("std");
 // that links raylib + wasm3) lives in a separate `cmd/vex/` package so the
 // raylib/wasm3 deps aren't pulled in by everyone.
 //
-//   zig build              build ./vex-init + cart.wasm + zcart.wasm
-//   zig build --prefix .   install vex-init into ./bin and carts into ./bin/carts
+//   zig build -Dexamples=true              build ./vex-init + cart.wasm + zcart.wasm
+//   zig build --prefix . -Dexamples=true   install vex-init into ./bin and carts into ./bin/carts
 //   zig build test         run the SDK tests
 //
 // The host is built separately, see cmd/vex/build.zig (or just run `make`,
@@ -81,7 +81,7 @@ pub fn build(b: *std.Build) void {
 
         // --- test carts: wasm32-freestanding stress-test modules ------------------
         const test_carts = [_][]const u8{
-            "test_audio", "test_coords", "test_blit", "test_arith", "test_palette",
+            "test_audio", "test_coords", "test_blit", "test_arith",   "test_palette",
             "test_api",   "test_bench",  "test_font", "test_hostile", "test_music",
         };
         inline for (test_carts) |name| {

@@ -32,7 +32,7 @@ Dependencies are fetched on first build.
 > parses the pinned version and installs it for you.
 
 ```sh
-zig build --prefix .    # build vex-init into ./bin + cart.wasm and zcart.wasm into ./bin/carts
+zig build --prefix . -Dexamples=true    # build vex-init into ./bin + cart.wasm and zcart.wasm into ./bin/carts
 cd cmd/vex && zig build --prefix ../..   # build the ./vex host into ../bin
 zig build run           # build, then run the C example cart
 zig build runz          # build, then run the Zig example cart
@@ -209,8 +209,8 @@ the cart **live-reloads** it in the browser, no refresh or restart needed.
 > in another — every rebuild reloads the cart in the browser automatically.
 >
 > ```sh
-> zig build --watch                 # terminal 1: rebuild carts on every change
-> go run ./cmd/vex-web zig-out/bin/zcart.wasm  # terminal 2: serve + auto-reload
+> zig build --watch --prefix . -Dexamples=true   # terminal 1: rebuild carts on every change
+> go run ./cmd/vex-web bin/carts/zcart.wasm        # terminal 2: serve + auto-reload
 > ```
 
 Arrow keys, `Z`, and `X` map to `btn()` and `btnp()`, and the mouse maps to
