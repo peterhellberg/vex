@@ -253,6 +253,55 @@ func TestToneEngineHoldContinuesPastSustain(t *testing.T) {
 	}
 }
 
+func TestToneEngineReleaseFromCurrentLevel(t *testing.T) {
+	e := &toneEngine{}
+	e.tone(440, 10|(10<<24), 100, 0)
+	if _, err := e.Read(make([]byte, 4*4000)); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	v := &e.voices[0]
+	before := v.level
+	if before <= 0 || before >= 1 {
+		t.Fatalf("level before release = %g", before)
+	}
+	e.tone(440, 2<<8, 0, 1<<10)
+	if _, err := e.Read(make([]byte, 4)); err != nil {
+		t.Fatalf("release Read: %v", err)
+	}
+	releaseSamples := 2.0 * toneRate / 60
+	want := before * (1 - 1/releaseSamples)
+	if v.seg != segRelease || math.Abs(v.level-want) > 1e-12 {
+		t.Fatalf("release state = seg %d level %g, want seg %d level %g", v.seg, v.level, segRelease, want)
+	}
+
+	if _, err := e.Read(make([]byte, 4*(2*toneRate/60))); err != nil {
+		t.Fatalf("release end Read: %v", err)
+	}
+	if v.seg != segIdle || v.level != 0 {
+		t.Fatalf("voice did not finish release: seg %d level %g", v.seg, v.level)
+	}
+	e.tone(440, 2<<8, 0, 1<<10)
+	if _, err := e.Read(make([]byte, 4)); err != nil {
+		t.Fatalf("idle release Read: %v", err)
+	}
+	if v.seg != segIdle {
+		t.Fatalf("idle release changed voice to segment %d", v.seg)
+	}
+
+	e.tone(440, 1, 100, 1<<9)
+	if _, err := e.Read(make([]byte, 4*64)); err != nil {
+		t.Fatalf("hold Read: %v", err)
+	}
+	e.tone(440, 0, 0, 1<<10)
+	if _, err := e.Read(make([]byte, 4)); err != nil {
+		t.Fatalf("zero release Read: %v", err)
+	}
+	if v.seg != segIdle || v.level != 0 {
+		t.Fatalf("zero release did not cut voice: seg %d level %g", v.seg, v.level)
+	}
+}
+
 func TestToneEngineKillAndClamps(t *testing.T) {
 	e := &toneEngine{}
 

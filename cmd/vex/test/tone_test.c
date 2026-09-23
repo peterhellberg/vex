@@ -158,6 +158,34 @@ int main(void) {
         CHECK("voice is near silent after release+delay", late == 0);
     }
 
+    {
+        memset(delayBuf, 0, sizeof(delayBuf)); delayPos = 0;
+        fire_and_run(0, mk_pulse(440, 0, 10, 0, 10, 0), 4000);
+        ToneVoice *v = &g_voice[0];
+        double before = v->level;
+        CHECK("voice is mid-release source level", before > 0.0 && before < 1.0);
+
+        ToneTrigger rel = {0};
+        rel.release_only = 1;
+        rel.frames[3] = 2;
+        fire_and_run(0, rel, 1);
+        double want = before * (1.0 - 1.0 / 1600.0);
+        CHECK("release starts at current level",
+              v->seg == 3 && fabs(v->level - want) < 1e-12);
+
+        fire_and_run(0, rel, 1600);
+        CHECK("release reaches idle", v->seg == 4 && v->level == 0.0);
+
+        rel.frames[3] = 0;
+        fire_and_run(0, rel, 1);
+        CHECK("idle release is a no-op", v->seg == 4);
+
+        fire_and_run(0, mk_pulse(440, 0, 0, 0, 10, 0), 64);
+        rel.frames[3] = 0;
+        fire_and_run(0, rel, 1);
+        CHECK("zero release cuts active voice", v->seg == 4 && v->level == 0.0);
+    }
+
     // ---- kill idiom: all-zero duration silences the channel ------------------
     {
         memset(delayBuf, 0, sizeof(delayBuf)); delayPos = 0;

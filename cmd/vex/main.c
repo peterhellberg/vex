@@ -685,6 +685,7 @@ typedef struct {
   double f0, f1;
   int frames[4]; // attack, decay, sustain, release
   int hold;
+  int release_only;
   double peak, sus;
   double gl, gr;
 } ToneTrigger;
@@ -784,6 +785,24 @@ static void voice_next_segment(ToneVoice *v) {
 // first non-empty one.
 static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
   const double spf = (double)g_stream.sampleRate / 60.0; // samples per frame
+
+  if (t->release_only) {
+    if (v->seg > 3) return;
+    long n = t->frames[3] > 0
+                 ? (long)((double)t->frames[3] * spf + 0.5)
+                 : 0;
+    if (n <= 0) {
+      v->seg = 4;
+      v->level = 0.0;
+      return;
+    }
+    v->seg = 3;
+    v->seg_end[3] = 0.0;
+    v->seg_left = n;
+    v->slope = -v->level / (double)n;
+    v->freq_step = 0.0;
+    return;
+  }
 
   v->kind = t->kind;
   v->duty = t->duty;
@@ -1015,6 +1034,7 @@ m3ApiRawFunction(host_tone) {
   const int sus = duration & 0xFF;
   const int rel = (duration >> 8) & 0xFF;
   const int hold = (flags >> 9) & 1;
+  const int release_only = (flags >> 10) & 1;
   const int dec = (duration >> 16) & 0xFF;
   const int att = (duration >> 24) & 0xFF;
 
@@ -1032,6 +1052,7 @@ m3ApiRawFunction(host_tone) {
       .f1 = f1,
       .frames = {att, dec, sus, rel},
       .hold = hold,
+      .release_only = release_only,
       .peak = vp / 100.0,
       .sus = vs / 100.0,
       .gl = pan_l[pan],
