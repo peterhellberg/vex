@@ -930,6 +930,7 @@ type toneVoice struct {
 	dcPrev    float64 // previous input for DC blocker
 
 	seg     int
+	hold    bool
 	segLeft int64
 	level   float64 // envelope level 0..1
 	slope   float64 // level change per sample in this segment
@@ -955,6 +956,11 @@ func polyBlep(t, dt float64) float64 {
 // zero-length ones by snapping to their end level. Enters segIdle when the
 // release finishes.
 func (v *toneVoice) nextSegment() {
+	if v.seg == segSustain && v.hold {
+		v.segLeft = 1
+		v.slope = 0
+		return
+	}
 	for {
 		v.seg++
 		if v.seg > segRelease {
@@ -986,6 +992,7 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 	v.freqStart = t.f0
 	v.freqTo = t.f1
 	v.freq = t.f0
+	v.hold = t.hold
 	v.freqStep = 0
 	v.ph = 0
 	v.nph = 0
@@ -1036,6 +1043,7 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 type toneTrigger struct {
 	kind      int
 	duty      float64
+	hold      bool
 	f0, f1    float64
 	frames    [4]int32 // attack, decay, sustain, release
 	peak, sus float64
@@ -1132,6 +1140,7 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 
 	sus := duration & 0xFF
 	rel := (duration >> 8) & 0xFF
+	hold := flags&(1<<9) != 0
 	dec := (duration >> 16) & 0xFF
 	att := (duration >> 24) & 0xFF
 
@@ -1147,6 +1156,7 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 	e.pending[ch] = &toneTrigger{
 		kind:   int(wave),
 		duty:   toneDutyTable[mode],
+		hold:   hold,
 		f0:     f0,
 		f1:     f1,
 		frames: [4]int32{int32(att), int32(dec), int32(sus), int32(rel)},
@@ -1163,6 +1173,7 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 func (e *toneEngine) Read(p []byte) (int, error) {
 	var pendingCopy [4]*toneTrigger
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	for ch := range e.pending {
 		if t := e.pending[ch]; t != nil {
 			pendingCopy[ch] = t
@@ -1171,12 +1182,12 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 	}
 	clearReq := e.clearReq
 	e.clearReq = false
-	e.mu.Unlock()
 	if clearReq {
 		for i := range e.voices {
 			v := &e.voices[i]
 			v.seg = segIdle
 			v.level = 0
+			v.hold = false
 			v.segLeft = 0
 			v.slope = 0
 			v.ph = 0

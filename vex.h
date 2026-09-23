@@ -48,6 +48,8 @@
 
 // Note mode (bit 8): freq parameter is a MIDI note number.
 #define VEX_TONE_NOTE_MODE (1 << 8)
+// Hold mode (bit 9): hold the sustain level until the next trigger or silence.
+#define VEX_TONE_HOLD (1 << 9)
 
 VEX_IMPORT("cls")   void cls(int color);                              // clear screen
 VEX_IMPORT("pset")  void pset(int x, int y, int color);              // set one pixel
@@ -79,7 +81,7 @@ VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 //   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
 //   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
 //   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
-//            bit 8 note mode
+//            bit 8 note mode | bit 9 hold sustain
 VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
 // ---- audio -----------------------------------------------------------------
