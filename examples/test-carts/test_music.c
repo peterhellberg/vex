@@ -13,6 +13,7 @@ static const MusInst INSTS[] = {
     {VEX_TONE_PULSE, VEX_TONE_MODE2, 0, 2, 0, 8, 62, VEX_TONE_PAN_LEFT, 1, 32, 144},
     {VEX_TONE_PULSE, VEX_TONE_MODE1, 0, 0, 4, 2, 30, VEX_TONE_PAN_RIGHT, 1, 64, 64},
     {VEX_TONE_NOISE, 0,              0, 0, 1, 4, 18, 0},
+    {VEX_TONE_PULSE, VEX_TONE_MODE2, 0, 1, 0, 5, 54, VEX_TONE_PAN_LEFT, 1, 24, 96},
 };
 
 #define ROWS 16
@@ -61,40 +62,40 @@ static const MusEvent EV1[ROWS * MUS_CHANNELS] = {
 };
 
 static const MusEvent EV2[ROWS * MUS_CHANNELS] = {
-    V(131,3,40), V(76,2,68),  V(40,1,80), V(45,4,32), // E minor
+    V(131,3,40), V(76,5,68),  V(40,1,80), V(45,4,32), // E minor
     R,        R,        R,           E(110,4),
-    V(131,3,40), E(79,2),  V(47,1,62), E(108,4),
+    V(131,3,40), E(79,5),  V(47,1,62), E(108,4),
     R,        R,        R,           V(45,4,26),
-    V(136,3,40), V(83,2,68),  V(45,1,78), V(112,4,26), // G major
+    V(136,3,40), V(83,5,68),  V(45,1,78), V(112,4,26), // G major
     R,        R,        R,           E(110,4),
-    V(136,3,40), V(81,2,68),  R,           E(108,4),
+    V(136,3,40), V(81,5,68),  R,           E(108,4),
     R,        O,        R,           V(45,4,26),
-    V(133,3,40), E(79,2),  V(43,1,76), V(45,4,32), // G minor
+    V(133,3,40), E(79,5),  V(43,1,76), V(45,4,32), // G minor
     R,        R,        R,           E(110,4),
-    V(133,3,40), V(76,2,68),  R,           E(108,4),
+    V(133,3,40), V(76,5,68),  R,           E(108,4),
     R,        R,        R,           V(45,4,26),
-    V(131,3,40), V(74,2,68),  V(40,1,78), V(112,4,26), // E minor fill
+    V(131,3,40), V(74,5,68),  V(40,1,78), V(112,4,26), // E minor fill
     R,        R,        R,           E(110,4),
-    V(131,3,40), V(76,2,68),  R,           E(108,4),
+    V(131,3,40), V(76,5,68),  R,           E(108,4),
     V(131,3,40), O,        O,           V(45,4,32),
 };
 
 static const MusEvent EV3[ROWS * MUS_CHANNELS] = {
-    V(134,3,40), V(81,2,68),  V(45,1,80), R,
+    V(134,3,40), V(81,5,68),  V(45,1,80), R,
     R,        R,        R,           R,
-    R,        E(84,2),  V(52,1,62), R,
+    R,        E(84,5),  V(52,1,62), R,
     R,        R,        R,           R,
-    V(132,3,40), E(79,2),  V(48,1,78), R,
+    V(132,3,40), E(79,5),  V(48,1,78), R,
     R,        R,        R,           R,
-    R,        V(76,2,68),  R,           R,
+    R,        V(76,5,68),  R,           R,
     R,        R,        R,           R,
-    V(136,3,40), V(81,2,68),  V(45,1,80), V(45,4,32),
+    V(136,3,40), V(81,5,68),  V(45,1,80), V(45,4,32),
     R,        R,        R,           E(110,4),
-    R,        E(84,2),  R,           E(112,4),
+    R,        E(84,5),  R,           E(112,4),
     R,        R,        R,           V(45,4,26),
-    V(131,3,40), V(83,2,68),  V(43,1,78), V(112,4,34),
+    V(131,3,40), V(83,5,68),  V(43,1,78), V(112,4,34),
     R,        R,        R,           V(110,4,20),
-    R,        V(81,2,68),  R,           V(112,4,38),
+    R,        V(81,5,68),  R,           V(112,4,38),
     V(136,3,40), O,        O,           V(45,4,44),
 };
 
@@ -109,7 +110,7 @@ static const MusPat PAT2 = {ROWS, 6, EV2};
 static const MusPat PAT3 = {ROWS, 6, EV3};
 static const MusPat *const PATS[] = {&PAT0, &PAT1, &PAT2, &PAT3};
 static const unsigned char ORDERS[] = {0, 1, 2, 1, 3, 0};
-static const MusSong SONG = {4, 4, 6, 0, INSTS, PATS, ORDERS};
+static const MusSong SONG = {5, 4, 6, 0, INSTS, PATS, ORDERS};
 static unsigned char CHANNEL_MUTED[MUS_CHANNELS];
 static int MOUSE_DOWN;
 
