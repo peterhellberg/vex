@@ -78,8 +78,11 @@ jobs:
       - name: Build C host (cmd/vex)
         run: cd cmd/vex && zig build --prefix ../..
 
-      - name: Run Zig tests (spr.zig)
+      - name: Run Zig tests (spr.zig, mus.zig)
         run: zig build test
+
+      - name: Run music tracker test
+        run: make test-mus
 
       - name: Vet, test, and build root Go module
         run: |

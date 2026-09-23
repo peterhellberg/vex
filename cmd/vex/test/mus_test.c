@@ -41,6 +41,7 @@ static const MusInst INSTS[] = {
     {VEX_TONE_NOISE, 0,              0, 0, 5, 2, 40, 0},
     {VEX_TONE_PULSE, VEX_TONE_MODE0, 0, 0, 7, 4, 60, 0},
     {VEX_TONE_PULSE, VEX_TONE_MODE0, 0, 0, MUS_SUSTAIN_HOLD, 3, 50, 0},
+    {VEX_TONE_PULSE, VEX_TONE_MODE0, 0, 0, 0, 1, 0, 0},
 };
 
 static const MusEvent EVENTS[4 * MUS_CHANNELS] = {
@@ -53,7 +54,7 @@ static const MusEvent EVENTS[4 * MUS_CHANNELS] = {
 static const MusPat PAT = {4, 2, EVENTS};
 static const MusPat *const PATS[] = {&PAT};
 static const unsigned char ORDERS[] = {0};
-static const MusSong SONG = {4, 1, 1, 0xFF, INSTS, PATS, ORDERS};
+static const MusSong SONG = {5, 1, 1, 0xFF, INSTS, PATS, ORDERS};
 
 static const MusEvent ARP_EVENTS[2 * MUS_CHANNELS] = {
     {129, 3, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
@@ -61,15 +62,15 @@ static const MusEvent ARP_EVENTS[2 * MUS_CHANNELS] = {
 };
 static const MusPat ARP_PAT = {2, 7, ARP_EVENTS};
 static const MusPat *const ARP_PATS[] = {&ARP_PAT};
-static const MusSong ARP_SONG = {4, 1, 1, 0xFF, INSTS, ARP_PATS, ORDERS};
+static const MusSong ARP_SONG = {5, 1, 1, 0xFF, INSTS, ARP_PATS, ORDERS};
 
 static const MusEvent HOLD_EVENTS[2 * MUS_CHANNELS] = {
-    {60, 4, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
-    {MUS_OFF, 0, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
+    {60, 4, 0}, {60, 3, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
+    {MUS_OFF, 0, 0}, {60, 5, 0}, {MUS_REST, 0, 0}, {MUS_REST, 0, 0},
 };
 static const MusPat HOLD_PAT = {2, 1, HOLD_EVENTS};
 static const MusPat *const HOLD_PATS[] = {&HOLD_PAT};
-static const MusSong HOLD_SONG = {4, 1, 1, 0xFF, INSTS, HOLD_PATS, ORDERS};
+static const MusSong HOLD_SONG = {5, 1, 1, 0xFF, INSTS, HOLD_PATS, ORDERS};
 
 static void tick_n(int n) {
     for (int i = 0; i < n; i++)
@@ -145,11 +146,14 @@ int main(void) {
     g_ncalls = 0;
     tick_n(1);
     CHECK("hold sustain sets hold mode",
-          g_ncalls == 1 && (g_calls[0].flags & VEX_TONE_HOLD) &&
+          g_ncalls == 2 && (g_calls[0].flags & VEX_TONE_HOLD) &&
               (g_calls[0].dur & 0xFF) == MUS_SUSTAIN_HOLD);
     tick_n(1);
-    CHECK("OFF releases held voice", g_ncalls == 6 &&
-          (g_calls[1].flags & VEX_TONE_RELEASE));
+    CHECK("OFF releases held voice", g_ncalls == 8 &&
+          (g_calls[2].flags & VEX_TONE_RELEASE));
+    CHECK("zero-volume instrument hard-cuts",
+          g_calls[3].dur == 0 && g_calls[3].vol == 0 &&
+              (g_calls[3].flags & 3) == 1);
 
     if (failures) {
         fprintf(stderr, "MUS: %d failure(s)\n", failures);
