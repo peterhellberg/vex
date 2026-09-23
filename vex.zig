@@ -157,7 +157,9 @@ pub fn pressed(button: i32) bool {
 
 /// Slide from `freq` to `to` over the sustain duration (linear in Hz).
 pub fn toneSlide(freq: i32, to: i32) i32 {
-    return (freq & 0xFFFF) | ((to & 0xFFFF) << 16);
+    const value: u32 = @as(u32, @intCast(freq & 0xFFFF)) |
+        (@as(u32, @intCast(to & 0xFFFF)) << 16);
+    return @bitCast(value);
 }
 
 /// 8-bit pulse width in 0..255, optionally sweeping to `end` over sustain.
@@ -173,10 +175,11 @@ pub const ToneDuration = struct {
     release: i32 = 0,
 
     pub fn pack(d: ToneDuration) i32 {
-        return toneByte(d.sustain) |
-            (toneByte(d.release) << 8) |
-            (toneByte(d.decay) << 16) |
-            (toneByte(d.attack) << 24);
+        const value: u32 = @as(u32, @intCast(toneByte(d.sustain))) |
+            (@as(u32, @intCast(toneByte(d.release))) << 8) |
+            (@as(u32, @intCast(toneByte(d.decay))) << 16) |
+            (@as(u32, @intCast(toneByte(d.attack))) << 24);
+        return @bitCast(value);
     }
 };
 
@@ -187,8 +190,9 @@ pub const ToneVolume = struct {
     peak: i32 = 0,
 
     pub fn pack(v: ToneVolume) i32 {
-        return toneVolumeByte(v.level) |
-            (toneVolumeByte(v.peak) << 8);
+        const value: u32 = @as(u32, @intCast(toneVolumeByte(v.level))) |
+            (@as(u32, @intCast(toneVolumeByte(v.peak))) << 8);
+        return @bitCast(value);
     }
 };
 

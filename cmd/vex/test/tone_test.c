@@ -233,6 +233,13 @@ int main(void) {
               fabs(g_voice[0].duty - pwm.duty_to) < 1e-12);
     }
 
+    {
+        ToneTrigger slide = mk_pulse(220, 880, 0, 0, 1, 0);
+        fire_and_run(0, slide, 32 + 800 + 2);
+        CHECK("slide reaches its target at sustain end",
+              fabs(g_voice[0].freq - 880.0) < 1e-12);
+    }
+
     // ---- noise: full-period LFSR, clock clamping and attack -------------------
     {
         ToneTrigger t = {0};

@@ -747,6 +747,8 @@ static void clear_audio(void) {
 // Advance into the next non-empty envelope segment, skipping zero-length
 // ones by snapping to their end level. Enters idle when release finishes.
 static void voice_next_segment(ToneVoice *v) {
+  if (v->seg == 2 && v->freq_to > 0.0)
+    v->freq = v->freq_to;
   if (v->seg == 2 && v->hold) {
     v->seg_left = 1;
     v->slope = 0.0;

@@ -467,6 +467,7 @@ class ToneMixer extends AudioWorkletProcessor {
   }
 
   nextSegment(v) {
+    if (v.seg === SEG_SUSTAIN && v.freqTo > 0) v.freq = v.freqTo;
     if (v.seg === SEG_SUSTAIN && v.hold) {
       v.segLeft = 1;
       v.slope = 0;
