@@ -39,6 +39,7 @@ static const Color DEFAULT_PALETTE[16] = {
 };
 
 static uint32_t g_palette[16];
+static char g_window_title[128] = "vex";
 #define pack_rgba(r, g, b)                                                     \
   ((uint32_t)(r) | (uint32_t)(g) << 8 | (uint32_t)(b) << 16 | 0xFFu << 24)
 
@@ -552,15 +553,14 @@ m3ApiRawFunction(host_text) {
   m3ApiSuccess();
 }
 
-// title(s): set the window title from a cart string. No-op before the window
-// exists (headless -n mode).
+// title(s): set the window title from a cart string.
 m3ApiRawFunction(host_title) {
   m3ApiGetArgMem(const char *, s) m3ApiCheckMem(s, 1);
-  if (!g_window_open)
-    m3ApiSuccess();
   char buf[128];
   cart_cstr(runtime, _mem, s, buf, sizeof(buf));
-  SetWindowTitle(buf);
+  snprintf(g_window_title, sizeof(g_window_title), "%s", buf);
+  if (g_window_open)
+    SetWindowTitle(g_window_title);
   m3ApiSuccess();
 }
 
@@ -1490,7 +1490,7 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
   SetConfigFlags(FLAG_WINDOW_RESIZABLE); // enable maximize button on Windows
 #endif
-  InitWindow(VEX_W * scale, VEX_H * scale, "vex");
+  InitWindow(VEX_W * scale, VEX_H * scale, g_window_title);
   g_window_open = true;
   SetTargetFPS(60);
 
