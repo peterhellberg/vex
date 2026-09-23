@@ -223,8 +223,6 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 
 	// Literals shared verbatim by all three mixer loops.
 	shared := []string{
-		"0.18 *", // noise one-pole coefficient
-		"1.4",    // noise filter gain compensation
 		"0.22 *", // triangle one-pole coefficient
 		"0.995",  // pulse DC blocker pole
 	}
@@ -247,6 +245,11 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		{"full-scale amplitude", "TONE_FULL_AMP 8000.0", "toneFullAmp = 8000.0", "this.fullAmp = 8000"},
 		{"noise clock min", "TONE_NOISE_CLK_MIN 8000.0", "toneNoiseClkMin = 8000.0", "TONE_NOISE_CLK_MIN = 8000"},
 		{"noise clock max", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "TONE_NOISE_CLK_MAX = 48000"},
+		{"noise seed", "0x2CE1", "0x2CE1", "0x2CE1"},
+		{"noise feedback", "(v->lfsr ^ (v->lfsr >> 1)) & 1", "(v.lfsr ^ (v.lfsr >> 1)) & 1", "(v.lfsr ^ (v.lfsr >> 1)) & 1"},
+		{"noise right shift", "v->lfsr >> 1", "v.lfsr >> 1", "v.lfsr >> 1"},
+		{"noise output", "s = (v->lfsr & 1) ? 1.0 : -1.0", "if v.lfsr&1 == 1", "s = (v.lfsr & 1) ? 1 : -1"},
+		{"web noise Nyquist clamp", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "Math.min(Math.max(nclk, TONE_NOISE_CLK_MIN), Math.min(TONE_NOISE_CLK_MAX, sr / 2))"},
 		{"pulse warmth", "v->lp += 0.5 *", "v.lp += 0.5 * (raw - v.lp)", "v.lp += 0.5 * (raw - v.lp)"},
 		{"release trigger field", "release_only", "releaseOnly", "releaseOnly"},
 		{"release branch", "t->release_only", "t.releaseOnly", "t.releaseOnly"},

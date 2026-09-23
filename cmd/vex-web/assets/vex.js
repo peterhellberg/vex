@@ -437,8 +437,8 @@ class ToneMixer extends AudioWorkletProcessor {
   constructor() {
     super();
     const mk = () => ({ kind: 0, duty: 0.5, freq: 0, freqTo: 0,
-                        freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0xACE1,
-                        noiseRaw: 0, noiseLp: 0, lp: 0, dc: 0, dcPrev: 0,
+                        freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0x2CE1,
+                        lp: 0, dc: 0, dcPrev: 0,
                         seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
                         segLen: [0, 0, 0, 0], segEnd: [0, 0, 0, 0],
                         gl: 0.70710678, gr: 0.70710678, hold: false });
@@ -456,7 +456,7 @@ class ToneMixer extends AudioWorkletProcessor {
         for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
         for (const v of this.voices) {
           v.seg = SEG_IDLE; v.level = 0; v.hold = false; v.segLeft = 0; v.slope = 0;
-          v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0; v.lp = 0; v.dc = 0; v.dcPrev = 0;
+          v.ph = 0; v.nph = 0; v.lfsr = 0x2CE1; v.lp = 0; v.dc = 0; v.dcPrev = 0;
         }
         return;
       }
@@ -504,11 +504,8 @@ class ToneMixer extends AudioWorkletProcessor {
     v.kind = t.kind; v.duty = t.duty;
     v.freqStart = t.f0; v.freqTo = t.f1; v.freq = t.f0; v.freqStep = 0;
     v.hold = !!t.hold;
-    v.ph = 0; v.nph = 0; v.lfsr = 0xACE1;
-    v.noiseRaw = 0;
-    // Starting the noise filter from silence also gives noise hits a free
-    // natural fade-in over its first few dozen samples.
-    v.noiseLp = 0; v.lp = 0; v.dc = 0; v.dcPrev = 0;
+    v.ph = 0; v.nph = 0; v.lfsr = 0x2CE1;
+    v.lp = 0; v.dc = 0; v.dcPrev = 0;
     v.gl = t.gl; v.gr = t.gr;
     const frames = t.frames;
     const ends = [t.peak, t.sus, t.sus, 0];
@@ -552,19 +549,16 @@ class ToneMixer extends AudioWorkletProcessor {
         let s;
         if (v.kind === 1) {
           let nclk = 2 * v.freq;
-          if (nclk < TONE_NOISE_CLK_MIN) nclk = TONE_NOISE_CLK_MIN;
-          else if (nclk > TONE_NOISE_CLK_MAX) nclk = TONE_NOISE_CLK_MAX;
+          nclk = Math.min(Math.max(nclk, TONE_NOISE_CLK_MIN), Math.min(TONE_NOISE_CLK_MAX, sr / 2));
           v.nph += nclk / sr;
           if (v.nph >= 1) {
             do {
               v.nph -= 1;
-              const fb = 1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1);
-              v.lfsr = ((v.lfsr << 1) | fb) & 0xFFFF;
-              v.noiseRaw = (v.lfsr & 1) ? 1 : -1;
+              const bit = (v.lfsr ^ (v.lfsr >> 1)) & 1;
+              v.lfsr = (v.lfsr >> 1) | (bit << 14);
             } while (v.nph >= 1);
           }
-          v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp);
-          s = v.noiseLp * 1.4;
+          s = (v.lfsr & 1) ? 1 : -1;
         } else if (v.kind === 2) {
           const ph = v.ph;
           const raw = ph < 0.25 ? ph * 4 : ph < 0.75 ? 2 - ph * 4 : ph * 4 - 4;

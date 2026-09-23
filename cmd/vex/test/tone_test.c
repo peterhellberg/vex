@@ -203,7 +203,7 @@ int main(void) {
         CHECK("slide approaches 880 Hz", end_hz > 700 && end_hz < 1060);
     }
 
-    // ---- noise: LFSR taps, clock clamping, filtering and attack ---------------
+    // ---- noise: full-period LFSR, clock clamping and attack -------------------
     {
         ToneTrigger t = {0};
         t.kind = 1; // noise
@@ -216,10 +216,8 @@ int main(void) {
         t.gr = 0.70710678f;
         fire_and_run(0, t, 300 * 2);
 
-        uint16_t lfsr = 0xACE1;
+        uint16_t lfsr = 0x2CE1;
         double nph = 0.0;
-        double noiseRaw = 0.0;
-        double noiseLp = 0.0;
         double level = 0.0;
         const double slope = 1.0 / 32.0;
         long segLeft = 32;
@@ -231,12 +229,10 @@ int main(void) {
             nph += nclk / 48000.0;
             while (nph >= 1.0) {
                 nph -= 1.0;
-                uint16_t fb = (uint16_t)(1u - (((lfsr >> 14) ^ (lfsr >> 12)) & 1));
-                lfsr = (uint16_t)(lfsr << 1 | fb);
-                noiseRaw = (lfsr & 1) ? 1.0 : -1.0;
+                uint16_t bit = (uint16_t)((lfsr ^ (lfsr >> 1)) & 1);
+                lfsr = (uint16_t)((lfsr >> 1) | (bit << 14));
             }
-            noiseLp += 0.18 * (noiseRaw - noiseLp);
-            double s = noiseLp * 1.4;
+            double s = (lfsr & 1) ? 1.0 : -1.0;
             double v = s * 8000.0 * level * 0.70710678;
             // soft-clip is linear below knee (5656 < 24000)
             int16_t want = (int16_t)v;

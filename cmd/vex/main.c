@@ -636,8 +636,8 @@ m3ApiRawFunction(host_palreset) {
 // The mixer renders into an AudioStream callback at the device rate. Each
 // voice walks a linear envelope through attack/decay/sustain/release, with
 // zero-length segments skipped instantly; pulse duty cycle, triangle, and
-// a filtered 15-bit LFSR noise cover the waveforms, and a frequency slide
-// rides the sustain segment.
+// a 15-bit LFSR noise cover the waveforms, and a frequency slide rides the
+// sustain segment.
 //
 // tone() runs on the wasm thread while mixing happens on the audio thread:
 // triggers are parked in pending slots under a mutex and applied at the
@@ -656,8 +656,6 @@ typedef struct {
   double ph;         // phase accumulator, 0..1
   double nph;        // noise step accumulator
   uint16_t lfsr;
-  double noise_raw; // last raw LFSR output (+1/-1)
-  double noise_lp;  // one-pole lowpassed noise value
   double lp;        // one-pole lowpass for pulse/triangle — tames aliasing
   double dc;        // DC blocker state for pulse
   double dc_prev;   // previous input for DC blocker
@@ -731,9 +729,7 @@ static void clear_audio(void) {
     g_voice[i].slope = 0.0;
     g_voice[i].ph = 0.0;
     g_voice[i].nph = 0.0;
-    g_voice[i].lfsr = 0xACE1;
-    g_voice[i].noise_raw = 0.0;
-    g_voice[i].noise_lp = 0.0;
+    g_voice[i].lfsr = 0x2CE1;
     g_voice[i].lp = 0.0;
     g_voice[i].dc = 0.0;
     g_voice[i].dc_prev = 0.0;
@@ -805,11 +801,7 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
   v->freq_step = 0.0;
   v->ph = 0.0;
   v->nph = 0.0;
-  v->lfsr = 0xACE1;
-  v->noise_raw = 0.0;
-  // Starting the noise filter from silence also gives noise hits a free
-  // natural fade-in over its first few dozen samples.
-  v->noise_lp = 0.0;
+  v->lfsr = 0x2CE1;
   v->lp = 0.0;
   v->dc = 0.0;
   v->dc_prev = 0.0;
@@ -879,7 +871,7 @@ static void mix_callback(void *buffer, unsigned int frames) {
       // Oscillator value in -1..1.
       double s;
       switch (v->kind) {
-      case 1: { // noise: 15-bit LFSR, clock clamped, one-pole hiss
+      case 1: { // noise: full-period 15-bit LFSR, clock clamped
         double nclk = 2.0 * v->freq;
         if (nclk < TONE_NOISE_CLK_MIN)
           nclk = TONE_NOISE_CLK_MIN;
@@ -888,13 +880,10 @@ static void mix_callback(void *buffer, unsigned int frames) {
         v->nph += nclk / rate;
         while (v->nph >= 1.0) {
           v->nph -= 1.0;
-          uint16_t fb =
-              (uint16_t)(1u - (((v->lfsr >> 14) ^ (v->lfsr >> 12)) & 1));
-          v->lfsr = (uint16_t)(v->lfsr << 1 | fb);
-          v->noise_raw = (v->lfsr & 1) ? 1.0 : -1.0;
+          uint16_t bit = (uint16_t)((v->lfsr ^ (v->lfsr >> 1)) & 1);
+          v->lfsr = (uint16_t)((v->lfsr >> 1) | (bit << 14));
         }
-        v->noise_lp += 0.18 * (v->noise_raw - v->noise_lp);
-        s = v->noise_lp * 1.4;
+        s = (v->lfsr & 1) ? 1.0 : -1.0;
         break;
       }
       case 2: { // triangle — gentle lowpass, keep naive shape (less alias than pulse)
