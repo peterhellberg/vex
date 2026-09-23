@@ -32,7 +32,8 @@
 
 // Note values.
 #define MUS_REST 0     // no note (let previous ring)
-#define MUS_OFF  128   // note-off: silence the channel
+#define MUS_OFF  128   // note-off: release the channel (noise hard-cuts)
+#define MUS_SUSTAIN_HOLD 255 // sustain indefinitely until OFF or a new note
 
 // An instrument preset (8 bytes).  Maps to tone() parameters. ADSR.
 typedef struct {
@@ -40,8 +41,7 @@ typedef struct {
     unsigned char duty;    // pulse duty: VEX_TONE_MODE0..3
     unsigned char attack;  // attack  length in frames (0..255)
     unsigned char decay;   // decay   length in frames
-    unsigned char sustain; // sustain length in frames (0..255) — 0 means use
-                           // pattern speed*2, so hats can be short
+    unsigned char sustain; // 0: pattern speed*2; 1..254: frames; 255: hold
     unsigned char release; // release length in frames
     unsigned char volume;  // default volume (0..100)
     unsigned char pan;     // 0=center, VEX_TONE_PAN_LEFT, VEX_TONE_PAN_RIGHT
@@ -49,7 +49,7 @@ typedef struct {
 
 // A note event (3 bytes, one per channel per row).
 typedef struct {
-    unsigned char note;    // MUS_REST, MUS_OFF, or MIDI note 1..127
+    unsigned char note;    // MUS_REST, MUS_OFF, MIDI note 1..127, or chord 129..141
     unsigned char inst;    // instrument index 1..num_insts (0 = no note)
     unsigned char vol;     // 0 = use instrument volume; 1..100 = override
 } MusEvent;
@@ -94,34 +94,48 @@ int mus_pos(void);
 static const MusSong *_mus_song;
 static int _mus_on, _mus_ord, _mus_row, _mus_tick;
 
+typedef struct {
+    unsigned char inst;
+    unsigned char note;
+    unsigned char vol;
+} MusVoice;
+static MusVoice _mus_voice[MUS_CHANNELS];
+
 // Silence a channel: zero-volume, zero-envelope tone.
 static void _mus_silence(int ch) {
     tone(440, 0, 0, VEX_TONE_FLAGS(ch, 0, 0));
+    _mus_voice[ch] = (MusVoice){0};
 }
 
-// MIDI note number -> frequency in Hz.  Equal temperament, A4=440 Hz.
-// hz = 440 * 2^(semi/12) / 2^octaves, with the semitone ratio carried as a
-// fixed-point multiplier (1024 = 1.0), exact to within 1 Hz over the range.
-static int _mus_note_hz(int note) {
-    // 2^(k/12) * 1024 for k = 0..11 (rounded to nearest)
-    static const int RATIO[12] = {
-        1024, 1085, 1150, 1218, 1291, 1367,
-        1448, 1533, 1624, 1721, 1822, 1930
-    };
-    if (note < 12) note = 12;       // clamp: C0
-    if (note > 119) note = 119;     // clamp: B8
+static void _mus_clear(void) {
+    for (int ch = 0; ch < MUS_CHANNELS; ch++) _mus_silence(ch);
+}
 
-    int semi = (note - 69) % 12;
-    if (semi < 0) semi += 12;
-    int oct = (note - 69 - semi) / 12;   // octaves below/above A4
+static void _mus_release(int ch) {
+    MusVoice *v = &_mus_voice[ch];
+    if (!_mus_song || v->inst == 0 || v->inst > _mus_song->num_insts) {
+        _mus_silence(ch);
+        return;
+    }
+    const MusInst *inst = &_mus_song->insts[v->inst - 1];
+    if (inst->wave == VEX_TONE_NOISE || inst->release == 0) {
+        _mus_silence(ch);
+        return;
+    }
+    tone(440, VEX_TONE_DURATION(0, 0, 0, inst->release), 0,
+         VEX_TONE_FLAGS(ch, 0, VEX_TONE_RELEASE));
+    _mus_voice[ch] = (MusVoice){0};
+}
 
-    long hz = 440L * RATIO[semi];
-    if (oct >= 0)
-        return (int)((hz >> 10) << oct);
-    return (int)(hz >> (10 - oct));
+static int _mus_chord_note(int code, int step) {
+    int root = code >= 136 ? code - 136 + 55 : code - 129 + 48;
+    int third = code >= 136 ? 4 : 3;
+    int interval = step % 3 == 0 ? 0 : step % 3 == 1 ? third : 7;
+    return root + interval;
 }
 
 void mus_load(const MusSong *song) {
+    _mus_clear();
     _mus_song = song;
     _mus_on = 0;
     _mus_ord = 0;
@@ -130,6 +144,7 @@ void mus_load(const MusSong *song) {
 }
 
 void mus_play(void) {
+    _mus_clear();
     _mus_on = 1;
     _mus_ord = 0;
     _mus_row = 0;
@@ -138,8 +153,7 @@ void mus_play(void) {
 
 void mus_stop(void) {
     _mus_on = 0;
-    for (int ch = 0; ch < MUS_CHANNELS; ch++)
-        _mus_silence(ch);
+    _mus_clear();
 }
 
 int mus_pos(void) {
@@ -155,28 +169,56 @@ void mus_tick(void) {
     if (pat_i >= _mus_song->num_pats) { mus_stop(); return; }
     const MusPat *pat = _mus_song->pats[pat_i];
 
+    int arp_step = pat->speed >= 3 ? _mus_tick * 3 / pat->speed : 0;
+    int arp_prev = pat->speed >= 3 && _mus_tick > 0
+                       ? (_mus_tick - 1) * 3 / pat->speed
+                       : 0;
+    if (arp_step > arp_prev) {
+        for (int ch = 0; ch < MUS_CHANNELS; ch++) {
+            MusVoice *v = &_mus_voice[ch];
+            if (v->note < 129 || v->inst == 0 || v->inst > _mus_song->num_insts)
+                continue;
+            const MusInst *inst = &_mus_song->insts[v->inst - 1];
+            int flags = VEX_TONE_FLAGS(ch, inst->duty,
+                inst->wave | inst->pan | VEX_TONE_NOTE_MODE |
+                (inst->sustain == MUS_SUSTAIN_HOLD ? VEX_TONE_HOLD : 0));
+            int sus = inst->sustain ? inst->sustain : pat->speed * 2;
+            tone(_mus_chord_note(v->note, arp_step),
+                 VEX_TONE_DURATION(inst->attack, inst->decay,
+                                  sus, inst->release),
+                 VEX_TONE_VOLUME(v->vol, v->vol), flags);
+        }
+    }
+
     // Trigger notes only on the first frame of a row.
     if (_mus_tick == 0) {
         if (_mus_row >= pat->rows) { mus_stop(); return; }
         for (int ch = 0; ch < MUS_CHANNELS; ch++) {
             const MusEvent *ev = &pat->events[_mus_row * MUS_CHANNELS + ch];
 
-            // note-off: silence the channel
+            // note-off: release the current voice
             if (ev->note == MUS_OFF) {
-                _mus_silence(ch);
+                _mus_release(ch);
                 continue;
             }
 
             // rest or no instrument: nothing to trigger
-            if (ev->note == MUS_REST || ev->inst == 0) continue;
+            if (ev->note == MUS_REST || ev->inst == 0) {
+                _mus_voice[ch].note = MUS_REST;
+                continue;
+            }
 
             // resolve instrument (1-indexed), bounds-checked
-            if (ev->inst > _mus_song->num_insts) continue;
+            if (ev->inst > _mus_song->num_insts) {
+                _mus_voice[ch].note = MUS_REST;
+                continue;
+            }
             const MusInst *inst = &_mus_song->insts[ev->inst - 1];
 
             // flags: channel, duty, waveform + pan
             int flags = VEX_TONE_FLAGS(ch, inst->duty,
-                inst->wave | inst->pan);
+                inst->wave | inst->pan | VEX_TONE_NOTE_MODE |
+                (inst->sustain == MUS_SUSTAIN_HOLD ? VEX_TONE_HOLD : 0));
 
             // volume: instrument default, overridden by per-note vol if set.
             // Peak tracks level (like mus.zig) so the attack has no extra
@@ -194,8 +236,10 @@ void mus_tick(void) {
                 sus,
                 inst->release);
 
-            // play the note as an explicit Hz frequency
-            tone(_mus_note_hz(ev->note), dur, vol, flags);
+            // play the note using host MIDI note mode
+            int note = ev->note >= 129 ? _mus_chord_note(ev->note, 0) : ev->note;
+            tone(note, dur, vol, flags);
+            _mus_voice[ch] = (MusVoice){ev->inst, ev->note, (unsigned char)level};
         }
     }
 
