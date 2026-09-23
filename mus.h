@@ -35,7 +35,7 @@
 #define MUS_OFF  128   // note-off: release the channel (noise hard-cuts)
 #define MUS_SUSTAIN_HOLD 255 // sustain indefinitely until OFF or a new note
 
-// An instrument preset (8 bytes).  Maps to tone() parameters. ADSR.
+// An instrument preset. Maps to tone() parameters. ADSR.
 typedef struct {
     unsigned char wave;    // waveform: VEX_TONE_PULSE, VEX_TONE_NOISE, VEX_TONE_TRI
     unsigned char duty;    // pulse duty: VEX_TONE_MODE0..3
@@ -45,6 +45,9 @@ typedef struct {
     unsigned char release; // release length in frames
     unsigned char volume;  // default volume (0..100)
     unsigned char pan;     // 0=center, VEX_TONE_PAN_LEFT, VEX_TONE_PAN_RIGHT
+    unsigned char pwm;       // 0 disables PWM; otherwise start/end are widths
+    unsigned char pwm_start; // 0..255 start width
+    unsigned char pwm_end;   // 0..255 sweep target width
 } MusInst;
 
 // A note event (3 bytes, one per channel per row).
@@ -89,6 +92,8 @@ void mus_tick(void);
 // Current position: low 8 bits = order, bits 8..15 = row.
 int mus_pos(void);
 
+void mus_mute(int ch, int muted);
+
 // ---- implementation --------------------------------------------------------
 
 static const MusSong *_mus_song;
@@ -100,6 +105,7 @@ typedef struct {
     unsigned char vol;
 } MusVoice;
 static MusVoice _mus_voice[MUS_CHANNELS];
+static unsigned char _mus_muted;
 
 // Silence a channel: zero-volume, zero-envelope tone.
 static void _mus_silence(int ch) {
@@ -125,6 +131,16 @@ static void _mus_release(int ch) {
     tone(440, VEX_TONE_DURATION(0, 0, 0, inst->release), 0,
          VEX_TONE_FLAGS(ch, 0, VEX_TONE_RELEASE));
     _mus_voice[ch] = (MusVoice){0};
+}
+
+void mus_mute(int ch, int muted) {
+    if (ch < 0 || ch >= MUS_CHANNELS) return;
+    if (muted) {
+        _mus_muted |= (unsigned char)(1u << ch);
+        _mus_release(ch);
+    } else {
+        _mus_muted &= (unsigned char)~(1u << ch);
+    }
 }
 
 static int _mus_chord_note(int code, int step) {
@@ -175,12 +191,17 @@ void mus_tick(void) {
                        : 0;
     if (arp_step > arp_prev) {
         for (int ch = 0; ch < MUS_CHANNELS; ch++) {
+            if (_mus_muted & (1u << ch)) continue;
             MusVoice *v = &_mus_voice[ch];
             if (v->note < 129 || v->inst == 0 || v->inst > _mus_song->num_insts)
                 continue;
             const MusInst *inst = &_mus_song->insts[v->inst - 1];
-            int flags = VEX_TONE_FLAGS(ch, inst->duty,
-                inst->wave | inst->pan | VEX_TONE_NOTE_MODE |
+            int pwm = inst->pwm
+                          ? VEX_TONE_PULSE_WIDTH(inst->pwm_start, inst->pwm_end)
+                          : 0;
+            int mode = pwm ? 0 : inst->duty;
+            int flags = VEX_TONE_FLAGS(ch, mode,
+                inst->wave | inst->pan | VEX_TONE_NOTE_MODE | pwm |
                 (inst->sustain == MUS_SUSTAIN_HOLD ? VEX_TONE_HOLD : 0));
             int sus = inst->sustain ? inst->sustain : pat->speed * 2;
             tone(_mus_chord_note(v->note, arp_step),
@@ -194,6 +215,10 @@ void mus_tick(void) {
     if (_mus_tick == 0) {
         if (_mus_row >= pat->rows) { mus_stop(); return; }
         for (int ch = 0; ch < MUS_CHANNELS; ch++) {
+            if (_mus_muted & (1u << ch)) {
+                _mus_voice[ch].note = MUS_REST;
+                continue;
+            }
             const MusEvent *ev = &pat->events[_mus_row * MUS_CHANNELS + ch];
 
             // note-off: release the current voice
@@ -216,8 +241,12 @@ void mus_tick(void) {
             const MusInst *inst = &_mus_song->insts[ev->inst - 1];
 
             // flags: channel, duty, waveform + pan
-            int flags = VEX_TONE_FLAGS(ch, inst->duty,
-                inst->wave | inst->pan | VEX_TONE_NOTE_MODE |
+            int pwm = inst->pwm
+                          ? VEX_TONE_PULSE_WIDTH(inst->pwm_start, inst->pwm_end)
+                          : 0;
+            int mode = pwm ? 0 : inst->duty;
+            int flags = VEX_TONE_FLAGS(ch, mode,
+                inst->wave | inst->pan | VEX_TONE_NOTE_MODE | pwm |
                 (inst->sustain == MUS_SUSTAIN_HOLD ? VEX_TONE_HOLD : 0));
 
             // volume: instrument default, overridden by per-note vol if set.

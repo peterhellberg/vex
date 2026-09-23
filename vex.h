@@ -41,6 +41,7 @@
 #define VEX_TONE_MODE1 (1 << 2)          // 25%
 #define VEX_TONE_MODE2 (2 << 2)          // 12.5%
 #define VEX_TONE_MODE3 (3 << 2)          // 75%
+#define VEX_TONE_PWM (1 << 11)           // 8-bit pulse-width start/end fields
 
 // Panning (bits 4..5); constant-power gains, center by default.
 #define VEX_TONE_PAN_LEFT  (1 << 4)
@@ -83,7 +84,8 @@ VEX_IMPORT("palreset") void palreset(void);          // restore default palette
 //   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
 //   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
 //   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
-//            bit 8 note mode | bit 9 hold sustain | bit 10 release
+//            bit 8 note mode | bit 9 hold sustain | bit 10 release |
+//            bit 11 PWM | bits 12..19 start width | bits 20..27 end width
 VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
 // ---- audio -----------------------------------------------------------------
@@ -99,6 +101,10 @@ VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 #define VEX_TONE_DURATION(attack, decay, sustain, release) \
   (VEX_TONE_DUR_BYTE(sustain) | (VEX_TONE_DUR_BYTE(release) << 8) | \
    (VEX_TONE_DUR_BYTE(decay) << 16) | (VEX_TONE_DUR_BYTE(attack) << 24))
+
+#define VEX_TONE_PULSE_WIDTH(start, end) \
+  (VEX_TONE_PWM | (VEX_TONE_DUR_BYTE(start) << 12) | \
+   (VEX_TONE_DUR_BYTE(end) << 20))
 
 #define VEX_TONE_VOL_BYTE(v) ((v) < 0 ? 0 : (v) > 100 ? 100 : (v))
 

@@ -916,6 +916,9 @@ const toneFullAmp = 8000.0
 type toneVoice struct {
 	kind      int // 0 pulse, 1 noise, 2 triangle
 	duty      float64
+	dutyTo    float64
+	dutyStep  float64
+	dutyLeft  int64
 	freq      float64 // current Hz (slides toward freqTo during sustain)
 	freqTo    float64
 	freqStart float64
@@ -973,10 +976,16 @@ func (v *toneVoice) nextSegment() {
 		}
 		v.segLeft = n
 		v.slope = (v.segEnd[v.seg] - v.level) / float64(n)
-		if v.seg == segSustain && v.freqTo > 0 {
-			// The slide rides the sustain segment: linear in Hz from the
-			// start frequency to the target across its samples.
-			v.freqStep = (v.freqTo - v.freqStart) / float64(n)
+		if v.seg == segSustain {
+			if v.freqTo > 0 {
+				// The slide rides the sustain segment: linear in Hz from the
+				// start frequency to the target across its samples.
+				v.freqStep = (v.freqTo - v.freqStart) / float64(n)
+			}
+			if v.dutyTo != v.duty {
+				v.dutyLeft = n
+				v.dutyStep = (v.dutyTo - v.duty) / float64(n)
+			}
 		}
 		return
 	}
@@ -1000,11 +1009,16 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 		v.segLeft = n
 		v.slope = -v.level / float64(n)
 		v.freqStep = 0
+		v.dutyStep = 0
+		v.dutyLeft = 0
 		return
 	}
 
 	v.kind = t.kind
 	v.duty = t.duty
+	v.dutyTo = t.dutyTo
+	v.dutyStep = 0
+	v.dutyLeft = 0
 	v.freqStart = t.f0
 	v.freqTo = t.f1
 	v.freq = t.f0
@@ -1055,6 +1069,7 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 type toneTrigger struct {
 	kind        int
 	duty        float64
+	dutyTo      float64
 	hold        bool
 	releaseOnly bool
 	f0, f1      float64
@@ -1116,6 +1131,7 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 
 	ch := flags & 3
 	mode := (flags >> 2) & 3
+	pwm := flags&(1<<11) != 0
 	pan := (flags >> 4) & 3
 	if pan > 2 {
 		pan = 0
@@ -1147,6 +1163,12 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 
 	sus := duration & 0xFF
 	rel := (duration >> 8) & 0xFF
+	duty := toneDutyTable[mode]
+	dutyTo := duty
+	if pwm {
+		duty = float64((flags>>12)&255) / 255
+		dutyTo = float64((flags>>20)&255) / 255
+	}
 	hold := flags&(1<<9) != 0
 	releaseOnly := flags&(1<<10) != 0
 	dec := (duration >> 16) & 0xFF
@@ -1163,7 +1185,8 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 
 	e.pending[ch] = &toneTrigger{
 		kind:        int(wave),
-		duty:        toneDutyTable[mode],
+		duty:        duty,
+		dutyTo:      dutyTo,
 		hold:        hold,
 		releaseOnly: releaseOnly,
 		f0:          f0,
@@ -1290,6 +1313,15 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				v.level += v.slope
 				if v.seg == segSustain && v.freqStep != 0 {
 					v.freq += v.freqStep
+				}
+			}
+			if v.dutyLeft > 0 {
+				v.dutyLeft--
+				if v.dutyLeft <= 0 {
+					v.duty = v.dutyTo
+					v.dutyStep = 0
+				} else {
+					v.duty += v.dutyStep
 				}
 			}
 

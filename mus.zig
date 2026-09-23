@@ -46,7 +46,7 @@ pub const OFF = 128; // note-off: release / silence the channel
 /// Hold the sustain level until the channel is retriggered or silenced.
 pub const SUSTAIN_HOLD: u8 = 255;
 
-/// An instrument preset (8 bytes). Maps to tone() parameters. ADSR.
+/// An instrument preset. Maps to tone() parameters. ADSR.
 pub const Inst = extern struct {
     wave: u8, // vex.TONE_PULSE, vex.TONE_NOISE, vex.TONE_TRI
     duty: u8, // vex.TONE_MODE0..3
@@ -56,6 +56,9 @@ pub const Inst = extern struct {
     release: u8, // release length in frames
     volume: u8, // default volume (0..100)
     pan: u8, // 0=center, vex.TONE_PAN_LEFT, vex.TONE_PAN_RIGHT
+    pwm: u8 = 0, // 0 disables PWM; otherwise start/end are widths
+    pwm_start: u8 = 0, // 0..255 start width
+    pwm_end: u8 = 0, // 0..255 sweep target width
 };
 
 /// A note event (3 bytes, one per channel per row).
@@ -148,10 +151,15 @@ fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32, sustain: i32) voi
         .peak = vol,
     }).pack();
 
+    const pwm = if (inst.pwm != 0)
+        vex.tonePulseWidth(inst.pwm_start, inst.pwm_end)
+    else
+        0;
+    const mode = if (pwm != 0) 0 else inst.duty;
     const flags = vex.toneFlags(
         @intCast(ch),
-        inst.duty,
-        inst.wave | inst.pan | vex.TONE_NOTE_MODE |
+        mode,
+        inst.wave | inst.pan | vex.TONE_NOTE_MODE | pwm |
             (if (inst.sustain == SUSTAIN_HOLD) vex.TONE_HOLD else 0),
     );
 

@@ -436,7 +436,8 @@ function polyBlep(t, dt) {
 class ToneMixer extends AudioWorkletProcessor {
   constructor() {
     super();
-    const mk = () => ({ kind: 0, duty: 0.5, freq: 0, freqTo: 0,
+    const mk = () => ({ kind: 0, duty: 0.5, dutyTo: 0.5, dutyStep: 0, dutyLeft: 0,
+                        freq: 0, freqTo: 0,
                         freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0x2CE1,
                         lp: 0, dc: 0, dcPrev: 0,
                         seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
@@ -456,7 +457,8 @@ class ToneMixer extends AudioWorkletProcessor {
         for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
         for (const v of this.voices) {
           v.seg = SEG_IDLE; v.level = 0; v.hold = false; v.segLeft = 0; v.slope = 0;
-          v.ph = 0; v.nph = 0; v.lfsr = 0x2CE1; v.lp = 0; v.dc = 0; v.dcPrev = 0;
+          v.ph = 0; v.nph = 0; v.lfsr = 0x2CE1; v.dutyStep = 0; v.dutyLeft = 0;
+          v.lp = 0; v.dc = 0; v.dcPrev = 0;
         }
         return;
       }
@@ -479,10 +481,16 @@ class ToneMixer extends AudioWorkletProcessor {
       if (n <= 0) { v.level = v.segEnd[v.seg]; continue; }
       v.segLeft = n;
       v.slope = (v.segEnd[v.seg] - v.level) / n;
-      if (v.seg === SEG_SUSTAIN && v.freqTo > 0) {
-        // The slide rides the sustain segment: linear in Hz from the
-        // start frequency to the target across its samples.
-        v.freqStep = (v.freqTo - v.freqStart) / n;
+      if (v.seg === SEG_SUSTAIN) {
+        if (v.freqTo > 0) {
+          // The slide rides the sustain segment: linear in Hz from the
+          // start frequency to the target across its samples.
+          v.freqStep = (v.freqTo - v.freqStart) / n;
+        }
+        if (v.dutyTo !== v.duty) {
+          v.dutyLeft = n;
+          v.dutyStep = (v.dutyTo - v.duty) / n;
+        }
       }
       return;
     }
@@ -499,9 +507,12 @@ class ToneMixer extends AudioWorkletProcessor {
       v.segLeft = n;
       v.slope = -v.level / n;
       v.freqStep = 0;
+      v.dutyStep = 0;
+      v.dutyLeft = 0;
       return;
     }
-    v.kind = t.kind; v.duty = t.duty;
+    v.kind = t.kind; v.duty = t.duty; v.dutyTo = t.dutyTo;
+    v.dutyStep = 0; v.dutyLeft = 0;
     v.freqStart = t.f0; v.freqTo = t.f1; v.freq = t.f0; v.freqStep = 0;
     v.hold = !!t.hold;
     v.ph = 0; v.nph = 0; v.lfsr = 0x2CE1;
@@ -585,11 +596,20 @@ class ToneMixer extends AudioWorkletProcessor {
         if (v.segLeft <= 0) {
           v.level = v.segEnd[v.seg];
           this.nextSegment(v);
-        } else {
-          v.level += v.slope;
-          if (v.seg === SEG_SUSTAIN && v.freqStep !== 0) v.freq += v.freqStep;
-        }
-        v.ph += v.freq / sr;
+         } else {
+           v.level += v.slope;
+           if (v.seg === SEG_SUSTAIN && v.freqStep !== 0) v.freq += v.freqStep;
+         }
+         if (v.dutyLeft > 0) {
+           v.dutyLeft--;
+           if (v.dutyLeft <= 0) {
+             v.duty = v.dutyTo;
+             v.dutyStep = 0;
+           } else {
+             v.duty += v.dutyStep;
+           }
+         }
+         v.ph += v.freq / sr;
         if (v.ph >= 1) v.ph -= Math.floor(v.ph);
       }
       let sl = l, sR = r;
@@ -748,6 +768,7 @@ function tone(freq, duration, volume, flags)
     const mode = (flags >>> 2) & 3;
     const hold = (flags & 0x200) !== 0;
     const releaseOnly = (flags & 0x400) !== 0;
+    const pwm = (flags & 0x800) !== 0;
     let pan = (flags >>> 4) & 3;
     if (pan > 2) pan = 0;
     let wave = (flags >>> 6) & 3;
@@ -769,6 +790,8 @@ function tone(freq, duration, volume, flags)
     const rel = (duration >>> 8) & 0xFF;
     const dec = (duration >>> 16) & 0xFF;
     const att = (duration >>> 24) & 0xFF;
+    const duty = pwm ? ((flags >>> 12) & 255) / 255 : [0.5, 0.25, 0.125, 0.75][mode];
+    const dutyTo = pwm ? ((flags >>> 20) & 255) / 255 : duty;
 
     let vs = volume & 0xFF;
     if (vs > 100) vs = 100;
@@ -778,7 +801,8 @@ function tone(freq, duration, volume, flags)
     toneNode.port.postMessage({
         ch,
         kind: wave,
-        duty: [0.5, 0.25, 0.125, 0.75][mode],
+        duty,
+        dutyTo,
         hold,
         releaseOnly,
         f0, f1,
