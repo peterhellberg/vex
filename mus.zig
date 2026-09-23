@@ -102,6 +102,7 @@ const Voice = struct {
     vol: u8 = 0, // resolved volume at trigger time
 };
 var _voice: [CHANNELS]Voice = @splat(.{});
+var _muted: u8 = 0;
 
 /// Load a song (resets position to the start).
 pub fn load(song: *const Song) void {
@@ -201,6 +202,16 @@ fn releaseVoice(ch: usize) void {
     v.* = .{};
 }
 
+pub fn mute(ch: usize, muted: bool) void {
+    if (ch >= CHANNELS) return;
+    if (muted) {
+        _muted |= @as(u8, 1) << @intCast(ch);
+        releaseVoice(ch);
+    } else {
+        _muted &= ~(@as(u8, 1) << @intCast(ch));
+    }
+}
+
 /// Chord code (129..141) -> the chord tone's MIDI note for arpeggio `step`.
 /// 129..135: minor triad, root = (code - 129) + 48   (C3..F#3)
 /// 136..141: major triad, root = (code - 136) + 55   (G3..B3)
@@ -265,6 +276,7 @@ pub fn tick() void {
         0;
     if (arp_step > arp_prev) {
         for (0..CHANNELS) |ch| {
+            if ((_muted & (@as(u8, 1) << @intCast(ch))) != 0) continue;
             const v = &_voice[ch];
 
             if (v.note < 129) continue; // not a chord channel
@@ -284,6 +296,10 @@ pub fn tick() void {
         }
 
         for (0..CHANNELS) |ch| {
+            if ((_muted & (@as(u8, 1) << @intCast(ch))) != 0) {
+                _voice[ch].note = REST;
+                continue;
+            }
             const ev = &pat.events[@as(usize, _row) * CHANNELS + ch];
             const v = &_voice[ch];
 

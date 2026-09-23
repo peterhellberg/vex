@@ -81,3 +81,24 @@ test "zero volume, arpeggio, and rest" {
         try std.testing.expectEqual(@as(i32, @intCast(channel)), call.flags & 3);
     }
 }
+
+test "mute" {
+    mus.load(&song);
+    mus.play();
+    vex.reset();
+
+    mus.mute(0, true);
+    try std.testing.expectEqual(@as(usize, 1), vex.call_count);
+    mus.tick();
+    try std.testing.expectEqual(@as(usize, 2), vex.call_count);
+    try std.testing.expectEqual(@as(i32, 1), vex.calls[1].flags & 3);
+
+    mus.mute(0, false);
+    mus.load(&song);
+    mus.play();
+    vex.reset();
+    mus.tick();
+    try std.testing.expectEqual(@as(usize, 2), vex.call_count);
+    try std.testing.expectEqual(@as(i32, 0), vex.calls[0].flags & 3);
+    try std.testing.expectEqual(@as(i32, 1), vex.calls[1].flags & 3);
+}
