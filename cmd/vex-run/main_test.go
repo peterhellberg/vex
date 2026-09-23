@@ -441,15 +441,12 @@ func TestToneNoiseMatchesLFSR(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	get := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
-	// Noise: 15-bit LFSR with taps 14/12, clock clamped to
-	// [8000,48000] (2*freq = 16000 here), one-pole lowpass at 0.18
-	// with 1.4 gain, and the padded 32-sample attack. Reference
-	// mirrors that exactly so any tap/clock/filter/attack drift
-	// shows up as a sample mismatch.
-	lfsr := uint16(0xACE1)
+	// Noise: full-period 15-bit LFSR, clock clamped to [8000,48000]
+	// (2*freq = 16000 here), plus the padded 32-sample attack. Reference
+	// mirrors that exactly so any seed/tap/clock/attack drift shows up as
+	// a sample mismatch.
+	lfsr := uint16(0x2CE1)
 	nph := 0.0
-	noiseRaw := 0.0
-	noiseLp := 0.0
 	level := 0.0
 	slope := 1.0 / 32
 	segLeft := int64(32)
@@ -464,19 +461,16 @@ func TestToneNoiseMatchesLFSR(t *testing.T) {
 		nph += nclk / toneRate
 		for nph >= 1 {
 			nph--
-			fb := uint16(1 - (((lfsr >> 14) ^ (lfsr >> 12)) & 1))
-			lfsr = lfsr<<1 | fb
-			if lfsr&1 == 1 {
-				noiseRaw = 1
-			} else {
-				noiseRaw = -1
-			}
+			bit := uint16((lfsr ^ (lfsr >> 1)) & 1)
+			lfsr = lfsr>>1 | bit<<14
 		}
-		noiseLp += 0.18 * (noiseRaw - noiseLp)
-		s := noiseLp * 1.4
+		s := float64(1)
+		if lfsr&1 == 0 {
+			s = -1
+		}
 		want := int16(s * toneFullAmp * level * tonePanL[0])
 		if get(i) != want {
-			t.Fatalf("sample %d = %d, want %d (lfsr=%04x lp=%.4f level=%.4f)", i, get(i), want, lfsr, noiseLp, level)
+			t.Fatalf("sample %d = %d, want %d (lfsr=%04x level=%.4f)", i, get(i), want, lfsr, level)
 		}
 		if segLeft > 0 {
 			segLeft--
@@ -490,6 +484,21 @@ func TestToneNoiseMatchesLFSR(t *testing.T) {
 		if i >= 31 {
 			level = 1
 		}
+	}
+}
+
+func TestToneNoiseLFSRPeriod(t *testing.T) {
+	const seed = uint16(0x2CE1)
+	lfsr := seed
+	for i := 1; i <= 32767; i++ {
+		bit := uint16((lfsr ^ (lfsr >> 1)) & 1)
+		lfsr = lfsr>>1 | bit<<14
+		if lfsr == seed && i != 32767 {
+			t.Fatalf("LFSR repeated after %d states", i)
+		}
+	}
+	if lfsr != seed {
+		t.Fatalf("LFSR returned to 0x%04x after %d states, want 0x%04x", lfsr, 32767, seed)
 	}
 }
 

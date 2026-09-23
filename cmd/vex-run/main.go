@@ -923,8 +923,6 @@ type toneVoice struct {
 	ph        float64 // phase accumulator, 0..1
 	nph       float64 // noise step accumulator
 	lfsr      uint16
-	noiseRaw  float64 // last raw LFSR output (+1/-1)
-	noiseLp   float64 // one-pole lowpassed noise value
 	lp        float64 // one-pole lowpass for pulse/triangle — tames aliasing
 	dc        float64 // DC blocker state for pulse
 	dcPrev    float64 // previous input for DC blocker
@@ -1014,11 +1012,7 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 	v.freqStep = 0
 	v.ph = 0
 	v.nph = 0
-	v.lfsr = 0xACE1
-	v.noiseRaw = 0
-	// Starting the noise filter from silence also gives noise hits a free
-	// natural fade-in over its first few dozen samples.
-	v.noiseLp = 0
+	v.lfsr = 0x2CE1
 	v.lp = 0
 	v.dc = 0
 	v.dcPrev = 0
@@ -1207,9 +1201,7 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			v.slope = 0
 			v.ph = 0
 			v.nph = 0
-			v.lfsr = 0xACE1
-			v.noiseRaw = 0
-			v.noiseLp = 0
+			v.lfsr = 0x2CE1
 			v.lp = 0
 			v.dc = 0
 			v.dcPrev = 0
@@ -1233,7 +1225,7 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			// Oscillator value in -1..1.
 			var s float64
 			switch v.kind {
-			case 1: // noise: 15-bit LFSR, clock clamped to the crisp band
+			case 1: // noise: full-period 15-bit LFSR, clock clamped
 				nclk := 2 * v.freq
 				if nclk < toneNoiseClkMin {
 					nclk = toneNoiseClkMin
@@ -1244,18 +1236,14 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				v.nph += nclk / toneRate
 				for v.nph >= 1 {
 					v.nph--
-					fb := uint16(1 - (((v.lfsr >> 14) ^ (v.lfsr >> 12)) & 1))
-					v.lfsr = v.lfsr<<1 | fb
-					v.noiseRaw = 1
-					if v.lfsr&1 == 0 {
-						v.noiseRaw = -1
-					}
+					bit := uint16((v.lfsr ^ (v.lfsr >> 1)) & 1)
+					v.lfsr = v.lfsr>>1 | bit<<14
 				}
-				// One-pole lowpass rounds each raw step edge into a ramp:
-				// turns raw sample-and-hold hash into classic chip hiss.
-				// Higher coefficient = brighter/snapier; lower = darker.
-				v.noiseLp += 0.18 * (v.noiseRaw - v.noiseLp)
-				s = v.noiseLp * 1.4 // compensate filter gain loss
+				if v.lfsr&1 == 1 {
+					s = 1
+				} else {
+					s = -1
+				}
 			case 2: // triangle — gentle lowpass
 				var raw float64
 				switch {
