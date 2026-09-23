@@ -31,7 +31,7 @@ const INSTS = [_]mus.Inst{
         .pan = vex.TONE_PAN_LEFT,
     },
     // 2: sub - TRI 2 octaves below lead, just to rattle the chest.
-    //    SUSTAIN_HOLD: rings until an explicit OFF, so it stays under phrases.
+    //    SUSTAIN_HOLD: maximum-length sustain, gated by the pattern's OFFs.
     .{
         .wave = vex.TONE_TRI,
         .duty = vex.TONE_MODE0,
