@@ -197,7 +197,7 @@ func TestToneEngineClearSilencesOnRead(t *testing.T) {
 		return true
 	}
 
-	// Start a sustained voice so voices and the delay buffer are non-silent.
+	// Start a sustained voice so the active mixer state is non-silent.
 	e.tone(440, 10, 100, 0)
 	buf := make([]byte, 4*64)
 	if _, err := e.Read(buf); err != nil {
@@ -217,16 +217,6 @@ func TestToneEngineClearSilencesOnRead(t *testing.T) {
 	}
 	if !silent(out) {
 		t.Fatal("expected silence after clear dropped the pending trigger")
-	}
-
-	// The delay buffer was cleared too: no echo of the pre-clear voice
-	// arrives when the 6000-sample delay wraps around.
-	tail := make([]byte, 4*(toneDelaySamples+64))
-	if _, err := e.Read(tail); err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	if !silent(tail) {
-		t.Fatal("expected no delay echo after clear")
 	}
 
 	// A tone after the clear still sounds: the flag is consumed by one Read.
@@ -345,8 +335,8 @@ func TestToneEngineDutyFlipsAtQuarter(t *testing.T) {
 	}
 	sample := func(i int) int16 { return int16(binary.LittleEndian.Uint16(buf[i*4:])) }
 	// After attack the envelope is at full scale, so magnitude is ~5656.
-	// Pulse is now low-passed (0.28/0.35) to tame aliasing, so samples
-	// on the edge ramp — check sign away from the transition.
+	// The one-pole pulse filter ramps edge samples, so check sign away
+	// from the transition.
 	for i := 32; i < 96; i++ {
 		ph := float64(i) * 1000.0 / float64(toneRate)
 		ph -= float64(int(ph))
@@ -376,7 +366,7 @@ func TestToneEnvelopeRampsAreLinear(t *testing.T) {
 	susSamples := int(susFrames * spf)
 	total := attSamples + susSamples + int(rel*spf)
 
-	buf := make([]byte, 4*(total+4*toneDelaySamples+64))
+	buf := make([]byte, 4*(total+64))
 	if _, err := e.Read(buf); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -394,24 +384,22 @@ func TestToneEnvelopeRampsAreLinear(t *testing.T) {
 	if m := amp(attSamples / 2); m < 2000 || m > 3600 {
 		t.Fatalf("mid-attack magnitude %d, want ~half of 5656", m)
 	}
-	// End of attack ~= full scale (center pan). Delay adds ~25% echo after 6000 samples, so allow a bit over.
+	// End of attack ~= full scale (center pan).
 	full := amp(attSamples - 1)
 	if full < 4000 || full > 6000 {
-		t.Fatalf("post-attack magnitude %d, want ~5656 (delay may add)", full)
+		t.Fatalf("post-attack magnitude %d, want ~5656", full)
 	}
-	// Sustain holds near the same level — delay adds echo, so just check >4000.
+	// Sustain holds near the same level.
 	if s := amp(attSamples + susSamples - 1); s < 4000 {
 		t.Fatalf("sustain end magnitude %d, want >4000", s)
 	}
-	// Release decays back toward silence — delay adds 25% echo for 6000 samples,
-	// so check near zero after 4 echoes have decayed.
+	// Release decays back toward silence.
 	if s := amp(total - 1); s > 2000 {
-		t.Fatalf("release tail magnitude %d, want near zero (delay adds)", s)
+		t.Fatalf("release tail magnitude %d, want near zero", s)
 	}
-	// And after the release + 4 delays the voice is near silent for good — delay decays.
-	for i := total + 4*toneDelaySamples; i < total+4*toneDelaySamples+60; i++ {
-		if amp(i) > 100 {
-			t.Fatalf("voice still sounding %d frames past release+delay: %d", i-total-4*toneDelaySamples, sample(i))
+	for i := total; i < total+60; i++ {
+		if amp(i) != 0 {
+			t.Fatalf("voice still sounding %d frames past release: %d", i-total, sample(i))
 		}
 	}
 }

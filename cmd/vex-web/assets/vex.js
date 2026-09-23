@@ -450,9 +450,6 @@ class ToneMixer extends AudioWorkletProcessor {
     // Full-scale single-voice amplitude in s16 units, matching the C/Go
     // hosts; the final write divides by 32768 like the C mixer.
     this.fullAmp = 8000;
-    // Short slap delay — 125ms at the worklet's actual sample rate, 25% feedback.
-    this.delayBuf = new Float32Array(Math.round(sampleRate * 0.125) * 2);
-    this.delayPos = 0;
     this.port.onmessage = e => {
       const t = e.data;
       if (t.clear) {
@@ -461,8 +458,6 @@ class ToneMixer extends AudioWorkletProcessor {
           v.seg = SEG_IDLE; v.level = 0; v.hold = false; v.segLeft = 0; v.slope = 0;
           v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0; v.lp = 0; v.dc = 0; v.dcPrev = 0;
         }
-        this.delayBuf.fill(0);
-        this.delayPos = 0;
         return;
       }
       this.pending[t.ch] = t;
@@ -547,9 +542,6 @@ class ToneMixer extends AudioWorkletProcessor {
       if (t) { pending[ch] = null; this.apply(voices[ch], t); }
     }
     const knee = 24000, top = 32767, range = 8767;
-    const delayBuf = this.delayBuf;
-    const delayLen = delayBuf.length;
-    let dpos = this.delayPos;
     const fullAmp = this.fullAmp;
     const sr = sampleRate;
     for (let i = 0; i < L.length; i++) {
@@ -585,7 +577,7 @@ class ToneMixer extends AudioWorkletProcessor {
           let t2 = v.ph + 1 - v.duty;
           if (t2 >= 1) t2 -= 1;
           raw -= polyBlep(t2, dt);
-          v.lp += 0.12 * (raw - v.lp);
+          v.lp += 0.5 * (raw - v.lp);
           const y = v.lp;
           const dc = y - v.dcPrev + 0.995 * v.dc;
           v.dc = dc;
@@ -606,14 +598,6 @@ class ToneMixer extends AudioWorkletProcessor {
         v.ph += v.freq / sr;
         if (v.ph >= 1) v.ph -= Math.floor(v.ph);
       }
-      const dl = delayBuf[dpos];
-      const dr = delayBuf[dpos + 1];
-      l += dl * 0.25;
-      r += dr * 0.25;
-      delayBuf[dpos] = l;
-      delayBuf[dpos + 1] = r;
-      dpos += 2;
-      if (dpos >= delayLen) dpos = 0;
       let sl = l, sR = r;
       if (sl > knee) sl = knee + range * Math.tanh((sl - knee) / range);
       else if (sl < -knee) sl = -knee + range * Math.tanh((sl + knee) / range);
@@ -622,7 +606,6 @@ class ToneMixer extends AudioWorkletProcessor {
       L[i] = sl / 32768;
       R[i] = sR / 32768;
     }
-    this.delayPos = dpos;
     return true;
   }
 }

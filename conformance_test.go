@@ -210,9 +210,9 @@ func TestToneTablesMatchAcrossHosts(t *testing.T) {
 }
 
 // The mixer voice model (noise clock band, one-pole filter coefficients,
-// full-scale amplitude, slap delay length/feedback) is hand-mirrored across
-// all three hosts; pin the literals so a retune in one host fails loudly
-// instead of silently diverging the mix.
+// full-scale amplitude) is hand-mirrored across all three hosts; pin the
+// literals so a retune in one host fails loudly instead of silently diverging
+// the mix.
 func TestToneMixerMatchAcrossHosts(t *testing.T) {
 	cSrc := section(mustRead(t, "cmd/vex/main.c"),
 		"// ---- audio (tone)", "static M3Result link_host")
@@ -226,7 +226,6 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		"0.18 *", // noise one-pole coefficient
 		"1.4",    // noise filter gain compensation
 		"0.22 *", // triangle one-pole coefficient
-		"0.12 *", // pulse one-pole warmth
 		"0.995",  // pulse DC blocker pole
 	}
 	for _, lit := range shared {
@@ -248,8 +247,7 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		{"full-scale amplitude", "TONE_FULL_AMP 8000.0", "toneFullAmp = 8000.0", "this.fullAmp = 8000"},
 		{"noise clock min", "TONE_NOISE_CLK_MIN 8000.0", "toneNoiseClkMin = 8000.0", "TONE_NOISE_CLK_MIN = 8000"},
 		{"noise clock max", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "TONE_NOISE_CLK_MAX = 48000"},
-		{"delay length", "DELAY_SAMPLES 6000", "toneDelaySamples = 6000", "Math.round(sampleRate * 0.125)"},
-		{"delay feedback", "dl * 0.25", "toneDelayFeedback = 0.25", "dl * 0.25"},
+		{"pulse warmth", "v->lp += 0.5 *", "v.lp += 0.5 * (raw - v.lp)", "v.lp += 0.5 * (raw - v.lp)"},
 		{"release trigger field", "release_only", "releaseOnly", "releaseOnly"},
 		{"release branch", "t->release_only", "t.releaseOnly", "t.releaseOnly"},
 	}

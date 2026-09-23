@@ -1077,9 +1077,7 @@ type toneEngine struct {
 	mu       sync.Mutex
 	voices   [4]toneVoice
 	pending  [4]*toneTrigger
-	clearReq bool // silence voices/delay on the audio goroutine (see clear)
-	delayBuf [toneDelaySamples * 2]float64
-	delayPos int
+	clearReq bool // silence voices on the audio goroutine (see clear)
 }
 
 var (
@@ -1090,10 +1088,6 @@ var (
 
 const toneNoiseClkMin = 8000.0
 const toneNoiseClkMax = 48000.0
-
-// Short slap delay — 125ms at 48k, 25% feedback, adds space.
-const toneDelaySamples = 6000
-const toneDelayFeedback = 0.25
 
 // softClip matches the C host: linear below the knee, tanh above.
 func softClip(x float64) float64 {
@@ -1109,8 +1103,8 @@ func softClip(x float64) float64 {
 
 // clear silences all voices and drops pending triggers. Called when a new
 // cart is loaded so a hostile cart's long note doesn't bleed into the next.
-// Only parks a flag: voices and the delay buffer live on the audio goroutine
-// (see Read), so mutating them here would race with the DSP loop.
+// Only parks a flag: voices live on the audio goroutine (see Read), so mutating
+// them here would race with the DSP loop.
 func (e *toneEngine) clear() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1220,8 +1214,6 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			v.dc = 0
 			v.dcPrev = 0
 		}
-		clear(e.delayBuf[:])
-		e.delayPos = 0
 	}
 	for ch := range pendingCopy {
 		if t := pendingCopy[ch]; t != nil {
@@ -1288,7 +1280,7 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 					t2 -= 1
 				}
 				raw -= polyBlep(t2, dt)
-				v.lp += 0.12 * (raw - v.lp)
+				v.lp += 0.5 * (raw - v.lp)
 				y := v.lp
 				dc := y - v.dcPrev + 0.995*v.dc
 				v.dc = dc
@@ -1321,16 +1313,6 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				}
 			}
 		}
-
-		// Short slap delay — 125ms, 25% feedback.
-
-		dl := e.delayBuf[e.delayPos]
-		dr := e.delayBuf[e.delayPos+1]
-		l += dl * toneDelayFeedback
-		r += dr * toneDelayFeedback
-		e.delayBuf[e.delayPos] = l
-		e.delayBuf[e.delayPos+1] = r
-		e.delayPos = (e.delayPos + 2) % len(e.delayBuf)
 
 		ls := int16(softClip(l))
 		rs := int16(softClip(r))
