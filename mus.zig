@@ -32,7 +32,7 @@
 //! Sustain semantics on `Inst.sustain`:
 //!   0              default: pattern speed * 2 frames
 //!   1..254         fixed length in frames
-//!   255 (HOLD)     key-follow: rings until OFF / next note
+//!   255 (HOLD)     hold the sustain level until OFF / next note
 
 const vex = @import("vex");
 
@@ -43,7 +43,7 @@ pub const CHANNELS = vex.TONE_CHANNELS;
 pub const REST = 0; // no note (let previous ring)
 pub const OFF = 128; // note-off: release / silence the channel
 
-/// Inst.sustain: hold until OFF (or next note on the channel).
+/// Hold the sustain level until the channel is retriggered or silenced.
 pub const SUSTAIN_HOLD: u8 = 255;
 
 /// An instrument preset (8 bytes). Maps to tone() parameters. ADSR.
@@ -135,14 +135,38 @@ fn silence(ch: usize) void {
 }
 
 /// Issue a tone for channel `ch`: MIDI `note` with the given instrument,
-/// using the instrument's own envelope. Pitch is exact — vex's
+/// using the resolved sustain length. Pitch is exact — vex's
 /// TONE_NOTE_MODE interprets the freq parameter as a MIDI note number.
-fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32) void {
+fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32, sustain: i32) void {
     const duration = (vex.ToneDuration{
-        .sustain = inst.sustain,
+        .sustain = sustain,
         .release = inst.release,
         .decay = inst.decay,
         .attack = inst.attack,
+    }).pack();
+
+    const volume = (vex.ToneVolume{
+        .level = vol,
+        .peak = vol,
+    }).pack();
+
+    const flags = vex.toneFlags(
+        @intCast(ch),
+        inst.duty,
+        inst.wave | inst.pan | vex.TONE_NOTE_MODE |
+            (if (inst.sustain == SUSTAIN_HOLD) vex.TONE_HOLD else 0),
+    );
+
+    vex.tone(note, duration, volume, flags);
+}
+
+/// Issue a tone with an explicit sustain length (used for OFF tails).
+fn playSustain(ch: usize, inst: *const Inst, note: i32, vol: i32, sus: i32) void {
+    const duration = (vex.ToneDuration{
+        .sustain = sus,
+        .release = inst.release,
+        .decay = 0,
+        .attack = 0,
     }).pack();
 
     const volume = (vex.ToneVolume{
@@ -159,27 +183,8 @@ fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32) void {
     vex.tone(note, duration, volume, flags);
 }
 
-/// Issue a tone with an explicit sustain length (used for OFF tails).
-fn playSustain(ch: usize, inst: *const Inst, note: i32, vol: i32, sus: i32) void {
-    const duration = (vex.ToneDuration{
-        .sustain = sus,
-        .release = inst.release,
-        .decay = inst.decay,
-        .attack = inst.attack,
-    }).pack();
-
-    const volume = (vex.ToneVolume{
-        .level = vol,
-        .peak = vol,
-    }).pack();
-
-    const flags = vex.toneFlags(
-        @intCast(ch),
-        inst.duty,
-        inst.wave | inst.pan | vex.TONE_NOTE_MODE,
-    );
-
-    vex.tone(note, duration, volume, flags);
+fn sustainFor(inst: *const Inst, speed: u8) i32 {
+    return if (inst.sustain == 0) @as(i32, speed) * 2 else inst.sustain;
 }
 
 /// Apply the release tail of the channel's current instrument, or hard-cut
@@ -202,7 +207,8 @@ fn releaseVoice(ch: usize) void {
 
     // Re-issue with minimal sustain so the envelope falls through into
     // the release segment rather than restarting the gate.
-    playSustain(ch, inst, v.note, v.vol, 1);
+    const note = if (v.note >= 129) chordNote(v.note, v.arp_step) else @as(i32, v.note);
+    playSustain(ch, inst, note, v.vol, 1);
     v.inst = 0; // voice is finished; a second OFF hard-cuts
 }
 
@@ -271,7 +277,7 @@ pub fn tick() void {
 
             v.arp_step +%= 1;
 
-            playInst(ch, inst, chordNote(v.note, v.arp_step), v.vol);
+            playInst(ch, inst, chordNote(v.note, v.arp_step), v.vol, sustainFor(inst, pat.speed));
         }
     }
 
@@ -309,7 +315,7 @@ pub fn tick() void {
             else
                 @as(i32, ev.note);
 
-            playInst(ch, inst, note, vol);
+            playInst(ch, inst, note, vol, sustainFor(inst, pat.speed));
 
             // remember voice state for OFF tails and arps
             v.inst = ev.inst;
