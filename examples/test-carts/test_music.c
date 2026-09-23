@@ -1,6 +1,5 @@
-// test_music.c - cracktro-style chiptune for mus.h.
-// Inspired by MakTone / class05 cracktros: arpeggiated pulse, fat TRI bass,
-// ticking noise hats + snare. 4 channels, 125 BPM-ish.
+// test_music.c - cracktro chiptune for mus.h.
+// Fast pulse lead, arpeggiated chords, hollow pulse bass, and noise drums. 150 BPM.
 
 #include "mus.h"
 #include "vex.h"
@@ -8,103 +7,187 @@
 // clang-format off
 
 // ---- instruments -------------------------------------------------------------
-// wave            duty             atk dec sus rel vol pan  ADSR — less mud
+// wave            duty             atk dec sus rel vol pan pwm start end
 static const MusInst INSTS[] = {
-    // 0: bass - TRI, now A3 not A2 (less sub mud), shorter tail
-    {VEX_TONE_TRI,   VEX_TONE_MODE0, 0, 2, 0,  8, 72, 0},
-    // 1: lead - pulse 12.5%, thin/cutting, a bit quieter
-    {VEX_TONE_PULSE, VEX_TONE_MODE2, 0, 1, 0,  6, 58, VEX_TONE_PAN_LEFT},
-    // 2: arp  - pulse 25%, very short staccato (sus 3 = 50ms)
-    {VEX_TONE_PULSE, VEX_TONE_MODE1, 0, 0, 3,  3, 48, VEX_TONE_PAN_RIGHT},
-    // 3: drums - noise, short tick, lower vol, centered now
-    {VEX_TONE_NOISE, 0,              0, 0, 2,  3, 20, 0},
+    {VEX_TONE_PULSE, VEX_TONE_MODE3, 0, 1, MUS_SUSTAIN_HOLD, 9, 88, 0, 1, 192, 192},
+    {VEX_TONE_PULSE, VEX_TONE_MODE2, 0, 2, 0, 8, 62, VEX_TONE_PAN_LEFT, 1, 32, 144},
+    {VEX_TONE_PULSE, VEX_TONE_MODE1, 0, 0, 3, 3, 34, VEX_TONE_PAN_RIGHT, 1, 12, 72},
+    {VEX_TONE_NOISE, 0,              0, 0, 1, 4, 18, 0},
 };
 
 #define ROWS 16
-#define SPD  8  // 7.5 rows/sec, sustain = 16 frames (0.27s) for held notes (hat uses sus 2)
 #define _(n, i) {(n), (i), 0}
-#define O       {MUS_OFF, 0, 0}
+#define _v(n, i, v) {(n), (i), (v)}
 #define R       {MUS_REST, 0, 0}
+#define O       {MUS_OFF, 0, 0}
 
-// PAT0: A minor / F / C / G — bass now A3 etc (12 semitones up, less mud)
+// ch0(arp) ch1(lead) ch2(bass) ch3(drums) | row
 static const MusEvent EV0[ROWS * MUS_CHANNELS] = {
-    // ch0(arp) ch1(lead) ch2(bass) ch3(drums) | row
-    _(69,3), R,      _(57,1), _(110,4), // 0 A3 / A4 arps + hat
-    _(72,3), R,      R,       R,        // 1 C
-    _(76,3), R,      R,       _(108,4), // 2 E  hat
-    R,       R,      R,       R,        // 3 rest — lets bass breathe
-    _(72,3), R,      _(60,1), _(110,4), // 4 C4
-    _(76,3), R,      R,       R,
-    _(79,3), R,      R,       _(108,4),
-    R,       R,      R,       R,
-    _(76,3), R,      _(64,1), _(110,4), // 8 E4
-    _(80,3), R,      R,       R,
-    _(83,3), R,      R,       _(108,4),
-    R,       R,      R,       R,
-    _(79,3), R,      _(67,1), _(110,4), //12 G4
-    _(83,3), R,      R,       R,
-    _(86,3), R,      R,       _(112,4), //14 snare
-    R,       R,      R,       R,
+    _v(134,3,40), _v(69,2,68),  _v(45,1,80), _v(45,4,32), // A minor
+    R,        R,        R,           _(110,4),
+    R,        _(72,2),  _v(52,1,62), _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(132,3,40), _v(76,2,68),  _v(48,1,78), _v(112,4,26), // F minor
+    R,        R,        R,           _(110,4),
+    R,        _(79,2),  R,           _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(139,3,40), _v(81,2,68),  _v(52,1,76), _v(45,4,32), // C major
+    R,        R,        R,           _(110,4),
+    R,        _(84,2),  R,           _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(136,3,40), _v(83,2,68),  _v(55,1,78), _v(112,4,26), // G major
+    R,        R,        R,           _(110,4),
+    R,        _v(81,2,68),  R,           _(108,4),
+    _v(134,3,40), O,        O,           _v(45,4,26),
 };
 
-// PAT1: F / G / A / E — lead enters, sparser arp for clarity
 static const MusEvent EV1[ROWS * MUS_CHANNELS] = {
-    _(65,3), _(77,2), _(65,1), _(110,4), // 0 F4 / F5
-    _(69,3), R,       R,       R,
-    _(72,3), R,       R,       _(108,4),
-    R,       R,       R,       R,
-    _(67,3), _(79,2), _(67,1), _(110,4), // 4 G4
-    _(71,3), R,       R,       R,
-    _(74,3), R,       R,       _(108,4),
-    R,       R,       R,       R,
-    _(69,3), _(81,2), _(69,1), _(110,4), // 8 A4
-    _(72,3), R,       R,       R,
-    _(76,3), R,       R,       _(108,4),
-    R,       R,       R,       R,
-    _(64,3), _(76,2), _(64,1), _(112,4), //12 E4
-    _(68,3), R,       R,       R,
-    _(71,3), R,       R,       _(108,4),
-    R,       R,       R,       R,
+    _v(132,3,40), _v(77,2,68),  _v(41,1,80), _v(45,4,32), // F minor
+    R,        R,        R,           _(110,4),
+    R,        _(72,2),  _v(48,1,62), _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(134,3,40), _v(76,2,68),  _v(45,1,78), _v(112,4,26), // A minor
+    R,        R,        R,           _(110,4),
+    R,        _v(74,2,68),  R,           _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(133,3,40), _v(69,2,68),  _v(43,1,76), _v(45,4,32), // G minor
+    R,        R,        R,           _(110,4),
+    R,        _(72,2),  R,           _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(131,3,40), _v(74,2,68),  _v(40,1,78), _v(112,4,26), // E minor
+    R,        R,        R,           _(110,4),
+    R,        _(72,2),  R,           _(108,4),
+    _v(132,3,40), O,        O,           _v(45,4,26),
+};
+
+static const MusEvent EV2[ROWS * MUS_CHANNELS] = {
+    _v(131,3,40), _v(76,2,68),  _v(40,1,80), _v(45,4,32), // E minor
+    R,        R,        R,           _(110,4),
+    R,        _(79,2),  _v(47,1,62), _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(136,3,40), _v(83,2,68),  _v(45,1,78), _v(112,4,26), // G major
+    R,        R,        R,           _(110,4),
+    R,        _v(81,2,68),  R,           _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(133,3,40), _(79,2),  _v(43,1,76), _v(45,4,32), // G minor
+    R,        R,        R,           _(110,4),
+    R,        _v(76,2,68),  R,           _(108,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(131,3,40), _v(74,2,68),  _v(40,1,78), _v(112,4,26), // E minor fill
+    R,        R,        R,           _(110,4),
+    R,        _v(76,2,68),  R,           _(108,4),
+    _v(131,3,40), O,        O,           _v(45,4,32),
+};
+
+static const MusEvent EV3[ROWS * MUS_CHANNELS] = {
+    _v(134,3,40), _v(81,2,68),  _v(45,1,80), R,
+    R,        R,        R,           R,
+    R,        _(84,2),  _v(52,1,62), R,
+    R,        R,        R,           R,
+    _v(132,3,40), _(79,2),  _v(48,1,78), R,
+    R,        R,        R,           R,
+    R,        _v(76,2,68),  R,           R,
+    R,        R,        R,           R,
+    _v(136,3,40), _v(81,2,68),  _v(45,1,80), _v(45,4,32),
+    R,        R,        R,           _(110,4),
+    R,        _(84,2),  R,           _(112,4),
+    R,        R,        R,           _v(45,4,26),
+    _v(131,3,40), _v(83,2,68),  _v(43,1,78), _v(112,4,34),
+    R,        R,        R,           _v(110,4,20),
+    R,        _v(81,2,68),  R,           _v(112,4,38),
+    _v(136,3,40), O,        O,           _v(45,4,44),
 };
 
 #undef _
-#undef O
+#undef _v
 #undef R
+#undef O
 
-static const MusPat PAT0 = {ROWS, SPD, EV0};
-static const MusPat PAT1 = {ROWS, SPD, EV1};
-static const MusPat *const PATS[] = {&PAT0, &PAT1};
-static const unsigned char ORDERS[] = {0, 0, 1, 1}; // A A B B loop
-static const MusSong SONG = {4, 2, 4, 0, INSTS, PATS, ORDERS};
+static const MusPat PAT0 = {ROWS, 6, EV0};
+static const MusPat PAT1 = {ROWS, 6, EV1};
+static const MusPat PAT2 = {ROWS, 6, EV2};
+static const MusPat PAT3 = {ROWS, 6, EV3};
+static const MusPat *const PATS[] = {&PAT0, &PAT1, &PAT2, &PAT3};
+static const unsigned char ORDERS[] = {0, 1, 2, 1, 3, 0};
+static const MusSong SONG = {4, 4, 6, 0, INSTS, PATS, ORDERS};
+static unsigned char CHANNEL_MUTED[MUS_CHANNELS];
+static int MOUSE_DOWN;
 
 // clang-format on
 
 VEX_EXPORT("boot") void boot(void) {
+  pal(0, 0x140C00);
+  pal(1, 0x690804);
+  pal(2, 0xDE2C2C);
+  pal(3, 0xFA5555);
+  pal(4, 0x382400);
+  pal(5, 0xA1858D);
+  pal(6, 0xD0B2BA);
+  pal(7, 0xFACACA);
+  pal(8, 0x002000);
+  pal(9, 0x405544);
+  pal(10, 0x617561);
+  pal(11, 0x99B295);
+  pal(12, 0x0C3044);
+  pal(13, 0x556D89);
+  pal(14, 0x7595B6);
+  pal(15, 0xDEEEFF);
   mus_load(&SONG);
   mus_play();
   title("vex - test_music (cracktro)");
 }
 
 VEX_EXPORT("update") void update(void) {
+  int mouse_down_now = mbtn(0);
+  if (mouse_down_now && !MOUSE_DOWN) {
+    int mouse_x = mx();
+    int mouse_y = my();
+    for (int ch = 0; ch < MUS_CHANNELS; ch++) {
+      int x = 4 + ch * 38;
+      if (mouse_x >= x && mouse_x < x + 34 && mouse_y >= 60 && mouse_y < 86) {
+        CHANNEL_MUTED[ch] = !CHANNEL_MUTED[ch];
+        mus_mute(ch, CHANNEL_MUTED[ch]);
+      }
+    }
+  }
+  MOUSE_DOWN = mouse_down_now;
+
   mus_tick();
   int pos = mus_pos();
   int order = pos & 0xFF;
+  int pattern = ORDERS[order];
   int row = (pos >> 8) & 0xFF;
 
-  cls(0);
-  rectb(2, 2, VEX_WIDTH - 4, VEX_HEIGHT - 4, 2);
-  text("vex - test_music", 4, 4, 12);
-  text(order < 2 ? "A" : "B", VEX_WIDTH - 14, 4, 11);
+  cls(8);
+  rectb(2, 2, VEX_WIDTH - 4, VEX_HEIGHT - 4, 10);
+  text("VEX // CRACKTRO", 6, 6, 15);
+  rect(VEX_WIDTH - 26, 4, 22, 11, 9);
+  rectb(VEX_WIDTH - 26, 4, 22, 11, 11);
+  text(pattern == 0 ? "A" : pattern == 1 ? "B" : pattern == 2 ? "C" : "D", VEX_WIDTH - 17, 6, 15);
 
-  rect(4, 30, (VEX_WIDTH - 24) * (row % ROWS) / ROWS, 4, 6);
+  rect(4, 22, VEX_WIDTH - 8, 1, 10);
+  text("SEQUENCE", 4, 27, 10);
+  rect(4, 36, VEX_WIDTH - 8, 6, 9);
+  rect(4, 36, (VEX_WIDTH - 8) * (row % ROWS) / ROWS, 6, 11);
 
-  const MusEvent *base = (order < 2 ? EV0 : EV1) + (row % ROWS) * MUS_CHANNELS;
+  text("CHANNELS", 4, 50, 10);
+  const char *labels[] = {"ARP", "LEAD", "BASS", "DRUM"};
+  const MusEvent *base = PATS[pattern]->events + (row % ROWS) * MUS_CHANNELS;
   for (int ch = 0; ch < MUS_CHANNELS; ch++) {
-    int c = base[ch].note != MUS_REST ? 11 : 5;
-    if (base[ch].note == MUS_OFF)
-      c = 8;
-    rect(4 + ch * 12, 44, 8, 8, c);
+    int x = 4 + ch * 38;
+    int c = CHANNEL_MUTED[ch] ? 9 : base[ch].note != MUS_REST ? 11 : 9;
+    if (!CHANNEL_MUTED[ch] && base[ch].note == MUS_OFF)
+      c = 13;
+    rect(x, 60, 34, 26, 9);
+    rectb(x, 60, 34, 26, CHANNEL_MUTED[ch] ? 9 : 10);
+    int label_x = x + (ch == 0 ? 5 : 1);
+    text(labels[ch], label_x, 64, c);
+    rect(x + 4, 78, 26, 4, c);
   }
 
-  text("mus ADSR cracktro", 4, VEX_HEIGHT - 10, 10);
+  rect(4, 96, VEX_WIDTH - 8, 24, 9);
+  rectb(4, 96, VEX_WIDTH - 8, 24, 10);
+  text("SYNC LOCK", 8, 101, 11);
+  text(pattern == 0 ? "A / MAIN" : pattern == 1 ? "B / LEAD" : pattern == 2 ? "C / BRIDGE" : "D / OUTRO", 8, 110, 15);
+  text("150 BPM / 4CH / PWM", 4, 126, 10);
 }
