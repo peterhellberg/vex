@@ -240,6 +240,19 @@ func TestToneEngineClearSilencesOnRead(t *testing.T) {
 	}
 }
 
+func TestToneEngineHoldContinuesPastSustain(t *testing.T) {
+	e := &toneEngine{}
+	e.tone(440, 1, 100, 1<<9)
+
+	buf := make([]byte, 4*(toneRate/60*3))
+	if _, err := e.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if binary.LittleEndian.Uint16(buf[len(buf)-4:]) == 0 {
+		t.Fatal("held voice stopped after its one-frame sustain")
+	}
+}
+
 func TestToneEngineKillAndClamps(t *testing.T) {
 	e := &toneEngine{}
 

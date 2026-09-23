@@ -663,6 +663,7 @@ typedef struct {
   double dc_prev;   // previous input for DC blocker
 
   int seg;           // 0 attack, 1 decay, 2 sustain, 3 release, 4 idle
+  int hold;
   long seg_left;     // samples remaining in the current segment
   double level;      // envelope level 0..1
   double slope;      // level change per sample in this segment
@@ -683,6 +684,7 @@ typedef struct {
   double duty;
   double f0, f1;
   int frames[4]; // attack, decay, sustain, release
+  int hold;
   double peak, sus;
   double gl, gr;
 } ToneTrigger;
@@ -728,6 +730,7 @@ static void clear_audio(void) {
   for (int i = 0; i < VEX_TONE_CHANNELS; i++) {
     g_pending_set[i] = false;
     g_voice[i].seg = 4;
+    g_voice[i].hold = 0;
     g_voice[i].level = 0.0;
     g_voice[i].seg_left = 0;
     g_voice[i].slope = 0.0;
@@ -748,6 +751,11 @@ static void clear_audio(void) {
 // Advance into the next non-empty envelope segment, skipping zero-length
 // ones by snapping to their end level. Enters idle when release finishes.
 static void voice_next_segment(ToneVoice *v) {
+  if (v->seg == 2 && v->hold) {
+    v->seg_left = 1;
+    v->slope = 0.0;
+    return;
+  }
   for (;;) {
     v->seg++;
     if (v->seg > 3) {
@@ -782,6 +790,7 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
   v->freq_start = t->f0;
   v->freq_to = t->f1;
   v->freq = t->f0;
+  v->hold = t->hold;
   v->freq_step = 0.0;
   v->ph = 0.0;
   v->nph = 0.0;
@@ -848,7 +857,6 @@ static void mix_callback(void *buffer, unsigned int frames) {
       g_pending_set[ch] = false;
       voice_apply(&g_voice[ch], &g_pending[ch]);
     }
-  pthread_mutex_unlock(&g_tone_lock);
   const double rate = (double)g_stream.sampleRate;
   for (unsigned int pos = 0; pos < frames; pos++) {
     double l = 0.0, r = 0.0;
@@ -953,6 +961,7 @@ static void mix_callback(void *buffer, unsigned int frames) {
     out[pos * 2] = (float)(l / 32768.0);
     out[pos * 2 + 1] = (float)(r / 32768.0);
   }
+  pthread_mutex_unlock(&g_tone_lock);
 }
 
 // The stream is created lazily on the first tone() so silent carts never
@@ -1005,6 +1014,7 @@ m3ApiRawFunction(host_tone) {
 
   const int sus = duration & 0xFF;
   const int rel = (duration >> 8) & 0xFF;
+  const int hold = (flags >> 9) & 1;
   const int dec = (duration >> 16) & 0xFF;
   const int att = (duration >> 24) & 0xFF;
 
@@ -1021,6 +1031,7 @@ m3ApiRawFunction(host_tone) {
       .f0 = f0,
       .f1 = f1,
       .frames = {att, dec, sus, rel},
+      .hold = hold,
       .peak = vp / 100.0,
       .sus = vs / 100.0,
       .gl = pan_l[pan],

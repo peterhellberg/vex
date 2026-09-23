@@ -441,7 +441,7 @@ class ToneMixer extends AudioWorkletProcessor {
                         noiseRaw: 0, noiseLp: 0, lp: 0, dc: 0, dcPrev: 0,
                         seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
                         segLen: [0, 0, 0, 0], segEnd: [0, 0, 0, 0],
-                        gl: 0.70710678, gr: 0.70710678 });
+                        gl: 0.70710678, gr: 0.70710678, hold: false });
     this.voices = [mk(), mk(), mk(), mk()];
     this.pending = [null, null, null, null];
     this.dutyTable = [0.5, 0.25, 0.125, 0.75];
@@ -450,15 +450,15 @@ class ToneMixer extends AudioWorkletProcessor {
     // Full-scale single-voice amplitude in s16 units, matching the C/Go
     // hosts; the final write divides by 32768 like the C mixer.
     this.fullAmp = 8000;
-    // Short slap delay — 125ms at 48k, 25% feedback.
-    this.delayBuf = new Float32Array(6000 * 2);
+    // Short slap delay — 125ms at the worklet's actual sample rate, 25% feedback.
+    this.delayBuf = new Float32Array(Math.round(sampleRate * 0.125) * 2);
     this.delayPos = 0;
     this.port.onmessage = e => {
       const t = e.data;
       if (t.clear) {
         for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
         for (const v of this.voices) {
-          v.seg = SEG_IDLE; v.level = 0; v.segLeft = 0; v.slope = 0;
+          v.seg = SEG_IDLE; v.level = 0; v.hold = false; v.segLeft = 0; v.slope = 0;
           v.ph = 0; v.nph = 0; v.lfsr = 0xACE1; v.noiseRaw = 0; v.noiseLp = 0; v.lp = 0; v.dc = 0; v.dcPrev = 0;
         }
         this.delayBuf.fill(0);
@@ -470,6 +470,11 @@ class ToneMixer extends AudioWorkletProcessor {
   }
 
   nextSegment(v) {
+    if (v.seg === SEG_SUSTAIN && v.hold) {
+      v.segLeft = 1;
+      v.slope = 0;
+      return;
+    }
     // Advance into the next non-empty envelope segment, skipping zero-length
     // ones by snapping to their end level. Enters idle when release ends.
     for (;;) {
@@ -492,6 +497,7 @@ class ToneMixer extends AudioWorkletProcessor {
     const spf = sampleRate / 60; // samples per frame at the context rate
     v.kind = t.kind; v.duty = t.duty;
     v.freqStart = t.f0; v.freqTo = t.f1; v.freq = t.f0; v.freqStep = 0;
+    v.hold = !!t.hold;
     v.ph = 0; v.nph = 0; v.lfsr = 0xACE1;
     v.noiseRaw = 0;
     // Starting the noise filter from silence also gives noise hits a free
@@ -752,6 +758,7 @@ function tone(freq, duration, volume, flags)
 
     const ch = flags & 3;
     const mode = (flags >>> 2) & 3;
+    const hold = (flags & 0x200) !== 0;
     let pan = (flags >>> 4) & 3;
     if (pan > 2) pan = 0;
     let wave = (flags >>> 6) & 3;
@@ -783,6 +790,7 @@ function tone(freq, duration, volume, flags)
         ch,
         kind: wave,
         duty: [0.5, 0.25, 0.125, 0.75][mode],
+        hold,
         f0, f1,
         frames: [att, dec, sus, rel],
         peak: vp / 100,

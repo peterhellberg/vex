@@ -73,6 +73,8 @@ pub const TONE_PAN_RIGHT: i32 = 2 << 4;
 
 /// Interpret the frequency parameter as a MIDI note number.
 pub const TONE_NOTE_MODE: i32 = 1 << 8;
+/// Hold the sustain level until the next trigger or explicit silence.
+pub const TONE_HOLD: i32 = 1 << 9;
 
 /// Clear the whole screen to `color`.
 pub extern "env" fn cls(color: i32) void;
@@ -125,7 +127,7 @@ pub extern "env" fn palreset() void;
 ///   duration sustain | release << 8 | decay << 16 | attack << 24 (frames)
 ///   volume   sustain level 0..100 | peak << 8 (peak 0 = 100 during attack)
 ///   flags    bits 0..1 channel | 2..3 duty | 4..5 pan | 6..7 waveform |
-///            bit 8 note mode
+///            bit 8 note mode | bit 9 hold sustain
 pub extern "env" fn tone(freq: i32, duration: i32, volume: i32, flags: i32) void;
 
 // ---- input -----------------------------------------------------------------

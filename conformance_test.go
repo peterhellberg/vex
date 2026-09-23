@@ -216,8 +216,10 @@ func TestToneTablesMatchAcrossHosts(t *testing.T) {
 func TestToneMixerMatchAcrossHosts(t *testing.T) {
 	cSrc := section(mustRead(t, "cmd/vex/main.c"),
 		"// ---- audio (tone)", "static M3Result link_host")
-	goSrc := mustRead(t, "cmd/vex-run/main.go")
-	jsSrc := mustRead(t, "cmd/vex-web/assets/vex.js")
+	goSrc := section(mustRead(t, "cmd/vex-run/main.go"),
+		"const toneRate = 48000", "func suppressAudioHookError")
+	jsSrc := section(mustRead(t, "cmd/vex-web/assets/vex.js"),
+		"function toneWorkletMain", "registerProcessor")
 
 	// Literals shared verbatim by all three mixer loops.
 	shared := []string{
@@ -246,7 +248,7 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		{"full-scale amplitude", "TONE_FULL_AMP 8000.0", "toneFullAmp = 8000.0", "this.fullAmp = 8000"},
 		{"noise clock min", "TONE_NOISE_CLK_MIN 8000.0", "toneNoiseClkMin = 8000.0", "TONE_NOISE_CLK_MIN = 8000"},
 		{"noise clock max", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "TONE_NOISE_CLK_MAX = 48000"},
-		{"delay length", "DELAY_SAMPLES 6000", "toneDelaySamples = 6000", "Float32Array(6000 * 2)"},
+		{"delay length", "DELAY_SAMPLES 6000", "toneDelaySamples = 6000", "Math.round(sampleRate * 0.125)"},
 		{"delay feedback", "dl * 0.25", "toneDelayFeedback = 0.25", "dl * 0.25"},
 	}
 	for _, p := range pinned {
