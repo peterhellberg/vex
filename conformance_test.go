@@ -249,7 +249,7 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		{"noise feedback", "(v->lfsr ^ (v->lfsr >> 1)) & 1", "(v.lfsr ^ (v.lfsr >> 1)) & 1", "(v.lfsr ^ (v.lfsr >> 1)) & 1"},
 		{"noise right shift", "v->lfsr >> 1", "v.lfsr >> 1", "v.lfsr >> 1"},
 		{"noise output", "s = (v->lfsr & 1) ? 1.0 : -1.0", "if v.lfsr&1 == 1", "s = (v.lfsr & 1) ? 1 : -1"},
-		{"web noise Nyquist clamp", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "Math.min(Math.max(nclk, TONE_NOISE_CLK_MIN), Math.min(TONE_NOISE_CLK_MAX, sr / 2))"},
+		{"noise clock cap", "TONE_NOISE_CLK_MAX 48000.0", "toneNoiseClkMax = 48000.0", "Math.min(Math.max(nclk, TONE_NOISE_CLK_MIN), TONE_NOISE_CLK_MAX)"},
 		{"PWM motion", "v->duty_left", "v.dutyLeft", "v.dutyLeft"},
 		{"pulse warmth", "v->lp += 0.5 *", "v.lp += 0.5 * (raw - v.lp)", "v.lp += 0.5 * (raw - v.lp)"},
 		{"release trigger field", "release_only", "releaseOnly", "releaseOnly"},

@@ -274,10 +274,11 @@ type Game struct {
 
 	// Audio for tone(): one shared context and a single persistent mixer
 	// player that renders the four-voice software mixer (see toneEngine).
-	audioCtx *audio.Context
-	audio    *toneEngine
-	audioPl  *audio.Player
-	audioOn  bool // the persistent player has been created
+	audioCtx   *audio.Context
+	audio      *toneEngine
+	audioPl    *audio.Player
+	audioOn    bool // the persistent player has been created
+	audioReady bool // cart boot has completed; matches C/JS audio gating
 }
 
 func NewGame() *Game {
@@ -1235,6 +1236,9 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			v.hold = false
 			v.segLeft = 0
 			v.slope = 0
+			v.dutyTo = v.duty
+			v.dutyStep = 0
+			v.dutyLeft = 0
 			v.ph = 0
 			v.modPh = 0
 			v.nph = 0
@@ -1460,7 +1464,7 @@ func (g *Game) ensureAudio() {
 
 // tone(freq, duration, volume, flags): trigger a voice on the mixer.
 func (g *Game) tone(freq, duration, volume, flags uint32) {
-	if g.audioCtx == nil {
+	if !g.audioReady || g.audioCtx == nil {
 		return
 	}
 	g.ensureAudio()
@@ -1471,14 +1475,17 @@ func (g *Game) tone(freq, duration, volume, flags uint32) {
 // boot() if it exports one. It does not touch g's module/function fields or
 // the bootCalled flag; the caller owns those and any rollback on error.
 func (g *Game) initCart(ctx context.Context, bootFn api.Function) error {
+	wasAudioReady := g.audioReady
 	g.palreset()
 	g.cls(0)
 
 	if bootFn != nil {
 		if _, err := bootFn.Call(ctx); err != nil {
+			g.audioReady = wasAudioReady
 			return fmt.Errorf("boot: %w", err)
 		}
 	}
+	g.audioReady = true
 
 	return nil
 }
@@ -1497,10 +1504,6 @@ func (g *Game) Update() error {
 	if g.updateFn == nil {
 		return nil
 	}
-
-	// Start the audio player immediately (not on the first tone) so the
-	// device warms up while the cart is loading.
-	g.ensureAudio()
 
 	reload := super && inpututil.IsKeyJustPressed(ebiten.KeyR)
 
@@ -1532,6 +1535,7 @@ func (g *Game) Update() error {
 			return err
 		}
 	}
+	g.ensureAudio()
 
 	_, err := g.updateFn.Call(context.Background())
 	if err != nil {

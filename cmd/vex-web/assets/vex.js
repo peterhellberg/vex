@@ -458,7 +458,8 @@ class ToneMixer extends AudioWorkletProcessor {
         for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
         for (const v of this.voices) {
           v.seg = SEG_IDLE; v.level = 0; v.hold = false; v.segLeft = 0; v.slope = 0;
-          v.ph = 0; v.modPh = 0; v.nph = 0; v.lfsr = 0x2CE1; v.dutyStep = 0; v.dutyLeft = 0;
+          v.ph = 0; v.modPh = 0; v.nph = 0; v.lfsr = 0x2CE1;
+          v.dutyTo = v.duty; v.dutyStep = 0; v.dutyLeft = 0;
           v.fm = false; v.fmRatio = 1; v.fmIndex = 0;
           v.lp = 0; v.dc = 0; v.dcPrev = 0;
         }
@@ -572,7 +573,7 @@ class ToneMixer extends AudioWorkletProcessor {
         let s;
         if (v.kind === 1) {
           let nclk = 2 * v.freq;
-          nclk = Math.min(Math.max(nclk, TONE_NOISE_CLK_MIN), Math.min(TONE_NOISE_CLK_MAX, sr / 2));
+          nclk = Math.min(Math.max(nclk, TONE_NOISE_CLK_MIN), TONE_NOISE_CLK_MAX);
           v.nph += nclk / sr;
           if (v.nph >= 1) {
             do {
