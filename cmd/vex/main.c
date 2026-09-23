@@ -657,7 +657,11 @@ typedef struct {
   double freq_start; // frequency at slide start
   double freq_step;  // per-sample slide delta (0 = no slide)
   double ph;         // phase accumulator, 0..1
+  double mod_ph;     // FM modulator phase accumulator
   double nph;        // noise step accumulator
+  int fm;            // optional two-operator FM
+  int fm_ratio;
+  double fm_index;
   uint16_t lfsr;
   double lp;        // one-pole lowpass for pulse/triangle — tames aliasing
   double dc;        // DC blocker state for pulse
@@ -682,6 +686,9 @@ static bool g_stream_ready = false;
 // Trigger parsed by tone() on the wasm thread, applied by the mixer.
 typedef struct {
   int kind;
+  int fm;
+  int fm_ratio;
+  double fm_index;
   double duty;
   double duty_to;
   double f0, f1;
@@ -732,7 +739,11 @@ static void clear_audio(void) {
     g_voice[i].seg_left = 0;
     g_voice[i].slope = 0.0;
     g_voice[i].ph = 0.0;
+    g_voice[i].mod_ph = 0.0;
     g_voice[i].nph = 0.0;
+    g_voice[i].fm = 0;
+    g_voice[i].fm_ratio = 1;
+    g_voice[i].fm_index = 0.0;
     g_voice[i].lfsr = 0x2CE1;
     g_voice[i].duty_to = g_voice[i].duty;
     g_voice[i].duty_step = 0.0;
@@ -825,6 +836,10 @@ static void voice_apply(ToneVoice *v, const ToneTrigger *t) {
   v->hold = t->hold;
   v->freq_step = 0.0;
   v->ph = 0.0;
+  v->mod_ph = 0.0;
+  v->fm = t->fm;
+  v->fm_ratio = t->fm_ratio;
+  v->fm_index = t->fm_index;
   v->nph = 0.0;
   v->lfsr = 0x2CE1;
   v->lp = 0.0;
@@ -938,6 +953,9 @@ static void mix_callback(void *buffer, unsigned int frames) {
         break;
       }
       }
+      if (v->fm) {
+        s += sin(6.28318530717958647692 * v->mod_ph) * (v->fm_index * 0.75);
+      }
 
       l += s * TONE_FULL_AMP * v->level * v->gl;
       r += s * TONE_FULL_AMP * v->level * v->gr;
@@ -964,6 +982,11 @@ static void mix_callback(void *buffer, unsigned int frames) {
         }
       }
 
+      if (v->fm) {
+        v->mod_ph += v->freq * v->fm_ratio / rate;
+        if (v->mod_ph >= 1.0)
+          v->mod_ph -= floor(v->mod_ph);
+      }
       v->ph += v->freq / rate;
       if (v->ph >= 1.0)
         v->ph -= floor(v->ph);
@@ -1019,6 +1042,10 @@ m3ApiRawFunction(host_tone) {
   int wave = (flags >> 6) & 3;
   if (wave == 3)
     wave = 0;
+  int fm = (flags >> 30) & 1;
+  uint32_t volume_bits = (uint32_t)volume;
+  int fm_ratio = (volume_bits >> 16) & 255;
+  double fm_index = fm ? (double)((volume_bits >> 24) & 255) / 255.0 : 0.0;
 
   double f0, f1 = 0.0;
   if ((flags >> 8) & 1) { // note mode: MIDI note number
@@ -1056,6 +1083,9 @@ m3ApiRawFunction(host_tone) {
 
   const ToneTrigger t = {
       .kind = wave,
+      .fm = fm,
+      .fm_ratio = fm_ratio,
+      .fm_index = fm_index,
       .duty = duty,
       .duty_to = duty_to,
       .f0 = f0,

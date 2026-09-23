@@ -59,6 +59,9 @@ pub const Inst = extern struct {
     pwm: u8 = 0, // 0 disables PWM; otherwise start/end are widths
     pwm_start: u8 = 0, // 0..255 start width
     pwm_end: u8 = 0, // 0..255 sweep target width
+    fm: u8 = 0, // 0 disables two-operator FM
+    fm_ratio: u8 = 0, // modulator/carrier frequency ratio
+    fm_index: u8 = 0, // modulation index 0..255
 };
 
 /// A note event (3 bytes, one per channel per row).
@@ -147,10 +150,15 @@ fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32, sustain: i32) voi
         .attack = inst.attack,
     }).pack();
 
+    const fm = if (inst.fm != 0) vex.TONE_FM else 0;
+    const fm_payload = if (inst.fm != 0)
+        vex.toneFmParams(inst.fm_ratio, inst.fm_index)
+    else
+        0;
     const volume = (vex.ToneVolume{
         .level = vol,
         .peak = vol,
-    }).pack();
+    }).pack() | fm_payload;
 
     const pwm = if (inst.pwm != 0)
         vex.tonePulseWidth(inst.pwm_start, inst.pwm_end)
@@ -160,7 +168,7 @@ fn playInst(ch: usize, inst: *const Inst, note: i32, vol: i32, sustain: i32) voi
     const flags = vex.toneFlags(
         @intCast(ch),
         mode,
-        inst.wave | inst.pan | vex.TONE_NOTE_MODE | pwm |
+        inst.wave | inst.pan | vex.TONE_NOTE_MODE | pwm | fm |
             (if (inst.sustain == SUSTAIN_HOLD) vex.TONE_HOLD else 0),
     );
 

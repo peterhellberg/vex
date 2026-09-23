@@ -240,6 +240,15 @@ int main(void) {
               fabs(g_voice[0].freq - 880.0) < 1e-12);
     }
 
+    {
+        ToneTrigger fm = mk_pulse(440, 0, 0, 0, 2, 0);
+        fm.fm = 1;
+        fm.fm_ratio = 2;
+        fm.fm_index = 0.5;
+        fire_and_run(0, fm, 64);
+        CHECK("FM modulator advances", g_voice[0].mod_ph > 0.0);
+    }
+
     // ---- noise: full-period LFSR, clock clamping and attack -------------------
     {
         ToneTrigger t = {0};

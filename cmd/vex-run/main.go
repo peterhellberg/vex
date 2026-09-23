@@ -909,7 +909,11 @@ type toneVoice struct {
 	freqStart float64
 	freqStep  float64 // per-sample slide delta while in sustain
 	ph        float64 // phase accumulator, 0..1
+	modPh     float64 // FM modulator phase accumulator
 	nph       float64 // noise step accumulator
+	fm        bool
+	fmRatio   int
+	fmIndex   float64
 	lfsr      uint16
 	lp        float64 // one-pole lowpass for pulse/triangle — tames aliasing
 	dc        float64 // DC blocker state for pulse
@@ -1018,6 +1022,10 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 	v.hold = t.hold
 	v.freqStep = 0
 	v.ph = 0
+	v.modPh = 0
+	v.fm = t.fm
+	v.fmRatio = t.fmRatio
+	v.fmIndex = t.fmIndex
 	v.nph = 0
 	v.lfsr = 0x2CE1
 	v.lp = 0
@@ -1061,6 +1069,9 @@ func (v *toneVoice) apply(t *toneTrigger, samplesPerFrame float64) {
 // toneTrigger is the parsed form of one cart-side tone() call.
 type toneTrigger struct {
 	kind        int
+	fm          bool
+	fmRatio     int
+	fmIndex     float64
 	duty        float64
 	dutyTo      float64
 	hold        bool
@@ -1133,6 +1144,12 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 	if wave == 3 {
 		wave = 0
 	}
+	fm := flags&(1<<30) != 0
+	fmRatio := int((volume >> 16) & 255)
+	fmIndex := float64((volume>>24)&255) / 255
+	if !fm {
+		fmIndex = 0
+	}
 
 	var f0, f1 float64
 	if flags&(1<<8) != 0 { // note mode: MIDI note number
@@ -1178,6 +1195,9 @@ func (e *toneEngine) tone(freq, duration, volume, flags uint32) {
 
 	e.pending[ch] = &toneTrigger{
 		kind:        int(wave),
+		fm:          fm,
+		fmRatio:     fmRatio,
+		fmIndex:     fmIndex,
 		duty:        duty,
 		dutyTo:      dutyTo,
 		hold:        hold,
@@ -1216,7 +1236,11 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 			v.segLeft = 0
 			v.slope = 0
 			v.ph = 0
+			v.modPh = 0
 			v.nph = 0
+			v.fm = false
+			v.fmRatio = 1
+			v.fmIndex = 0
 			v.lfsr = 0x2CE1
 			v.lp = 0
 			v.dc = 0
@@ -1291,6 +1315,9 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				v.dcPrev = y
 				s = dc
 			}
+			if v.fm {
+				s += math.Sin(2*math.Pi*v.modPh) * v.fmIndex * 0.75
+			}
 
 			l += s * toneFullAmp * v.level * v.gl
 			r += s * toneFullAmp * v.level * v.gr
@@ -1318,6 +1345,12 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 				}
 			}
 
+			if v.fm {
+				v.modPh += v.freq * float64(v.fmRatio) / toneRate
+				if v.modPh >= 1 {
+					v.modPh -= math.Floor(v.modPh)
+				}
+			}
 			v.ph += v.freq / toneRate
 			if v.ph >= 1 {
 				v.ph -= 1

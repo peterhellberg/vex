@@ -438,7 +438,8 @@ class ToneMixer extends AudioWorkletProcessor {
     super();
     const mk = () => ({ kind: 0, duty: 0.5, dutyTo: 0.5, dutyStep: 0, dutyLeft: 0,
                         freq: 0, freqTo: 0,
-                        freqStart: 0, freqStep: 0, ph: 0, nph: 0, lfsr: 0x2CE1,
+                        freqStart: 0, freqStep: 0, ph: 0, modPh: 0, nph: 0, lfsr: 0x2CE1,
+                        fm: false, fmRatio: 1, fmIndex: 0,
                         lp: 0, dc: 0, dcPrev: 0,
                         seg: SEG_IDLE, segLeft: 0, level: 0, slope: 0,
                         segLen: [0, 0, 0, 0], segEnd: [0, 0, 0, 0],
@@ -457,7 +458,8 @@ class ToneMixer extends AudioWorkletProcessor {
         for (let ch = 0; ch < 4; ch++) this.pending[ch] = null;
         for (const v of this.voices) {
           v.seg = SEG_IDLE; v.level = 0; v.hold = false; v.segLeft = 0; v.slope = 0;
-          v.ph = 0; v.nph = 0; v.lfsr = 0x2CE1; v.dutyStep = 0; v.dutyLeft = 0;
+          v.ph = 0; v.modPh = 0; v.nph = 0; v.lfsr = 0x2CE1; v.dutyStep = 0; v.dutyLeft = 0;
+          v.fm = false; v.fmRatio = 1; v.fmIndex = 0;
           v.lp = 0; v.dc = 0; v.dcPrev = 0;
         }
         return;
@@ -521,10 +523,11 @@ class ToneMixer extends AudioWorkletProcessor {
       return;
     }
     v.kind = t.kind; v.duty = t.duty; v.dutyTo = t.dutyTo;
+    v.fm = !!t.fm; v.fmRatio = t.fmRatio; v.fmIndex = t.fmIndex;
     v.dutyStep = 0; v.dutyLeft = 0;
     v.freqStart = t.f0; v.freqTo = t.f1; v.freq = t.f0; v.freqStep = 0;
     v.hold = !!t.hold;
-    v.ph = 0; v.nph = 0; v.lfsr = 0x2CE1;
+    v.ph = 0; v.modPh = 0; v.nph = 0; v.lfsr = 0x2CE1;
     v.lp = 0; v.dc = 0; v.dcPrev = 0;
     v.gl = t.gl; v.gr = t.gr;
     const frames = t.frames;
@@ -598,6 +601,7 @@ class ToneMixer extends AudioWorkletProcessor {
           v.dcPrev = y;
           s = dc;
         }
+        if (v.fm) s += Math.sin(2 * Math.PI * v.modPh) * v.fmIndex * 0.75;
         const amp = fullAmp * v.level;
         l += s * amp * v.gl;
         r += s * amp * v.gr;
@@ -605,20 +609,24 @@ class ToneMixer extends AudioWorkletProcessor {
         if (v.segLeft <= 0) {
           v.level = v.segEnd[v.seg];
           this.nextSegment(v);
-         } else {
-           v.level += v.slope;
-           if (v.seg === SEG_SUSTAIN && v.freqStep !== 0) v.freq += v.freqStep;
-         }
-         if (v.dutyLeft > 0) {
-           v.dutyLeft--;
-           if (v.dutyLeft <= 0) {
-             v.duty = v.dutyTo;
-             v.dutyStep = 0;
-           } else {
-             v.duty += v.dutyStep;
-           }
-         }
-         v.ph += v.freq / sr;
+        } else {
+          v.level += v.slope;
+          if (v.seg === SEG_SUSTAIN && v.freqStep !== 0) v.freq += v.freqStep;
+        }
+        if (v.dutyLeft > 0) {
+          v.dutyLeft--;
+          if (v.dutyLeft <= 0) {
+            v.duty = v.dutyTo;
+            v.dutyStep = 0;
+          } else {
+            v.duty += v.dutyStep;
+          }
+        }
+        if (v.fm) {
+          v.modPh += v.freq * v.fmRatio / sr;
+          if (v.modPh >= 1) v.modPh -= Math.floor(v.modPh);
+        }
+        v.ph += v.freq / sr;
         if (v.ph >= 1) v.ph -= Math.floor(v.ph);
       }
       let sl = l, sR = r;
@@ -784,6 +792,7 @@ function tone(freq, duration, volume, flags)
     const hold = (flags & 0x200) !== 0;
     const releaseOnly = (flags & 0x400) !== 0;
     const pwm = (flags & 0x800) !== 0;
+    const fm = (flags & 0x40000000) !== 0;
     let pan = (flags >>> 4) & 3;
     if (pan > 2) pan = 0;
     let wave = (flags >>> 6) & 3;
@@ -821,6 +830,9 @@ function tone(freq, duration, volume, flags)
         hold,
         releaseOnly,
         f0, f1,
+        fm,
+        fmRatio: (volume >>> 16) & 255,
+        fmIndex: fm ? ((volume >>> 24) & 255) / 255 : 0,
         frames: [att, dec, sus, rel],
         peak: vp / 100,
         sus: vs / 100,

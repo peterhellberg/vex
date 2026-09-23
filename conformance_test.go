@@ -254,6 +254,8 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		{"pulse warmth", "v->lp += 0.5 *", "v.lp += 0.5 * (raw - v.lp)", "v.lp += 0.5 * (raw - v.lp)"},
 		{"release trigger field", "release_only", "releaseOnly", "releaseOnly"},
 		{"release branch", "t->release_only", "t.releaseOnly", "t.releaseOnly"},
+		{"FM trigger field", "int fm = (flags >> 30) & 1", "fm := flags&(1<<30) != 0", "fm: false"},
+		{"FM state", "mod_ph", "modPh", "modPh"},
 	}
 	for _, p := range pinned {
 		if !strings.Contains(cSrc, p.c) {
@@ -269,6 +271,7 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 	for _, lit := range []string{
 		"const pwm = (flags & 0x800) !== 0",
 		"const duty = pwm ?",
+		"const fm = (flags & 0x40000000) !== 0",
 	} {
 		if !strings.Contains(jsAll, lit) {
 			t.Errorf("JS PWM parser moved: %q missing", lit)
