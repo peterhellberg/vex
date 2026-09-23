@@ -942,6 +942,9 @@ func polyBlep(t, dt float64) float64 {
 // zero-length ones by snapping to their end level. Enters segIdle when the
 // release finishes.
 func (v *toneVoice) nextSegment() {
+	if v.seg == segSustain && v.freqTo > 0 {
+		v.freq = v.freqTo
+	}
 	if v.seg == segSustain && v.hold {
 		v.segLeft = 1
 		v.slope = 0

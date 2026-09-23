@@ -207,6 +207,19 @@ func TestToneEngineZeroSustainHold(t *testing.T) {
 	}
 }
 
+func TestToneEngineSlideReachesTarget(t *testing.T) {
+	e := &toneEngine{}
+	freq := uint32(220) | uint32(880)<<16
+	e.tone(freq, 1, 100, 0)
+	buf := make([]byte, 4*(32+800+2))
+	if n, err := e.Read(buf); err != nil || n != len(buf) {
+		t.Fatalf("slide Read = (%d, %v)", n, err)
+	}
+	if e.voices[0].freq != 880 {
+		t.Fatalf("slide ended at %v Hz, want 880", e.voices[0].freq)
+	}
+}
+
 func TestToneEngineClearSilencesOnRead(t *testing.T) {
 	e := &toneEngine{}
 
