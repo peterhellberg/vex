@@ -8,8 +8,8 @@ const INSTS = [_]mus.Inst{
     .{ .wave = vex.TONE_PULSE, .duty = vex.TONE_MODE2, .attack = 0, .decay = 0, .sustain = 0, .release = 4, .volume = 52, .pan = vex.TONE_PAN_LEFT, .pwm = 1, .pwm_start = 16, .pwm_end = 192 },
     .{ .wave = vex.TONE_PULSE, .duty = vex.TONE_MODE2, .attack = 0, .decay = 1, .sustain = 3, .release = 3, .volume = 34, .pan = vex.TONE_PAN_RIGHT, .pwm = 1, .pwm_start = 32, .pwm_end = 160 },
     .{ .wave = vex.TONE_NOISE, .duty = 0, .attack = 0, .decay = 0, .sustain = 1, .release = 4, .volume = 18, .pan = 0 },
-    .{ .wave = vex.TONE_PULSE, .duty = vex.TONE_MODE1, .attack = 0, .decay = 0, .sustain = 0, .release = 3, .volume = 48, .pan = vex.TONE_PAN_LEFT, .pwm = 1, .pwm_start = 192, .pwm_end = 32 },
-    .{ .wave = vex.TONE_PULSE, .duty = vex.TONE_MODE1, .attack = 0, .decay = 0, .sustain = 2, .release = 2, .volume = 28, .pan = vex.TONE_PAN_RIGHT, .pwm = 1, .pwm_start = 160, .pwm_end = 48 },
+    .{ .wave = vex.TONE_PULSE, .duty = vex.TONE_MODE1, .attack = 0, .decay = 1, .sustain = 0, .release = 3, .volume = 48, .pan = vex.TONE_PAN_LEFT, .fm = 1, .fm_ratio = 3, .fm_index = 128 },
+    .{ .wave = vex.TONE_PULSE, .duty = vex.TONE_MODE1, .attack = 0, .decay = 0, .sustain = 2, .release = 2, .volume = 28, .pan = vex.TONE_PAN_RIGHT, .fm = 1, .fm_ratio = 2, .fm_index = 96 },
     .{ .wave = vex.TONE_PULSE, .duty = vex.TONE_MODE2, .attack = 0, .decay = 1, .sustain = 0, .release = 4, .volume = 72, .pan = 0, .pwm = 1, .pwm_start = 32, .pwm_end = 32 },
 };
 
