@@ -113,6 +113,7 @@ test-hosts: test-mus ## Run Go and C conformance tests
 		cmd/vex/test/tone_test.c -lm -lpthread
 	@cmd/vex/test/tone_test.bin
 	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
+	@zig build test
 
 test-mus:
 	$(STEP) "Running music tracker test"
@@ -127,7 +128,7 @@ test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser 
 	@cd $(TEST_DIR) && node test_gamepad.js $(CURDIR)/$(CART)
 	@rm -rf $(CURDIR)/bundle
 
-test: test-hosts test-web ## Run all tests
+test: all test-hosts test-web ## Run all tests
 
 # `npm install` only runs the first time and on dep changes; the
 # timestamp file is our cheap "did we install?" marker.
@@ -193,6 +194,63 @@ help: ## Show this help text
 
 
 # --- release ---------------------------------------------------------------
+# Native Linux release naming follows the host architecture; normalize the
+# common uname spellings to the archive/Go names.
+LINUX_RELEASE_ARCH ?= $(shell uname -m)
+LINUX_RELEASE_TAG := $(LINUX_RELEASE_ARCH)
+LINUX_RELEASE_GOARCH := $(LINUX_RELEASE_ARCH)
+LINUX_RELEASE_GOARM :=
+ifeq ($(LINUX_RELEASE_ARCH),x86_64)
+LINUX_RELEASE_TAG := amd64
+LINUX_RELEASE_GOARCH := amd64
+else ifeq ($(LINUX_RELEASE_ARCH),amd64)
+LINUX_RELEASE_TAG := amd64
+else ifeq ($(LINUX_RELEASE_ARCH),aarch64)
+LINUX_RELEASE_TAG := arm64
+LINUX_RELEASE_GOARCH := arm64
+else ifeq ($(LINUX_RELEASE_ARCH),arm64)
+  LINUX_RELEASE_TAG := arm64
+else ifeq ($(LINUX_RELEASE_ARCH),i386)
+  LINUX_RELEASE_TAG := 386
+  LINUX_RELEASE_GOARCH := 386
+else ifeq ($(LINUX_RELEASE_ARCH),i486)
+  LINUX_RELEASE_TAG := 386
+  LINUX_RELEASE_GOARCH := 386
+else ifeq ($(LINUX_RELEASE_ARCH),i586)
+  LINUX_RELEASE_TAG := 386
+  LINUX_RELEASE_GOARCH := 386
+else ifeq ($(LINUX_RELEASE_ARCH),i686)
+  LINUX_RELEASE_TAG := 386
+  LINUX_RELEASE_GOARCH := 386
+else ifeq ($(LINUX_RELEASE_ARCH),i86pc)
+  LINUX_RELEASE_TAG := 386
+  LINUX_RELEASE_GOARCH := 386
+else ifeq ($(LINUX_RELEASE_ARCH),arm)
+  LINUX_RELEASE_TAG := armv7
+  LINUX_RELEASE_GOARCH := arm
+  LINUX_RELEASE_GOARM := 7
+else ifeq ($(LINUX_RELEASE_ARCH),armv5tel)
+  LINUX_RELEASE_TAG := armv5
+  LINUX_RELEASE_GOARCH := arm
+  LINUX_RELEASE_GOARM := 5
+else ifeq ($(LINUX_RELEASE_ARCH),armv6l)
+  LINUX_RELEASE_TAG := armv6
+  LINUX_RELEASE_GOARCH := arm
+  LINUX_RELEASE_GOARM := 6
+else ifeq ($(LINUX_RELEASE_ARCH),armv7l)
+  LINUX_RELEASE_TAG := armv7
+  LINUX_RELEASE_GOARCH := arm
+  LINUX_RELEASE_GOARM := 7
+else ifeq ($(LINUX_RELEASE_ARCH),armv7)
+  LINUX_RELEASE_TAG := armv7
+  LINUX_RELEASE_GOARCH := arm
+  LINUX_RELEASE_GOARM := 7
+else ifeq ($(LINUX_RELEASE_ARCH),armhf)
+  LINUX_RELEASE_TAG := armv7
+  LINUX_RELEASE_GOARCH := arm
+  LINUX_RELEASE_GOARM := 7
+endif
+
 #
 # Three target recipes (linux, windows, macos) plus an aggregate `release` that
 # builds all three. Each recipe:
@@ -226,7 +284,7 @@ help: ## Show this help text
 # Build vex-web into <staging>/<target>/vex-$(VERSION)/bin/ alongside the
 # Zig-installed vex + vex-init binaries.
 define vex-web-cross
-	GOOS=$(1) GOARCH=$(2) CGO_ENABLED=0 \
+	$(if $(5),GOARM=$(5) )GOOS=$(1) GOARCH=$(2) CGO_ENABLED=0 \
 		go build -trimpath -ldflags='-s -w' \
 			-o $(STAGING_DIR)/$(3)/bin/vex-web$(4) ./cmd/vex-web
 endef
@@ -246,17 +304,17 @@ endef
 release-linux: export LINUX_DISPLAY_BACKEND ?= X11
 release-linux: ## Build Linux release archive
 	$(STEP) "Building Linux release"
-	@mkdir -p $(STAGING_DIR)/linux-amd64/vex-$(VERSION)
-	@zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
+	@mkdir -p $(STAGING_DIR)/linux-$(LINUX_RELEASE_TAG)/vex-$(VERSION)
+	@zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-$(LINUX_RELEASE_TAG)/vex-$(VERSION) \
 		-Dtarget=native -Dexamples=true --release=fast
-	@cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-amd64/vex-$(VERSION) \
+	@cd cmd/vex && zig build --prefix $(CURDIR)/$(STAGING_DIR)/linux-$(LINUX_RELEASE_TAG)/vex-$(VERSION) \
 		-Dtarget=native --release=fast -Dlinux_display_backend=$(LINUX_DISPLAY_BACKEND)
-	@$(call vex-web-cross,linux,amd64,linux-amd64/vex-$(VERSION),)
-	@cp README.md $(STAGING_DIR)/linux-amd64/vex-$(VERSION)/
-	@cp LICENSE $(STAGING_DIR)/linux-amd64/vex-$(VERSION)/
-	@tar -czf $(CURDIR)/$(RELEASE_DIR)/vex-$(VERSION)-linux-amd64.tar.gz \
-		-C $(STAGING_DIR)/linux-amd64 vex-$(VERSION)
-	@echo "==> $(RELEASE_DIR)/vex-$(VERSION)-linux-amd64.tar.gz"
+	@$(call vex-web-cross,linux,$(LINUX_RELEASE_GOARCH),linux-$(LINUX_RELEASE_TAG)/vex-$(VERSION),,$(LINUX_RELEASE_GOARM))
+	@cp README.md $(STAGING_DIR)/linux-$(LINUX_RELEASE_TAG)/vex-$(VERSION)/
+	@cp LICENSE $(STAGING_DIR)/linux-$(LINUX_RELEASE_TAG)/vex-$(VERSION)/
+	@tar -czf $(CURDIR)/$(RELEASE_DIR)/vex-$(VERSION)-linux-$(LINUX_RELEASE_TAG).tar.gz \
+		-C $(STAGING_DIR)/linux-$(LINUX_RELEASE_TAG) vex-$(VERSION)
+	@echo "==> $(RELEASE_DIR)/vex-$(VERSION)-linux-$(LINUX_RELEASE_TAG).tar.gz"
 
 # Windows: cross-compile. raylib + wasm3 + the wasm3 -Dd_m3Use32BitSlots=0
 # flag all flow through the host build.zig unchanged.
