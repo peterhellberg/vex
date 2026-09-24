@@ -23,16 +23,16 @@
 //! Note values on an Event:
 //!   REST (0)      no note: let the previous one ring
 //!   OFF (128)     note-off: apply the instrument's release envelope
-//!                 (noise instruments hard-cut instead — noise tails hiss)
+//!                 (noise or no-tail instruments hard-cut)
 //!   1..127        MIDI note number
 //!   129..141      compact chord palette, arpeggiated across the row (see
 //!                 `chordNote`): C/D/E/F/G/A/B minor, then G/A/B/C/D/E major;
 //!                 use plain MIDI events for other roots or qualities
 //!
 //! Sustain semantics on `Inst.sustain`:
-//!   0              default: pattern speed * 2 frames
+//!   0              default: pattern speed * 2 frames, clamped to 255
 //!   1..254         fixed length in frames
-//!   255 (HOLD)     hold the sustain level until OFF / next note
+//!   255 (HOLD)     hold the sustain level until OFF, mute, or next note
 
 const vex = @import("vex");
 
@@ -41,11 +41,11 @@ pub const CHANNELS = vex.TONE_CHANNELS;
 
 /// Note values.
 pub const REST = 0; // no note (let previous ring)
-pub const OFF = 128; // note-off: release / silence the channel
+pub const OFF = 128; // note-off: release the current voice (hard-cut if no tail)
 pub const CHORD_MIN: u8 = 129;
 pub const CHORD_MAX: u8 = 141;
 
-/// Hold the sustain level until the channel is retriggered or silenced.
+/// Hold the sustain level until the channel is released, muted, or retriggered.
 pub const SUSTAIN_HOLD: u8 = 255;
 
 /// An instrument preset. Maps to tone() parameters. ADSR.
@@ -54,7 +54,7 @@ pub const Inst = extern struct {
     duty: u8, // vex.TONE_MODE0..3
     attack: u8, // attack  length in frames (0..255)
     decay: u8, // decay   length in frames
-    sustain: u8 = 0, // sustain length in frames (see SUSTAIN_HOLD)
+    sustain: u8 = 0, // 0: speed*2 (clamped); 1..254: frames; 255: hold
     release: u8, // release length in frames
     volume: u8, // default volume (0..100)
     pan: u8, // 0=center, vex.TONE_PAN_LEFT, vex.TONE_PAN_RIGHT
@@ -76,7 +76,7 @@ pub const Event = extern struct {
 /// A pattern.
 pub const Pat = extern struct {
     rows: u8, // row count (1..255)
-    speed: u8, // frames per row (controls tempo)
+    speed: u8, // frames per row, 1..255 (controls tempo)
     events: [*]const Event, // rows * CHANNELS events
 };
 
@@ -212,13 +212,16 @@ fn releaseVoice(ch: usize) void {
     v.* = .{};
 }
 
+/// Mute or unmute a channel. Calling before `load` only changes state.
 pub fn mute(ch: usize, muted: bool) void {
     if (ch >= CHANNELS) return;
+    const bit: u8 = @as(u8, 1) << @intCast(ch);
     if (muted) {
-        _muted |= @as(u8, 1) << @intCast(ch);
+        if ((_muted & bit) != 0) return;
+        _muted |= bit;
         releaseVoice(ch);
     } else {
-        _muted &= ~(@as(u8, 1) << @intCast(ch));
+        _muted &= ~bit;
     }
 }
 
@@ -268,6 +271,10 @@ pub fn tick() void {
     }
 
     const pat = song.pats[pat_i];
+    if (pat.speed == 0) {
+        stop();
+        return;
+    }
 
     // Mid-row arpeggio retrigger: chord channels cycle their triad once
     // per row. Retriggering restarts the envelope, so arps want
@@ -368,14 +375,12 @@ pub fn tick() void {
     // advance to next row / pattern / order
     if (_row >= pat.rows) {
         _row = 0;
-        _ord += 1;
-
-        if (_ord >= song.num_orders) {
-            if (song.loop_ord >= song.num_orders) {
-                stop();
-                return;
-            }
-
+        if (_ord < song.num_orders - 1) {
+            _ord += 1;
+        } else if (song.loop_ord >= song.num_orders) {
+            stop();
+            return;
+        } else {
             _ord = song.loop_ord;
         }
     }

@@ -19,7 +19,8 @@
 // Each mus_tick() call processes one frame of sequencer time.
 //
 // Notes ring past their row: MUS_REST does not cut off a previous note,
-// it only declines to trigger a new one.  Use MUS_OFF to silence a channel.
+// it only declines to trigger a new one.  Use MUS_OFF to release the current
+// voice (or hard-cut it when there is no release tail).
 // This header must be included from a single translation unit (all
 // definitions are static), which matches the one-file cart model.
 #ifndef MUS_H
@@ -32,10 +33,10 @@
 
 // Note values.
 #define MUS_REST 0     // no note (let previous ring)
-#define MUS_OFF  128   // note-off: release the channel (noise hard-cuts)
+#define MUS_OFF  128   // note-off: release the current voice (hard-cut if no tail)
 #define MUS_CHORD_MIN 129
 #define MUS_CHORD_MAX 141
-#define MUS_SUSTAIN_HOLD 255 // sustain indefinitely until OFF or a new note
+#define MUS_SUSTAIN_HOLD 255 // sustain indefinitely until OFF, mute, or a new note
 
 // An instrument preset. Maps to tone() parameters. ADSR.
 typedef struct {
@@ -43,7 +44,7 @@ typedef struct {
     unsigned char duty;    // pulse duty: VEX_TONE_MODE0..3
     unsigned char attack;  // attack  length in frames (0..255)
     unsigned char decay;   // decay   length in frames
-    unsigned char sustain; // 0: pattern speed*2; 1..254: frames; 255: hold
+    unsigned char sustain; // 0: pattern speed*2, clamped to 255; 1..254: frames; 255: hold
     unsigned char release; // release length in frames
     unsigned char volume;  // default volume (0..100)
     unsigned char pan;     // 0=center, VEX_TONE_PAN_LEFT, VEX_TONE_PAN_RIGHT
@@ -65,7 +66,7 @@ typedef struct {
 // A pattern: `rows` rows, each with MUS_CHANNELS note events.
 typedef struct {
     unsigned char rows;          // row count (1..255)
-    unsigned char speed;         // frames per row (controls tempo)
+    unsigned char speed;         // frames per row, 1..255 (controls tempo)
     const MusEvent *events;      // rows * MUS_CHANNELS events
 } MusPat;
 
@@ -97,6 +98,7 @@ void mus_tick(void);
 // Current position: low 8 bits = order, bits 8..15 = row.
 int mus_pos(void);
 
+// Mute or unmute a channel. Calling before mus_load only changes state.
 void mus_mute(int ch, int muted);
 
 // ---- implementation --------------------------------------------------------
@@ -124,7 +126,8 @@ static void _mus_clear(void) {
 
 static void _mus_release(int ch) {
     MusVoice *v = &_mus_voice[ch];
-    if (!_mus_song || v->inst == 0 || v->inst > _mus_song->num_insts) {
+    if (!_mus_song) return;
+    if (v->inst == 0 || v->inst > _mus_song->num_insts) {
         _mus_silence(ch);
         return;
     }
@@ -140,11 +143,13 @@ static void _mus_release(int ch) {
 
 void mus_mute(int ch, int muted) {
     if (ch < 0 || ch >= MUS_CHANNELS) return;
+    unsigned char bit = (unsigned char)(1u << ch);
     if (muted) {
-        _mus_muted |= (unsigned char)(1u << ch);
+        if (_mus_muted & bit) return;
+        _mus_muted |= bit;
         _mus_release(ch);
     } else {
-        _mus_muted &= (unsigned char)~(1u << ch);
+        _mus_muted &= (unsigned char)~bit;
     }
 }
 
@@ -196,6 +201,7 @@ void mus_tick(void) {
     unsigned char pat_i = _mus_song->orders[_mus_ord];
     if (pat_i >= _mus_song->num_pats) { mus_stop(); return; }
     const MusPat *pat = _mus_song->pats[pat_i];
+    if (pat->speed == 0) { mus_stop(); return; }
 
     // This runs before row triggers; a row trigger replaces the voice below.
     int arp_step = pat->speed >= 3 ? _mus_tick * 3 / pat->speed : 0;
@@ -312,12 +318,12 @@ void mus_tick(void) {
     // advance to next row / pattern / order
     if (_mus_row >= pat->rows) {
         _mus_row = 0;
-        _mus_ord++;
-        if (_mus_ord >= _mus_song->num_orders) {
-            if (_mus_song->loop >= _mus_song->num_orders) {
-                mus_stop();
-                return;
-            }
+        if (_mus_ord + 1 < _mus_song->num_orders) {
+            _mus_ord++;
+        } else if (_mus_song->loop >= _mus_song->num_orders) {
+            mus_stop();
+            return;
+        } else {
             _mus_ord = _mus_song->loop;
         }
     }

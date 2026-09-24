@@ -85,6 +85,32 @@ const fm_song = mus.Song{
     .pats = &fm_patterns,
     .orders = &fm_orders,
 };
+const zero_speed_pattern = mus.Pat{ .rows = 1, .speed = 0, .events = &fm_events };
+const zero_speed_patterns = [_]*const mus.Pat{&zero_speed_pattern};
+const zero_speed_song = mus.Song{
+    .num_insts = fm_instruments.len,
+    .num_pats = zero_speed_patterns.len,
+    .num_orders = fm_orders.len,
+    .loop_ord = 0xFF,
+    .insts = &fm_instruments,
+    .pats = &zero_speed_patterns,
+    .orders = &fm_orders,
+};
+
+test "pre-load mute is state-only" {
+    mus.mute(0, false);
+    vex.reset();
+    mus.mute(0, true);
+    try std.testing.expectEqual(@as(usize, 0), vex.call_count);
+
+    mus.load(&song);
+    mus.play();
+    vex.reset();
+    mus.tick();
+    try std.testing.expectEqual(@as(usize, 1), vex.call_count);
+    try std.testing.expectEqual(@as(i32, 1), vex.calls[0].flags & 3);
+    mus.mute(0, false);
+}
 
 test "zero volume, arpeggio, and rest" {
     mus.load(&song);
@@ -93,6 +119,7 @@ test "zero volume, arpeggio, and rest" {
 
     for (0..14) |_| mus.tick();
 
+    try std.testing.expect((mus.pos() & 0xFF) == 0);
     try std.testing.expectEqual(@as(usize, 9), vex.call_count);
     try std.testing.expectEqual(@as(i32, 60), vex.calls[0].freq);
     try std.testing.expectEqual(@as(i32, 0), vex.calls[4].duration);
@@ -128,6 +155,14 @@ test "FM instrument" {
     try std.testing.expectEqual(@as(i32, 128), (vex.calls[0].volume >> 24) & 255);
 }
 
+test "zero speed stops safely" {
+    mus.load(&zero_speed_song);
+    mus.play();
+    vex.reset();
+    mus.tick();
+    try std.testing.expectEqual(@as(usize, 4), vex.call_count);
+}
+
 test "release ignores frequency" {
     mus.load(&fm_song);
     mus.play();
@@ -137,9 +172,27 @@ test "release ignores frequency" {
     try std.testing.expectEqual(@as(usize, 2), vex.call_count);
     try std.testing.expectEqual(@as(i32, 0), vex.calls[1].freq);
     try std.testing.expect(vex.calls[1].flags & vex.TONE_RELEASE != 0);
+    mus.mute(0, false);
+}
+
+test "repeated mute preserves active release" {
+    mus.mute(0, false);
+    mus.load(&song);
+    mus.play();
+    vex.reset();
+
+    mus.tick();
+    try std.testing.expectEqual(@as(usize, 2), vex.call_count);
+    mus.mute(0, true);
+    mus.mute(0, true);
+    try std.testing.expectEqual(@as(usize, 3), vex.call_count);
+    try std.testing.expectEqual(@as(i32, 0), vex.calls[2].freq);
+    try std.testing.expect(vex.calls[2].flags & vex.TONE_RELEASE != 0);
+    mus.mute(0, false);
 }
 
 test "mute" {
+    mus.mute(0, false);
     mus.load(&song);
     mus.play();
     vex.reset();

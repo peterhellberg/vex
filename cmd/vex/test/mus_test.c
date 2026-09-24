@@ -93,6 +93,9 @@ static const MusEvent FM_EVENTS[MUS_CHANNELS] = {
 static const MusPat FM_PAT = {1, 1, FM_EVENTS};
 static const MusPat *const FM_PATS[] = {&FM_PAT};
 static const MusSong FM_SONG = {1, 1, 1, 0xFF, FM_INSTS, FM_PATS, ORDERS};
+static const MusPat ZERO_SPEED_PAT = {1, 0, FM_EVENTS};
+static const MusPat *const ZERO_SPEED_PATS[] = {&ZERO_SPEED_PAT};
+static const MusSong ZERO_SPEED_SONG = {1, 1, 1, 0xFF, FM_INSTS, ZERO_SPEED_PATS, ORDERS};
 
 static void tick_n(int n) {
     for (int i = 0; i < n; i++)
@@ -104,6 +107,17 @@ int main(void) {
     CHECK("minor chord palette", _mus_chord_note(134, 0) == 57);
     CHECK("major chord root", _mus_chord_note(136, 0) == 55);
     CHECK("major chord palette", _mus_chord_note(139, 0) == 60);
+
+    g_ncalls = 0;
+    mus_mute(0, 1);
+    CHECK("pre-load mute is state-only", g_ncalls == 0);
+    mus_load(&SONG);
+    mus_play();
+    g_ncalls = 0;
+    mus_tick();
+    CHECK("pre-load mute survives load",
+          g_ncalls == 1 && (g_calls[0].flags & 3) == 1);
+    mus_mute(0, 0);
 
     mus_load(&SONG);
     CHECK("load resets position", mus_pos() == 0);
@@ -143,6 +157,7 @@ int main(void) {
               !(g_calls[5].flags & VEX_TONE_RELEASE));
     tick_n(1);
     CHECK("end of song stops with 4 silences", g_ncalls == 10);
+    CHECK("end position stays in range", (mus_pos() & 0xFF) < SONG.num_orders);
     tick_n(4);
     CHECK("stopped song stays silent", g_ncalls == 10);
 
@@ -152,6 +167,18 @@ int main(void) {
     CHECK("reload resets position", mus_pos() == 0);
     tick_n(2);
     CHECK("reloaded song triggers again", g_ncalls == 2);
+
+    mus_load(&SONG);
+    mus_play();
+    g_ncalls = 0;
+    mus_tick();
+    mus_mute(0, 1);
+    mus_mute(0, 1);
+    CHECK("repeated mute preserves active release",
+          g_ncalls == 3 &&
+              g_calls[2].dur == VEX_TONE_DURATION(0, 0, 0, 4) &&
+              (g_calls[2].flags & VEX_TONE_RELEASE));
+    mus_mute(0, 0);
 
     mus_load(&SONG);
     mus_play();
@@ -214,6 +241,12 @@ int main(void) {
     uint32_t fm_volume = (uint32_t)g_calls[0].vol;
     CHECK("tracker FM ratio", ((fm_volume >> 16) & 255) == 2);
     CHECK("tracker FM index", ((fm_volume >> 24) & 255) == 128);
+
+    mus_load(&ZERO_SPEED_SONG);
+    mus_play();
+    g_ncalls = 0;
+    tick_n(1);
+    CHECK("zero speed stops safely", g_ncalls == 4);
 
     if (failures) {
         fprintf(stderr, "MUS: %d failure(s)\n", failures);
