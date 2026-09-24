@@ -27,10 +27,13 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	_ "embed"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"net"
@@ -86,7 +89,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	fs.Usage = func() {
 		fmt.Fprintf(stderr,
-			"usage: %s [-addr host:port] [-no-open] [-bundle] <cart.wasm>\n",
+			"usage: %s [-addr host:port] [-no-open] [-poll duration] [-bundle] <cart.wasm>\n",
 			filepath.Base(args[0]))
 		fs.PrintDefaults()
 	}
@@ -100,6 +103,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if cart == "" {
 		fs.Usage()
 		return errors.New("no cart specified")
+	}
+
+	if in.poll <= 0 {
+		return errors.New("-poll must be greater than zero")
 	}
 
 	if in.bundle {
@@ -252,6 +259,11 @@ func serveBytes(b []byte, contentType string) http.HandlerFunc {
 // stat()ed for changes.
 func serveReload(path string, interval time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if interval <= 0 {
+			http.Error(w, "invalid poll interval", http.StatusInternalServerError)
+			return
+		}
+
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -262,10 +274,7 @@ func serveReload(path string, interval time.Duration) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Connection", "keep-alive")
 
-		var last int64
-		if fi, err := os.Stat(path); err == nil {
-			last = fi.ModTime().UnixNano()
-		}
+		last := fileSignature(path)
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -279,13 +288,13 @@ func serveReload(path string, interval time.Duration) http.HandlerFunc {
 			case <-r.Context().Done():
 				return
 			case <-ticker.C:
-				fi, err := os.Stat(path)
-				if err != nil {
+				signature := fileSignature(path)
+				if signature == 0 {
 					continue
 				}
 
-				if m := fi.ModTime().UnixNano(); m != last {
-					last = m
+				if signature != last {
+					last = signature
 					fmt.Fprint(w, "data: reload\n\n")
 					flusher.Flush()
 					continue
@@ -300,13 +309,40 @@ func serveReload(path string, interval time.Duration) http.HandlerFunc {
 	}
 }
 
+func readStableFile(path string) ([]byte, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		first, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		second, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(first, second) {
+			return first, nil
+		}
+	}
+	return nil, errors.New("file changed while reading")
+}
+
+func fileSignature(path string) uint64 {
+	data, err := readStableFile(path)
+	if err != nil {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return h.Sum64()
+}
+
 // serveCart returns a handler that reads the cart from disk on each request,
 // so rebuilding it and refreshing the page is enough to load the new bytes.
 // Served via http.ServeContent for Range/If-Modified-Since support; the
 // per-request open keeps the live-reload semantics.
 func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		f, err := os.Open(path)
+		data, err := readStableFile(path)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				fmt.Fprintf(stderr, "read %s: %v\n", displayPath(path), err)
@@ -314,9 +350,7 @@ func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 			http.Error(w, "cart not found", http.StatusNotFound)
 			return
 		}
-		defer f.Close()
-
-		fi, err := f.Stat()
+		fi, err := os.Stat(path)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				fmt.Fprintf(stderr, "stat %s: %v\n", displayPath(path), err)
@@ -332,7 +366,7 @@ func serveCart(path string, stderr io.Writer) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/wasm")
 		w.Header().Set("Cache-Control", "no-store")
-		http.ServeContent(w, r, "", fi.ModTime(), f)
+		http.ServeContent(w, r, "", fi.ModTime(), bytes.NewReader(data))
 	}
 }
 
@@ -348,18 +382,19 @@ type bundleFile struct {
 // (where <name> is the cart's base name without extension) and the directory is
 // also archived to bundle/<name>.zip.
 func writeBundle(cart string, stdout io.Writer) error {
-	wasm, err := os.ReadFile(cart)
+	wasm, err := readStableFile(cart)
 	if err != nil {
 		return fmt.Errorf("read cart: %w", err)
 	}
 
 	cartFile := filepath.Base(cart)
 	name := strings.TrimSuffix(cartFile, filepath.Ext(cartFile))
-
-	cacheBuster := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	if name == "" || name == "." || name == ".." {
+		return errors.New("invalid cart name")
+	}
 
 	files := []bundleFile{
-		{"index.html", bundleIndexHTML(cartFile, cacheBuster)},
+		{"index.html", bundleIndexHTML(wasm)},
 		{cartFile, wasm},
 	}
 
@@ -372,6 +407,9 @@ func writeBundle(cart string, stdout io.Writer) error {
 	files = append(files, srcFiles...)
 
 	dir := filepath.Join("bundle", name)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -424,12 +462,9 @@ func bundleSrcFiles() ([]bundleFile, error) {
 	return files, err
 }
 
-// bundleIndexHTML returns a static copy of the embedded index.html that loads
-// cartFile directly, with the dev-only live-reload (SSE) script replaced so the
-// page works straight from the filesystem with no server behind it. cacheBuster
-// is appended as a query parameter to the cart URL so each bundle forces a fresh
-// download (avoids stale wasm from HTTP caches after redeployment).
-func bundleIndexHTML(cartFile, cacheBuster string) []byte {
+// bundleIndexHTML returns a static copy of the embedded index.html with the
+// cart bytes inlined, so the page works from file:// without fetch or a server.
+func bundleIndexHTML(wasm []byte) []byte {
 	const (
 		startTag = `<script type="module">`
 		endTag   = "</script>"
@@ -448,17 +483,7 @@ func bundleIndexHTML(cartFile, cacheBuster string) []byte {
 	}
 	j += i + len(endTag)
 
-	// Bundle version of the inline script: contains a full copy of vex.js
-	// followed by the bootstrap code (orientation detection, gamepad setup,
-	// cart loader). Everything is in one self-contained module script — no
-	// separate import from "./vex.js" that can fail when the static file
-	// server serves vex.js with the wrong MIME type (Safari rejects ES
-	// module imports whose MIME type isn't application/javascript).
-	//
-	// vex.js already runs at module scope (it creates the canvas, registers
-	// drag-and-drop handlers, etc.), so it fits naturally as part of this
-	// inline module. Its exports (start, setupGamepad, startBytes) are
-	// available directly in the bootstrap code below.
+	encoded := base64.StdEncoding.EncodeToString(wasm)
 	script := startTag + "\n" + string(vexJS) + "\n\n" +
 		`function updateOrientation() {` + "\n" +
 		`  const ratio = window.innerWidth / window.innerHeight;` + "\n" +
@@ -479,7 +504,13 @@ func bundleIndexHTML(cartFile, cacheBuster string) []byte {
 		`  setupGamepad();` + "\n" +
 		`} catch (e) { showError(e); }` + "\n" +
 		`window.addEventListener("load", () => {` + "\n" +
-		`  start(` + strconv.Quote(cartFile+"?v="+cacheBuster) + `).catch(showError);` + "\n" +
+		`  try {` + "\n" +
+		`    const data = atob(` + strconv.Quote(encoded) + `);` + "\n" +
+		`    const bytes = new Uint8Array(data.length);` + "\n" +
+		`    for (let i = 0; i < data.length; i++)` + "\n" +
+		`      bytes[i] = data.charCodeAt(i);` + "\n" +
+		`    startBytes(bytes.buffer).catch(showError);` + "\n" +
+		`  } catch (e) { showError(e); }` + "\n" +
 		`});` + "\n" +
 		endTag
 

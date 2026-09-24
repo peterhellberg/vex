@@ -178,6 +178,32 @@ static float g_view_scale = 1.0f, g_view_ox = 0.0f, g_view_oy = 0.0f;
 static const int VEX_KEYS[6] = {KEY_LEFT, KEY_RIGHT, KEY_UP,
                                 KEY_DOWN, KEY_Z,     KEY_X};
 static uint8_t g_prev_btns = 0;
+static uint8_t g_pressed_btns = 0;
+static bool g_reload_pressed = false;
+
+static void latch_key_presses(void) {
+  int key;
+  while ((key = GetKeyPressed()) != 0) {
+    if (key == KEY_R &&
+        (IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER)))
+      g_reload_pressed = true;
+    for (int i = 0; i < 6; i++) {
+      if (key == VEX_KEYS[i])
+        g_pressed_btns |= (uint8_t)(1u << i);
+    }
+  }
+}
+
+static uint8_t current_button_mask(void) {
+  uint8_t mask = 0;
+  if (!g_window_open)
+    return mask;
+  for (int i = 0; i < 6; i++) {
+    if (IsKeyDown(VEX_KEYS[i]))
+      mask |= (uint8_t)(1u << i);
+  }
+  return mask;
+}
 
 static void reset_palette(void) {
   for (int i = 0; i < 16; i++)
@@ -580,10 +606,10 @@ m3ApiRawFunction(host_btnp) {
       // Clamp before the shift: hostile carts probe out-of-range buttons and
       // a negative shift is undefined behavior (crashes under Zig's cc).
       int prev = button >= 0 && button < 8 ? (g_prev_btns >> button) & 1 : 0;
-  int held = g_window_open && button >= 0 && button < 6
-                 ? IsKeyDown(VEX_KEYS[button])
-                 : 0;
-  m3ApiReturn(held && !prev);
+  int valid = g_window_open && button >= 0 && button < 6;
+  int latched = valid ? (g_pressed_btns >> button) & 1 : 0;
+  int held = valid ? IsKeyDown(VEX_KEYS[button]) : 0;
+  m3ApiReturn(latched || (held && !prev));
 }
 
 static int32_t mouse_axis(bool isX) {
@@ -707,6 +733,7 @@ static bool g_pending_set[VEX_TONE_CHANNELS];
 // host's toneFullAmp. The mixer sums in s16 units and divides by 32768
 // once at the float write-out.
 #define TONE_FULL_AMP 8000.0
+#define TONE_RAYLIB_CENTER_GAIN_INV (16.0f / 11.0f)
 
 // Noise channel clock bounds in Hz. Stepping the LFSR much below ~8 kHz
 // produces a raspy sample-and-hold buzz rather than hiss (each random value
@@ -775,6 +802,13 @@ static void voice_next_segment(ToneVoice *v) {
     long n = v->seg_len[v->seg];
     if (n <= 0) {
       v->level = v->seg_end[v->seg];
+      if (v->seg == 2) {
+        if (v->freq_to > 0.0)
+          v->freq = v->freq_to;
+        v->duty = v->duty_to;
+        v->duty_step = 0.0;
+        v->duty_left = 0;
+      }
       if (v->seg == 2 && v->hold) {
         v->seg_left = 1;
         v->slope = 0.0;
@@ -1016,6 +1050,7 @@ static void ensure_stream(void) {
   if (g_stream_ready || !g_audio_ready)
     return;
   g_stream = LoadAudioStream(48000, 32, 2);
+  SetAudioStreamVolume(g_stream, TONE_RAYLIB_CENTER_GAIN_INV);
   SetAudioStreamCallback(g_stream, mix_callback);
   PlayAudioStream(g_stream);
   g_stream_ready = true;
@@ -1196,6 +1231,22 @@ static uint8_t *read_file(const char *path, size_t *out_len) {
   return buf;
 }
 
+static uint64_t file_signature(const char *path) {
+  FILE *f = fopen(path, "rb");
+  if (!f) return 0;
+  uint64_t h = 1469598103934665603ULL;
+  uint8_t buf[4096];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), f)) != 0) {
+    for (size_t i = 0; i < n; i++) {
+      h ^= buf[i];
+      h *= 1099511628211ULL;
+    }
+  }
+  fclose(f);
+  return h;
+}
+
 // A loaded cart: its runtime, the entry points, and the wasm bytes wasm3
 // references for the runtime's lifetime (so they must outlive it).
 typedef struct {
@@ -1204,6 +1255,7 @@ typedef struct {
   IM3Function f_boot; // optional, may be NULL
   IM3Function f_update;
   uint8_t *wasm;
+  size_t wasm_len;
 } Cart;
 
 // Load a cart from disk into a fresh runtime: parse, link the host API, and
@@ -1301,37 +1353,99 @@ static bool load_cart(IM3Environment env, const char *path, Cart *out) {
     return false;
   }
 
-  *out = (Cart){.rt = rt, .mod = mod, .f_boot = f_boot, .f_update = f_update, .wasm = wasm};
+  *out = (Cart){.rt = rt, .mod = mod, .f_boot = f_boot,
+                .f_update = f_update, .wasm = wasm, .wasm_len = wasm_len};
   return true;
+}
+
+static uint64_t fnv1a64(const void *data, size_t n);
+
+static bool load_cart_stable(IM3Environment env, const char *path, Cart *out,
+                             uint64_t *loaded_signature) {
+  for (int attempt = 0; attempt < 3; attempt++) {
+    uint64_t before = file_signature(path);
+    if (!load_cart(env, path, out))
+      return false;
+    uint64_t after = file_signature(path);
+    uint64_t loaded = fnv1a64(out->wasm, out->wasm_len);
+    if (before != 0 && after != 0 && before == after && loaded == before) {
+      *loaded_signature = loaded;
+      return true;
+    }
+    m3_FreeRuntime(out->rt);
+    free(out->wasm);
+  }
+  return false;
+}
+
+typedef struct {
+  uint32_t palette[16];
+  uint32_t fb[VEX_W * VEX_H];
+  char title[sizeof(g_window_title)];
+  uint8_t prev_btns;
+  uint8_t pressed_btns;
+} HostCartState;
+
+static void snapshot_host_state(HostCartState *state) {
+  memcpy(state->palette, g_palette, sizeof(state->palette));
+  memcpy(state->fb, g_fb, sizeof(state->fb));
+  memcpy(state->title, g_window_title, sizeof(state->title));
+  state->prev_btns = g_prev_btns;
+  state->pressed_btns = g_pressed_btns;
+}
+
+static void restore_host_state(const HostCartState *state) {
+  memcpy(g_palette, state->palette, sizeof(g_palette));
+  memcpy(g_fb, state->fb, sizeof(g_fb));
+  memcpy(g_window_title, state->title, sizeof(g_window_title));
+  g_prev_btns = state->prev_btns;
+  g_pressed_btns = state->pressed_btns;
+  if (g_window_open)
+    SetWindowTitle(g_window_title);
 }
 
 // Reload the cart from disk into a fresh runtime, swapping it in only if it
 // loads cleanly -- a bad or half-written file leaves the running cart
 // untouched. Resets the palette and re-runs boot(), matching a fresh start.
 // Returns true if the cart was replaced.
-static bool reload_cart(IM3Environment env, const char *path, Cart *cart) {
+static bool reload_cart(IM3Environment env, const char *path, Cart *cart,
+                        uint64_t *loaded_signature) {
+  static HostCartState previous;
+  snapshot_host_state(&previous);
+  bool was_audio_ready = g_audio_ready;
+  g_audio_ready = false;
+  uint64_t before = file_signature(path);
   Cart fresh;
-  if (!load_cart(env, path, &fresh))
+  if (!load_cart(env, path, &fresh)) {
+    restore_host_state(&previous);
+    g_audio_ready = was_audio_ready;
     return false;
+  }
+  uint64_t after = file_signature(path);
+  uint64_t loaded = fnv1a64(fresh.wasm, fresh.wasm_len);
+  if (before == 0 || after == 0 || before != after || loaded != before) {
+    restore_host_state(&previous);
+    g_audio_ready = was_audio_ready;
+    m3_FreeRuntime(fresh.rt);
+    free(fresh.wasm);
+    return false;
+  }
 
-  // Match the initial start order: reset the palette to defaults BEFORE the
-  // new boot() runs, so boot()'s pal()/title() calls land on a known
-  // baseline. Doing reset_palette() *after* boot() would erase any palette
-  // overrides the cart's boot() made (e.g. vex.pal(0, ...)) -- which is the
-  // original bug this comment now documents.
-  uint32_t old_pal[16];
-  memcpy(old_pal, g_palette, sizeof(g_palette));
+  // Try boot() on the fresh cart BEFORE swapping it in: if it traps, restore
+  // every shared host state touched by the candidate boot.
   reset_palette();
-  clear_audio();
+  fb_fill(g_palette[0]);
+  snprintf(g_window_title, sizeof(g_window_title), "vex");
+  if (g_window_open)
+    SetWindowTitle(g_window_title);
+  g_prev_btns = 0;
+  g_pressed_btns = 0;
 
-  // Try boot() on the fresh cart BEFORE swapping it in: if it traps, the
-  // old cart (which is still running) stays untouched. Doing it after the
-  // swap would force die() on any boot-time runtime error and bring down
-  // the host over a bad edit.
   if (fresh.f_boot) {
     M3Result err = m3_CallV(fresh.f_boot);
     if (err) {
-      memcpy(g_palette, old_pal, sizeof(g_palette));
+      restore_host_state(&previous);
+      g_audio_ready = was_audio_ready;
       M3ErrorInfo info;
       m3_GetErrorInfo(fresh.rt, &info);
       fprintf(stderr, "vex: boot: %s (%s)\n", err,
@@ -1341,7 +1455,20 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart) {
       return false;
     }
   }
+  g_prev_btns = current_button_mask();
+  g_pressed_btns = 0;
+  uint64_t final_signature = file_signature(path);
+  if (final_signature == 0 || loaded != final_signature) {
+    restore_host_state(&previous);
+    g_audio_ready = was_audio_ready;
+    m3_FreeRuntime(fresh.rt);
+    free(fresh.wasm);
+    return false;
+  }
 
+  clear_audio();
+  g_audio_ready = was_audio_ready;
+  *loaded_signature = loaded;
   m3_FreeRuntime(cart->rt);
   free(cart->wasm);
   *cart = fresh;
@@ -1442,7 +1569,8 @@ int main(int argc, char **argv) {
   // ---- load the cart into a wasm3 interpreter --------------------------
   IM3Environment env = m3_NewEnvironment();
   Cart cart;
-  if (!load_cart(env, cart_path, &cart)) {
+  uint64_t last_signature;
+  if (!load_cart_stable(env, cart_path, &cart, &last_signature)) {
     m3_FreeEnvironment(env);
     return 1;
   }
@@ -1456,6 +1584,8 @@ int main(int argc, char **argv) {
     if (err)
       die(cart.rt, "boot", err);
   }
+  g_prev_btns = current_button_mask();
+  g_pressed_btns = 0;
 
   // Prime the framebuffer with a clean clear before any update() runs, so
   // carts that skip cls() start from a known-dark-blue state (palette[0]
@@ -1538,8 +1668,7 @@ int main(int argc, char **argv) {
   bool integer_scale = false; // crisp integer scale vs. fractional fill;
                               // enabled automatically on entering fullscreen
 
-  long last_mod = GetFileModTime(cart_path); // cart mtime, for -watch reloads
-  int poll = 0;                              // ticks since the last mtime poll
+  int poll = 0; // ticks since the last file-signature poll
 
   // Fixed 60 TPS driven by wall clock, not one tick per frame: the C host
   // previously ran one cart tick per render frame, so 144 Hz displays ran
@@ -1547,8 +1676,10 @@ int main(int argc, char **argv) {
   const double tickDt = 1.0 / 60.0;
   double acc = 0.0;
   double prevTime = GetTime();
+  bool reload_key = false;
 
   while (!WindowShouldClose()) {
+    latch_key_presses();
     double now = GetTime();
     double dt = now - prevTime;
     prevTime = now;
@@ -1564,7 +1695,8 @@ int main(int argc, char **argv) {
     // Latch the reload edge per-frame: IsKeyPressed is true for exactly one
     // frame, but a 144 Hz frame often runs 0 ticks, which would drop the
     // press if polled inside the tick loop. Consumed by the first tick below.
-    bool reload_key = super && IsKeyPressed(KEY_R);
+    reload_key = reload_key || g_reload_pressed || (super && IsKeyPressed(KEY_R));
+    g_reload_pressed = false;
 
     // Reload is tick-rate (60 TPS), not frame-rate, so -watch stays 0.5s
     // at 144 Hz. Fullscreen toggles stay per-frame (they affect rendering).
@@ -1674,12 +1806,12 @@ int main(int argc, char **argv) {
       reload_key = false;
       if (watch && ++poll >= VEX_WATCH_FRAMES) {
         poll = 0;
-        long m = GetFileModTime(cart_path);
-        if (m != 0 && m != last_mod)
+        uint64_t signature = file_signature(cart_path);
+        if (signature != 0 && signature != last_signature)
           want_reload_tick = true;
       }
-      if (want_reload_tick && reload_cart(env, cart_path, &cart)) {
-        last_mod = GetFileModTime(cart_path);
+      if (want_reload_tick &&
+          reload_cart(env, cart_path, &cart, &last_signature)) {
       }
 
       err = m3_CallV(cart.f_update);
@@ -1687,6 +1819,7 @@ int main(int argc, char **argv) {
         die(cart.rt, "update", err);
 
       g_prev_btns = 0;
+      g_pressed_btns = 0;
       for (int i = 0; i < 6; i++) {
         if (IsKeyDown(VEX_KEYS[i]))
           g_prev_btns |= (1u << i);
