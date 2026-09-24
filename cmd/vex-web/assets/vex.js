@@ -79,6 +79,21 @@ for (let n = 0; n < 128; n++) MIDI_FREQ[n] = 440 * Math.pow(2, (n - 69) / 12);
 //// Part 3: Input
 
 const keys = {};
+let prevButtons = 0;
+let pressedButtons = 0;
+
+const KEY_BUTTONS = {
+    ArrowLeft: 0,
+    ArrowRight: 1,
+    ArrowUp: 2,
+    ArrowDown: 3,
+    KeyZ: 4,
+    KeyX: 5,
+};
+
+function latchButton(button) {
+    pressedButtons |= 1 << button;
+}
 
 // Keys btn() reads; swallow their default actions so the arrows don't scroll
 // the page and Z/X don't trigger browser shortcuts.
@@ -92,7 +107,11 @@ const GAME_KEYS = new Set([
 ]);
 
 window.addEventListener("keydown", e => {
+    const wasDown = !!keys[e.code];
     keys[e.code] = true;
+
+    if (!wasDown && KEY_BUTTONS[e.code] !== undefined)
+        latchButton(KEY_BUTTONS[e.code]);
 
     if (GAME_KEYS.has(e.code))
         e.preventDefault();
@@ -126,10 +145,15 @@ function btn(button)
 
 function btnp(button)
 {
+    if (button < 0 || button >= 6)
+        return 0;
+
+    const bit = 1 << button;
+    const latched = (pressedButtons & bit) !== 0;
     const held = btn(button);
     const prev = (prevButtons >> button) & 1;
 
-    return held && !prev ? 1 : 0;
+    return latched || (held && !prev) ? 1 : 0;
 }
 
 let mouseX = 0;
@@ -273,27 +297,31 @@ canvas.addEventListener("contextmenu", e => e.preventDefault());
  * OS-interrupted touches.
  */
 const PAD_BINDINGS = [
-    [".dpad-up",    "ArrowUp"],
-    [".dpad-down",  "ArrowDown"],
-    [".dpad-left",  "ArrowLeft"],
-    [".dpad-right", "ArrowRight"],
-    [".dpad-z",     "KeyZ"],   // Z in the centre of the d-pad -> cart button 4
-    [".btn-x",      "KeyX"]    // X in the bottom-right corner -> cart button 5
+    [".dpad-up",    "ArrowUp",    2],
+    [".dpad-down",  "ArrowDown",  3],
+    [".dpad-left",  "ArrowLeft",  0],
+    [".dpad-right", "ArrowRight", 1],
+    [".dpad-z",     "KeyZ",       4], // Z in the centre of the d-pad -> cart button 4
+    [".btn-x",      "KeyX",       5]  // X in the bottom-right corner -> cart button 5
 ];
 
 // Keyboard code -> gamepad button, so the global keydown/keyup handlers can
 // highlight the matching button. Populated by setupGamepad().
 const padButtonByCode = new Map();
 
-function bindPadButton(button, code)
+function bindPadButton(button, code, buttonIndex)
 {
     // Either source (touch or key) being true marks the button active; OR
     // them on every change.
     let touchHeld = false;
     let keyHeld = false;
+    let active = false;
 
     const sync = () => {
-        const active = touchHeld || keyHeld;
+        const next = touchHeld || keyHeld;
+        if (next && !active)
+            latchButton(buttonIndex);
+        active = next;
         button.classList.toggle("active", active);
         keys[code] = active ? true : false;
     };
@@ -342,16 +370,23 @@ function bindPadButton(button, code)
 
     // Let the global keydown/keyup handlers highlight the button for the
     // matching physical key.
-    padButtonByCode.set(code, { setKeyHeld(v) { keyHeld = v; sync(); } });
+    padButtonByCode.set(code, {
+        setKeyHeld(v) { keyHeld = v; sync(); },
+        clear() {
+            touchHeld = false;
+            keyHeld = false;
+            sync();
+        }
+    });
 }
 export function setupGamepad()
 {
-    for (const [selector, code] of PAD_BINDINGS)
+    for (const [selector, code, index] of PAD_BINDINGS)
     {
         const button = document.querySelector(`#gamepad ${selector}`);
 
         if (button)
-            bindPadButton(button, code);
+            bindPadButton(button, code, index);
     }
 }
 
@@ -364,6 +399,42 @@ function syncPadButtonFromKey(code)
     if (entry)
         entry.setKeyHeld(!!keys[code]);
 }
+
+function buttonMask()
+{
+    let mask = 0;
+
+    for (let i = 0; i < 6; i++)
+        if (btn(i)) mask |= 1 << i;
+
+    return mask;
+}
+
+function clearKeyboard()
+{
+    for (const code of Object.keys(keys))
+        keys[code] = false;
+
+    for (const entry of padButtonByCode.values())
+        entry.clear();
+
+    for (const pointers of heldPointers.values())
+        pointers.clear();
+    heldPointers.clear();
+    touchButtons.clear();
+    for (let i = 0; i < mouseButtons.length; i++)
+        mouseButtons[i] = false;
+    positionPointer = null;
+
+    pressedButtons = 0;
+    prevButtons = buttonMask();
+}
+
+window.addEventListener("blur", clearKeyboard);
+document.addEventListener("visibilitychange", () => {
+    if (document.hidden || document.visibilityState === "hidden")
+        clearKeyboard();
+});
 
 function mx()
 {
@@ -484,6 +555,12 @@ class ToneMixer extends AudioWorkletProcessor {
       const n = v.segLen[v.seg];
       if (n <= 0) {
         v.level = v.segEnd[v.seg];
+        if (v.seg === SEG_SUSTAIN) {
+          if (v.freqTo > 0) v.freq = v.freqTo;
+          v.duty = v.dutyTo;
+          v.dutyStep = 0;
+          v.dutyLeft = 0;
+        }
         if (v.seg === SEG_SUSTAIN && v.hold) {
           v.segLeft = 1;
           v.slope = 0;
@@ -840,6 +917,10 @@ function tone(freq, duration, volume, flags)
         gl: [0.70710678, 1, 0][pan],
         gr: [0.70710678, 0, 1][pan],
     };
+    if (bootState) {
+        bootState.audio[ch].push(trigger);
+        return;
+    }
     if (!toneNodeReady) {
         parkedTriggers[ch] = trigger;
         return;
@@ -852,7 +933,11 @@ function tone(freq, duration, volume, flags)
 let instance = null;
 let memory = null;
 let mem8 = null;
-let prevButtons = 0;
+let loadGeneration = 0;
+let cartLoading = false;
+let pendingInstantiations = 0;
+let bootState = null;
+const DEFAULT_TITLE = "vex";
 
 // Cached view: rebuilding a Uint8Array on every text()/blit()/title() call
 // is pure GC churn, so only refresh when the instance changed (hot-reload)
@@ -888,7 +973,17 @@ function readCString(ptr)
 
 function title(ptr)
 {
-    document.title = readCString(ptr);
+    const value = readCString(ptr);
+
+    if (bootState)
+    {
+        bootState.title = value;
+        bootState.titleSet = true;
+    }
+    else
+    {
+        document.title = value;
+    }
 }
 
 //// Part 5: Core pixel routines
@@ -1514,62 +1609,176 @@ function text(ptr, x, y, color)
 
 //// Part 12: WASM host, env imports, loader, main loop
 
+function hostCall(fn)
+{
+    return (...args) => {
+        if (pendingInstantiations > 0 ||
+            (bootState && bootState.generation !== loadGeneration))
+            return undefined;
+        return fn(...args);
+    };
+}
+
 const env =
 {
-    cls,
-    pset,
-    rect,
-    rectb,
-    circ,
-    circb,
-    line,
-    tri,
-    trib,
-    blit,
-    blitm,
+    cls: hostCall(cls),
+    pset: hostCall(pset),
+    rect: hostCall(rect),
+    rectb: hostCall(rectb),
+    circ: hostCall(circ),
+    circb: hostCall(circb),
+    line: hostCall(line),
+    tri: hostCall(tri),
+    trib: hostCall(trib),
+    blit: hostCall(blit),
+    blitm: hostCall(blitm),
 
-    text,
-    title,
+    text: hostCall(text),
+    title: hostCall(title),
 
-    btn,
-    btnp,
-    mx,
-    my,
-    mbtn,
+    btn: hostCall(btn),
+    btnp: hostCall(btnp),
+    mx: hostCall(mx),
+    my: hostCall(my),
+    mbtn: hostCall(mbtn),
 
-    pal,
-    palreset,
+    pal: hostCall(pal),
+    palreset: hostCall(palreset),
 
-    tone
+    tone: hostCall(tone)
 };
 
 let rafId = null;
 
-async function instantiateCart(bytes)
+function snapshotCartState()
 {
-    const wasm = await WebAssembly.instantiate(bytes, {
-        env
-    });
-
-    if (!wasm.instance.exports.update)
-        throw new Error("cart has no update() export");
-
-    instance = wasm.instance;
-
-    updateMemoryViews();
-
-    // Reset palette + framebuffer *before* boot(), so any pal() overrides
-    // boot() makes survive into the main loop (matches the native host
-    // order: reset_palette() then boot()).
-    palreset();
-    clear();
-    clearAudio();
-
-    if (instance.exports.boot)
-        instance.exports.boot();
+    return {
+        instance,
+        memory,
+        mem8,
+        cachedBuffer,
+        palette: palette.slice(),
+        pixels: pixels.slice(),
+        title: document.title,
+        prevButtons,
+        pressedButtons,
+    };
 }
 
-async function loadCart(url)
+function restoreCartState(state)
+{
+    instance = state.instance;
+    memory = state.memory;
+    mem8 = state.mem8;
+    cachedBuffer = state.cachedBuffer;
+    palette.set(state.palette);
+    pixels.set(state.pixels);
+    document.title = state.title;
+    prevButtons = state.prevButtons;
+    pressedButtons = state.pressedButtons;
+}
+
+async function instantiateCart(bytes, generation = loadGeneration)
+{
+    if (generation !== loadGeneration)
+        return false;
+
+    cartLoading = true;
+    const previous = snapshotCartState();
+    const state = {
+        generation,
+        title: DEFAULT_TITLE,
+        titleSet: false,
+        audio: [[], [], [], []],
+    };
+    bootState = state;
+    pendingInstantiations++;
+    let wasm;
+    try
+    {
+        wasm = await WebAssembly.instantiate(bytes, {
+            env
+        });
+    }
+    catch (err)
+    {
+        pendingInstantiations--;
+        if (bootState === state)
+            bootState = null;
+        if (generation === loadGeneration || instance === previous.instance)
+            restoreCartState(previous);
+        if (generation === loadGeneration)
+            cartLoading = false;
+        throw err;
+    }
+    pendingInstantiations--;
+    const candidate = wasm.instance;
+
+    if (typeof candidate.exports.update !== "function")
+    {
+        if (bootState === state)
+            bootState = null;
+        if (generation === loadGeneration || instance === previous.instance)
+            restoreCartState(previous);
+        if (generation === loadGeneration)
+            cartLoading = false;
+        throw new Error("cart has no update() export");
+    }
+
+    if (generation !== loadGeneration)
+    {
+        if (bootState === state)
+            bootState = null;
+        if (instance === previous.instance)
+            restoreCartState(previous);
+        return false;
+    }
+
+    try
+    {
+        instance = candidate;
+        updateMemoryViews();
+        palreset();
+        clear();
+        prevButtons = 0;
+        pressedButtons = 0;
+
+        if (candidate.exports.boot)
+            candidate.exports.boot();
+
+        prevButtons = buttonMask();
+        pressedButtons = 0;
+        document.title = state.titleSet ? state.title : DEFAULT_TITLE;
+        clearAudio();
+        for (let ch = 0; ch < 4; ch++)
+        {
+            for (const trigger of state.audio[ch])
+            {
+                if (toneNodeReady)
+                    toneNode.port.postMessage(trigger);
+                else
+                    parkedTriggers[ch] = trigger;
+            }
+        }
+        present();
+        bootState = null;
+        cartLoading = false;
+        return true;
+    }
+    catch (err)
+    {
+        if (bootState === state)
+            bootState = null;
+        if (generation === loadGeneration || instance === previous.instance)
+            restoreCartState(previous);
+        if (generation === loadGeneration)
+            cartLoading = false;
+        present();
+        throw err;
+    }
+}
+
+async function loadCart(url, generation)
 {
     const res = await fetch(url);
 
@@ -1582,7 +1791,7 @@ async function loadCart(url)
     const src = new Uint8Array(await res.arrayBuffer());
     const bytes = new Uint8Array(src.length);
     bytes.set(src);
-    await instantiateCart(bytes.buffer);
+    return instantiateCart(bytes.buffer, generation);
 }
 
 function present()
@@ -1601,10 +1810,8 @@ function tick()
     instance.exports.update();
 
     // Capture button state for next frame's btnp().
-    prevButtons = 0;
-
-    for (let i = 0; i < 6; i++)
-        if (btn(i)) prevButtons |= (1 << i);
+    pressedButtons = 0;
+    prevButtons = buttonMask();
 }
 
 // Fixed 60 TPS driven by the wall clock, not one tick per rAF: browsers
@@ -1619,6 +1826,14 @@ let acc = 0;
 
 function frame(gen, now)
 {
+    if (cartLoading || pendingInstantiations > 0)
+    {
+        lastFrame = now;
+        acc = 0;
+        rafId = requestAnimationFrame(t => frame(gen, t));
+        return;
+    }
+
     if (lastFrame !== null) {
         let elapsed = now - lastFrame;
         if (elapsed > 250) elapsed = 0; // hidden tab gap: don't fast-forward
@@ -1666,14 +1881,19 @@ function run()
 
 export async function start(cartPath)
 {
+    const generation = ++loadGeneration;
+
     try
     {
-        await loadCart(cartPath);
+        const loaded = await loadCart(cartPath, generation);
 
-        run();
+        if (loaded)
+            run();
     }
     catch (err)
     {
+        if (generation === loadGeneration)
+            cartLoading = false;
         console.error("vex: failed to load cart:", err);
     }
 }
@@ -1681,9 +1901,14 @@ export async function start(cartPath)
 // Load a cart from raw bytes (e.g. a dropped .wasm file).
 export async function startBytes(bytes)
 {
-    await instantiateCart(bytes);
+    const generation = ++loadGeneration;
+    const loaded = await instantiateCart(bytes, generation);
+
+    if (!loaded)
+        return false;
 
     run();
+    return true;
 }
 
 //// Part 13: Drag-and-drop cart loading
@@ -1738,8 +1963,8 @@ window.addEventListener("drop", async e => {
 
     try
     {
-        await startBytes(await file.arrayBuffer());
-        document.title = file.name;
+        if (await startBytes(await file.arrayBuffer()))
+            document.title = file.name;
     }
     catch (err)
     {

@@ -278,3 +278,21 @@ func TestToneMixerMatchAcrossHosts(t *testing.T) {
 		}
 	}
 }
+
+func TestZeroSustainTargetsSnapAcrossHosts(t *testing.T) {
+	hosts := []struct {
+		name, source, start, end, seg, freq, duty string
+	}{
+		{"C", mustRead(t, "cmd/vex/main.c"), "if (n <= 0) {", "continue;", "v->seg == 2", "v->freq = v->freq_to", "v->duty = v->duty_to"},
+		{"Go", mustRead(t, "cmd/vex-run/main.go"), "if n <= 0 {", "\n\t\t\tcontinue\n", "v.seg == segSustain", "v.freq = v.freqTo", "v.duty = v.dutyTo"},
+		{"JS", mustRead(t, "cmd/vex-web/assets/vex.js"), "if (n <= 0) {", "continue;", "v.seg === SEG_SUSTAIN", "v.freq = v.freqTo", "v.duty = v.dutyTo"},
+	}
+	for _, host := range hosts {
+		branch := section(host.source, host.start, host.end)
+		for _, pin := range []string{host.seg, host.freq, host.duty} {
+			if !strings.Contains(branch, pin) {
+				t.Errorf("%s zero-length sustain does not snap %q", host.name, pin)
+			}
+		}
+	}
+}

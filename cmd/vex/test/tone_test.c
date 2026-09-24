@@ -27,8 +27,13 @@ static AudioStream LoadAudioStream(unsigned int rate, unsigned int size,
     AudioStream s = { .sampleRate = (int)rate };
     return s;
 }
+static float g_stream_volume;
 static void UnloadAudioStream(AudioStream s) { (void)s; }
 static void PlayAudioStream(AudioStream s) { (void)s; }
+static void SetAudioStreamVolume(AudioStream s, float volume) {
+    (void)s;
+    g_stream_volume = volume;
+}
 static void SetAudioStreamCallback(AudioStream s, void (*cb)(void*, unsigned int)) {
     (void)s; (void)cb;
 }
@@ -98,9 +103,10 @@ static double hz_between(unsigned from, unsigned to) {
 }
 
 int main(void) {
-    g_stream = LoadAudioStream(48000, 32, 2);
-    g_stream_ready = true;
     g_audio_ready = true;
+    ensure_stream();
+    CHECK("Raylib centered stereo attenuation is compensated",
+          g_stream_volume == 16.0f / 11.0f);
 
     // ---- duty cycle: 25% pulse flips at a quarter period --------------------
     // The engine pads zero-length attacks to 32 samples, so verify duty
@@ -238,6 +244,17 @@ int main(void) {
         fire_and_run(0, slide, 32 + 800 + 2);
         CHECK("slide reaches its target at sustain end",
               fabs(g_voice[0].freq - 880.0) < 1e-12);
+    }
+
+    {
+        ToneTrigger t = mk_pulse(220, 880, 0, 0, 0, 1);
+        t.duty = 32.0 / 255.0;
+        t.duty_to = 224.0 / 255.0;
+        fire_and_run(0, t, 33);
+        CHECK("zero-sustain slide reaches its target before release",
+              g_voice[0].seg == 3 && g_voice[0].freq == 880.0);
+        CHECK("zero-sustain PWM reaches its target before release",
+              g_voice[0].duty == t.duty_to && g_voice[0].duty_left == 0);
     }
 
     {

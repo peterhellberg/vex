@@ -21,6 +21,14 @@ func colorAt(g *Game, x, y int32) uint32 {
 	return g.frame[y*VEX_W+x]
 }
 
+func TestGameButtonsRejectInvalidIDs(t *testing.T) {
+	g := newTestGame()
+	g.uiReady = true
+	if g.btn(^uint32(0)) != 0 || g.btnp(^uint32(0)) != 0 {
+		t.Fatal("out-of-range button id was accepted")
+	}
+}
+
 func TestParse(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		in, cart, err := parse([]string{"game.wasm"})
@@ -217,6 +225,21 @@ func TestToneEngineSlideReachesTarget(t *testing.T) {
 	}
 	if e.voices[0].freq != 880 {
 		t.Fatalf("slide ended at %v Hz, want 880", e.voices[0].freq)
+	}
+}
+
+func TestToneEngineZeroSustainSnapsTargets(t *testing.T) {
+	e := &toneEngine{}
+	e.tone(220|(880<<16), 1<<8, 100, (1<<11)|(32<<12)|(224<<20))
+	if _, err := e.Read(make([]byte, 4*33)); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	v := &e.voices[0]
+	if v.seg != segRelease || v.freq != 880 {
+		t.Fatalf("zero-sustain slide = segment %d frequency %v, want release at 880", v.seg, v.freq)
+	}
+	if math.Abs(v.duty-224.0/255.0) > 1e-12 || v.dutyLeft != 0 {
+		t.Fatalf("zero-sustain PWM = width %g remaining %d, want target and complete", v.duty, v.dutyLeft)
 	}
 }
 

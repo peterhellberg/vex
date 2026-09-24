@@ -6,11 +6,12 @@ import (
 	// xgb logger override has to be installed by an earlier package init.
 	_ "github.com/peterhellberg/vex/cmd/vex-run/xgbquiet"
 
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"os"
 	"runtime"
@@ -25,11 +26,10 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
-	"golang.org/x/sys/unix"
 )
 
-//go:linkname hookOnBeforeUpdateHooks github.com/hajimehoshi/ebiten/v2/internal/hook.onBeforeUpdateHooks
-var hookOnBeforeUpdateHooks []func() error
+//go:linkname hookOnBeforeUpdateWithVMGuestInfoHooks github.com/hajimehoshi/ebiten/v2/internal/hook.onBeforeUpdateWithVMGuestInfoHooks
+var hookOnBeforeUpdateWithVMGuestInfoHooks []func(bool) error
 
 //go:linkname hookM github.com/hajimehoshi/ebiten/v2/internal/hook.m
 var hookM sync.Mutex
@@ -165,6 +165,37 @@ func parse(args []string) (in Input, cart string, _ error) {
 	return in, cart, nil
 }
 
+func readStableFile(path string) ([]byte, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		first, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		second, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.Equal(first, second) {
+			return first, nil
+		}
+	}
+	return nil, errors.New("file changed while reading")
+}
+
+func bytesSignature(data []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return h.Sum64()
+}
+
+func fileSignature(path string) uint64 {
+	data, err := readStableFile(path)
+	if err != nil {
+		return 0
+	}
+	return bytesSignature(data)
+}
+
 func run(args []string) error {
 	if runtime.GOOS == "darwin" {
 		defer filterStderr()()
@@ -176,7 +207,7 @@ func run(args []string) error {
 		return err
 	}
 
-	wasmBytes, err := os.ReadFile(cart)
+	wasmBytes, err := readStableFile(cart)
 	if err != nil {
 		return fmt.Errorf("read cart: %w", err)
 	}
@@ -212,9 +243,7 @@ func run(args []string) error {
 	game.cart = cart
 
 	game.watch = in.watch
-	if fi, _ := os.Stat(cart); fi != nil {
-		game.lastMod = fi.ModTime()
-	}
+	game.lastSignature = bytesSignature(wasmBytes)
 
 	ebiten.SetWindowSize(VEX_W*in.scale, VEX_H*in.scale)
 	ebiten.SetWindowTitle("vex")
@@ -247,19 +276,21 @@ type Game struct {
 	// separate byte stores.
 	palette [16]uint32
 
-	prevBtns uint8
+	prevBtns    uint8
+	pressedBtns uint8
+	windowTitle string
 
 	updateFn   api.Function
 	bootFn     api.Function
 	module     api.Module
 	bootCalled bool
 
-	runtime  wazero.Runtime
-	cart     string
-	watch    bool
-	lastMod  time.Time
-	pollTick int
-	instSeq  int
+	runtime       wazero.Runtime
+	cart          string
+	watch         bool
+	lastSignature uint64
+	pollTick      int
+	instSeq       int
 
 	// uiReady is set just before ebiten.RunGame starts. Input/window queries
 	// (btn, btnp, mx, my, mbtn) return zero until then, so a cart driven
@@ -284,9 +315,10 @@ type Game struct {
 func NewGame() *Game {
 	pixels := make([]byte, VEX_W*VEX_H*4)
 	g := &Game{
-		pixels: pixels,
-		frame:  unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
-		audio:  &toneEngine{},
+		pixels:      pixels,
+		frame:       unsafe.Slice((*uint32)(unsafe.Pointer(&pixels[0])), VEX_W*VEX_H),
+		windowTitle: "vex",
+		audio:       &toneEngine{},
 	}
 	// Audio on Linux needs ALSA; in headless/containers it may be missing.
 	// Fall back to silent (no audioCtx) instead of crashing the host.
@@ -302,6 +334,38 @@ func NewGame() *Game {
 	}()
 	g.palreset()
 	return g
+}
+
+type gameCartSnapshot struct {
+	palette     [16]uint32
+	pixels      []byte
+	windowTitle string
+	prevBtns    uint8
+	pressedBtns uint8
+	audioReady  bool
+}
+
+func (g *Game) snapshotCartState() gameCartSnapshot {
+	return gameCartSnapshot{
+		palette:     g.palette,
+		pixels:      append([]byte(nil), g.pixels...),
+		windowTitle: g.windowTitle,
+		prevBtns:    g.prevBtns,
+		pressedBtns: g.pressedBtns,
+		audioReady:  g.audioReady,
+	}
+}
+
+func (g *Game) restoreCartState(state gameCartSnapshot) {
+	g.palette = state.palette
+	copy(g.pixels, state.pixels)
+	g.windowTitle = state.windowTitle
+	g.prevBtns = state.prevBtns
+	g.pressedBtns = state.pressedBtns
+	g.audioReady = state.audioReady
+	if g.uiReady {
+		ebiten.SetWindowTitle(g.windowTitle)
+	}
 }
 
 func (g *Game) coordOK(v int32) bool {
@@ -798,11 +862,12 @@ func (g *Game) title(m api.Module, ptr uint32) {
 	if !g.uiReady {
 		return
 	}
-	ebiten.SetWindowTitle(readCString(m, ptr))
+	g.windowTitle = readCString(m, ptr)
+	ebiten.SetWindowTitle(g.windowTitle)
 }
 
 func (g *Game) btn(button uint32) uint32 {
-	if !g.uiReady || int(button) >= VEX_NUM_BTNS {
+	if !g.uiReady || button >= VEX_NUM_BTNS {
 		return 0
 	}
 
@@ -814,14 +879,16 @@ func (g *Game) btn(button uint32) uint32 {
 }
 
 func (g *Game) btnp(button uint32) uint32 {
-	if !g.uiReady || int(button) >= VEX_NUM_BTNS {
+	if !g.uiReady || button >= VEX_NUM_BTNS {
 		return 0
 	}
 
+	bit := uint8(1) << button
+	latched := g.pressedBtns&bit != 0
 	held := ebiten.IsKeyPressed(vexKeys[button])
 
 	prev := (g.prevBtns>>button)&1 != 0
-	if held && !prev {
+	if latched || (held && !prev) {
 		return 1
 	}
 
@@ -965,6 +1032,14 @@ func (v *toneVoice) nextSegment() {
 		n := v.segLen[v.seg]
 		if n <= 0 {
 			v.level = v.segEnd[v.seg]
+			if v.seg == segSustain {
+				if v.freqTo > 0 {
+					v.freq = v.freqTo
+				}
+				v.duty = v.dutyTo
+				v.dutyStep = 0
+				v.dutyLeft = 0
+			}
 			if v.seg == segSustain && v.hold {
 				v.segLeft = 1
 				v.slope = 0
@@ -1387,17 +1462,17 @@ func (e *toneEngine) Read(p []byte) (int, error) {
 func suppressAudioHookError() {
 	hookM.Lock()
 	defer hookM.Unlock()
-	if len(hookOnBeforeUpdateHooks) == 0 {
+	if len(hookOnBeforeUpdateWithVMGuestInfoHooks) == 0 {
 		return
 	}
 	if audioHookSuppressed {
 		return
 	}
-	orig := append([]func() error(nil), hookOnBeforeUpdateHooks...)
-	hookOnBeforeUpdateHooks = []func() error{
-		func() error {
+	orig := append([]func(bool) error(nil), hookOnBeforeUpdateWithVMGuestInfoHooks...)
+	hookOnBeforeUpdateWithVMGuestInfoHooks = []func(bool) error{
+		func(vmGuest bool) error {
 			for _, h := range orig {
-				if err := h(); err != nil {
+				if err := h(vmGuest); err != nil {
 					msg := err.Error()
 					// Be permissive: any error from the audio hook is
 					// treated as non-fatal. Log it once so the user
@@ -1478,6 +1553,12 @@ func (g *Game) initCart(ctx context.Context, bootFn api.Function) error {
 	wasAudioReady := g.audioReady
 	g.palreset()
 	g.cls(0)
+	g.prevBtns = 0
+	g.pressedBtns = 0
+	g.windowTitle = "vex"
+	if g.uiReady {
+		ebiten.SetWindowTitle(g.windowTitle)
+	}
 
 	if bootFn != nil {
 		if _, err := bootFn.Call(ctx); err != nil {
@@ -1486,6 +1567,13 @@ func (g *Game) initCart(ctx context.Context, bootFn api.Function) error {
 		}
 	}
 	g.audioReady = true
+	g.prevBtns = 0
+	for i := range VEX_NUM_BTNS {
+		if ebiten.IsKeyPressed(vexKeys[i]) {
+			g.prevBtns |= uint8(1) << i
+		}
+	}
+	g.pressedBtns = 0
 
 	return nil
 }
@@ -1511,20 +1599,14 @@ func (g *Game) Update() error {
 		g.pollTick++
 		if g.pollTick >= 30 {
 			g.pollTick = 0
-			if fi, err := os.Stat(g.cart); err == nil {
-				if m := fi.ModTime(); !m.Equal(g.lastMod) {
-					reload = true
-				}
+			if signature := fileSignature(g.cart); signature != 0 && signature != g.lastSignature {
+				reload = true
 			}
 		}
 	}
 
 	if reload {
-		if err := g.reloadCart(context.Background()); err == nil {
-			if fi, _ := os.Stat(g.cart); fi != nil {
-				g.lastMod = fi.ModTime()
-			}
-		} else {
+		if err := g.reloadCart(context.Background()); err != nil {
 			fmt.Fprintf(os.Stderr, "vex: reload: %v\n", err)
 		}
 	}
@@ -1536,6 +1618,11 @@ func (g *Game) Update() error {
 		}
 	}
 	g.ensureAudio()
+	for i := range VEX_NUM_BTNS {
+		if inpututil.IsKeyJustPressed(vexKeys[i]) {
+			g.pressedBtns |= uint8(1) << i
+		}
+	}
 
 	_, err := g.updateFn.Call(context.Background())
 	if err != nil {
@@ -1543,6 +1630,7 @@ func (g *Game) Update() error {
 	}
 
 	g.prevBtns = 0
+	g.pressedBtns = 0
 
 	for i := range VEX_NUM_BTNS {
 		if ebiten.IsKeyPressed(vexKeys[i]) {
@@ -1562,42 +1650,52 @@ func (g *Game) Layout(_, _ int) (int, int) {
 }
 
 func (g *Game) reloadCart(ctx context.Context) error {
-	wasmBytes, err := os.ReadFile(g.cart)
+	wasmBytes, err := readStableFile(g.cart)
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
 
+	previous := g.snapshotCartState()
+	g.audioReady = false
 	g.instSeq++
 
 	module, err := g.runtime.InstantiateWithConfig(ctx, wasmBytes,
 		wazero.NewModuleConfig().WithName(fmt.Sprintf("cart_%d", g.instSeq)))
 	if err != nil {
+		g.restoreCartState(previous)
 		return fmt.Errorf("instantiate: %w", err)
 	}
 
 	updateFn := module.ExportedFunction("update")
 	if updateFn == nil {
 		module.Close(ctx)
+		g.restoreCartState(previous)
 		return fmt.Errorf("no update() export")
 	}
 
 	bootFn := module.ExportedFunction("boot")
 
-	oldPalette := g.palette
-	g.audio.clear()
+	g.audioReady = false
 	if err := g.initCart(ctx, bootFn); err != nil {
-		g.palette = oldPalette
-
+		g.restoreCartState(previous)
 		module.Close(ctx)
-
 		return err
 	}
+	current, err := readStableFile(g.cart)
+	if err != nil || !bytes.Equal(current, wasmBytes) {
+		g.restoreCartState(previous)
+		module.Close(ctx)
+		return errors.New("cart changed during boot")
+	}
 
+	g.audio.clear()
+	g.audioReady = previous.audioReady
 	g.module.Close(ctx)
 	g.module = module
 	g.updateFn = updateFn
 	g.bootFn = bootFn
 	g.bootCalled = true
+	g.lastSignature = bytesSignature(wasmBytes)
 
 	return nil
 }
@@ -1680,38 +1778,4 @@ func readCString(m api.Module, ptr uint32) string {
 	}
 
 	return string(data[:end])
-}
-
-// filterStderr swaps fd 2 for a pipe and forwards everything except the
-// given noise lines to the original stderr. Uses golang.org/x/sys/unix so it
-// also compiles on darwin/arm64, where syscall.Dup2 doesn't exist.
-func filterStderr() (restore func()) {
-	orig, _ := unix.Dup(2)
-
-	r, w, _ := os.Pipe()
-	unix.Dup2(int(w.Fd()), 2)
-
-	os.Stderr = os.NewFile(uintptr(2), "/dev/stderr")
-
-	go func() {
-		sc := bufio.NewScanner(r)
-		for sc.Scan() {
-			line := sc.Text()
-			if strings.Contains(line, "[CAMetalLayer nextDrawable]") {
-				continue
-			}
-
-			unix.Write(orig, []byte(line+"\n"))
-		}
-	}()
-
-	return func() {
-		unix.Dup2(orig, 2)
-
-		os.Stderr = os.NewFile(uintptr(2), "/dev/stderr")
-
-		w.Close()
-		r.Close()
-		unix.Close(orig)
-	}
 }

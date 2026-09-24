@@ -102,9 +102,15 @@ async function runFor(browser, label, w, h, url) {
     console.log(`\n=== ${label} (${w}x${h}) ===`);
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, hasTouch: true });
     const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', err => pageErrors.push(err.message));
     await page.goto(url);
     // Give the cart a moment to start drawing before we snapshot.
     await page.waitForTimeout(400);
+
+    const bootFailed = await page.locator('body > pre').count() > 0;
+    check('cart booted without page errors', !bootFailed && pageErrors.length === 0,
+        pageErrors.join('; '));
 
     const gamepadVisible = await page.evaluate(() => {
         const el = document.getElementById('gamepad');
