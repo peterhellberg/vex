@@ -29,7 +29,6 @@ import (
 	"archive/zip"
 	"bytes"
 	_ "embed"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -393,8 +392,9 @@ func writeBundle(cart string, stdout io.Writer) error {
 		return errors.New("invalid cart name")
 	}
 
+	cacheBuster := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	files := []bundleFile{
-		{"index.html", bundleIndexHTML(wasm)},
+		{"index.html", bundleIndexHTML(cartFile, cacheBuster)},
 		{cartFile, wasm},
 	}
 
@@ -462,9 +462,9 @@ func bundleSrcFiles() ([]bundleFile, error) {
 	return files, err
 }
 
-// bundleIndexHTML returns a static copy of the embedded index.html with the
-// cart bytes inlined, so the page works from file:// without fetch or a server.
-func bundleIndexHTML(wasm []byte) []byte {
+// bundleIndexHTML returns a static copy of the embedded index.html that loads
+// cartFile directly. cacheBuster is appended to avoid stale wasm from caches.
+func bundleIndexHTML(cartFile, cacheBuster string) []byte {
 	const (
 		startTag = `<script type="module">`
 		endTag   = "</script>"
@@ -483,7 +483,6 @@ func bundleIndexHTML(wasm []byte) []byte {
 	}
 	j += i + len(endTag)
 
-	encoded := base64.StdEncoding.EncodeToString(wasm)
 	script := startTag + "\n" + string(vexJS) + "\n\n" +
 		`function updateOrientation() {` + "\n" +
 		`  const ratio = window.innerWidth / window.innerHeight;` + "\n" +
@@ -504,13 +503,7 @@ func bundleIndexHTML(wasm []byte) []byte {
 		`  setupGamepad();` + "\n" +
 		`} catch (e) { showError(e); }` + "\n" +
 		`window.addEventListener("load", () => {` + "\n" +
-		`  try {` + "\n" +
-		`    const data = atob(` + strconv.Quote(encoded) + `);` + "\n" +
-		`    const bytes = new Uint8Array(data.length);` + "\n" +
-		`    for (let i = 0; i < data.length; i++)` + "\n" +
-		`      bytes[i] = data.charCodeAt(i);` + "\n" +
-		`    startBytes(bytes.buffer).catch(showError);` + "\n" +
-		`  } catch (e) { showError(e); }` + "\n" +
+		`  start(` + strconv.Quote(cartFile+"?v="+cacheBuster) + `).catch(showError);` + "\n" +
 		`});` + "\n" +
 		endTag
 
