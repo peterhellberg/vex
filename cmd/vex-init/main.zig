@@ -178,6 +178,10 @@ const build_zig_tmpl =
     \\                    .name = "vex",
     \\                    .module = vex.module("vex"),
     \\                }},
+    \\                .{{
+    \\                    .name = "mus",
+    \\                    .module = vex.module("mus"),
+    \\                }},
     \\                // The `spr` module (comptime PNG/sprite decoder) is also
     \\                // exposed by the SDK. Uncomment to import it from
     \\                // src/cart.zig (and add `const spr = @import("spr");`).
