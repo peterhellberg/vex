@@ -61,11 +61,11 @@ pub fn main(init: std.process.Init) !void {
             \\
             \\Next steps:
             \\  cd {s}
-            \\  zig build run     # build the cart and run it in vex-run
+            \\  zig build run     # build the cart and run it in vex
             \\  zig build web     # build the cart and serve it with vex-web
             \\  zig build bundle  # write a static bundle/ ready to upload
             \\
-            \\(these steps need the vex-run and vex-web binaries on your PATH)
+            \\(these steps need the vex and vex-web binaries on your PATH)
             \\
         , .{dir_path});
     } else {
@@ -74,7 +74,7 @@ pub fn main(init: std.process.Init) !void {
             \\vex-init: could not run `zig fetch` automatically. Finish manually:
             \\  cd {s}
             \\  zig fetch --save {s}
-            \\  zig build run    # then run it in vex-run (or `zig build web`)
+            \\  zig build run    # then run it in vex (or `zig build web`)
             \\
         , .{ dir_path, VEX_URL });
     }
@@ -192,21 +192,21 @@ const build_zig_tmpl =
     \\    cart.rdynamic = true; // export boot()/update()
     \\    b.installArtifact(cart);
     \\
-    \\    // run/web point vex-run and vex-web at the *installed* wasm
+    \\    // run/web point vex and vex-web at the *installed* wasm
     \\    // (zig-out/bin/<name>.wasm) -- a stable path, unlike the build cache. Run
-    \\    // `zig build --watch` in another terminal to rebuild on every edit; vex-run
-    \\    // (started with -watch) and vex-web both reload it automatically. Both
+    \\    // `zig build --watch` in another terminal to rebuild on every edit; vex
+    \\    // (started with -w) and vex-web both reload it automatically. Both
     \\    // tools must be on your PATH (e.g. via `make install` in the vex repo).
     \\    const wasm = b.getInstallPath(.bin, cart.out_filename);
     \\
-    \\    // `zig build run` builds + installs the cart and runs it in vex-run, the
-    \\    // pure-Go native host (no raylib/wasm3, no X11 dev headers required).
-    \\    // --watch makes a concurrent `zig build --watch` reload it automatically.
-    \\    const run = b.addSystemCommand(&.{{ "vex-run", "-watch" }});
+    \\    // `zig build run` builds + installs the cart and runs it in vex, the
+    \\    // native C host (raylib/wasm3; requires its native build dependencies).
+    \\    // -w makes a concurrent `zig build --watch` reload it automatically.
+    \\    const run = b.addSystemCommand(&.{{ "vex", "-w" }});
     \\    run.addArg(wasm);
     \\    run.step.dependOn(b.getInstallStep());
     \\    if (b.args) |args| run.addArgs(args);
-    \\    b.step("run", "Build the cart and run it in vex-run").dependOn(&run.step);
+    \\    b.step("run", "Build the cart and run it in vex").dependOn(&run.step);
     \\
     \\    // `zig build web` builds + installs the cart and serves it via vex-web.
     \\    const web = b.addSystemCommand(&.{{"vex-web"}});
