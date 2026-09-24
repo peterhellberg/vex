@@ -261,9 +261,14 @@ vex-init mygame      # creates mygame/ (src/cart.zig, build.zig, build.zig.zon, 
                      # and runs `zig fetch --save` to pin the vex dependency
 cd mygame
 zig build            # builds zig-out/bin/mygame.wasm
-
+zig build run        # build, install, and run via vex -w
+# or run the installed cart directly:
 vex zig-out/bin/mygame.wasm
 ```
+
+The generated `build.zig` provides `run`, `web`, and `bundle` steps. The
+`run` step invokes the installed `vex` host with watch enabled, so a
+concurrent `zig build --watch` reloads the cart automatically.
 
 `vex-init` fetches the vex dependency for you (`zig fetch --save`); 
 if that step can't run it prints the command to finish manually. 
