@@ -430,10 +430,25 @@ function clearKeyboard()
     prevButtons = buttonMask();
 }
 
-window.addEventListener("blur", clearKeyboard);
+function pauseForInactiveWindow()
+{
+    clearKeyboard();
+    if (audioCtx) audioCtx.suspend();
+}
+
+function resumeForActiveWindow()
+{
+    if (audioCtx && !document.hidden && document.visibilityState !== "hidden")
+        audioCtx.resume();
+}
+
+window.addEventListener("blur", pauseForInactiveWindow);
+window.addEventListener("focus", resumeForActiveWindow);
 document.addEventListener("visibilitychange", () => {
     if (document.hidden || document.visibilityState === "hidden")
-        clearKeyboard();
+        pauseForInactiveWindow();
+    else
+        resumeForActiveWindow();
 });
 
 function mx()
