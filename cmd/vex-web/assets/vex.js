@@ -1095,17 +1095,18 @@ function title(ptr)
 
 //// Part 5: Core pixel routines
 
+// pset with the colour already resolved. For callers that draw many points in
+// one colour (circb), resolving palette[color & 15] once per call instead of
+// once per point is most of the work saved.
+function putc(px, py, c)
+{
+    if (px >= 0 && px < VEX_W && py >= 0 && py < VEX_H)
+        pixels32[py * VEX_W + px] = c;
+}
+
 function pset(x, y, color)
 {
-    if (
-        x < 0 ||
-        x >= VEX_W ||
-        y < 0 ||
-        y >= VEX_H
-    )
-        return;
-
-    pixels32[y * VEX_W + x] = palette[color & 15];
+    putc(x, y, palette[color & 15]);
 }
 
 function cls(color)
@@ -1135,33 +1136,50 @@ function line(x0, y0, x1, y1, color)
     )
         return;
 
-    let dx = Math.abs(x1 - x0);
+    // Bresenham, transliterated from the C host's host_bresenham(), which is
+    // the reference implementation (the Go host's line() is the same code).
+    //
+    // Both comparisons are strict on purpose. This used to keep a negated dy
+    // and test e2 >= dy / e2 <= dx, which is algebraically the same recurrence
+    // but breaks exact half-pixel ties the other way: a step landed on the
+    // opposite side of the crossing from the native hosts, putting stray
+    // single pixels along line() and trib() edges. Keep the three in step.
+    let dx = x1 > x0 ? x1 - x0 : x0 - x1;
     let sx = x0 < x1 ? 1 : -1;
 
-    let dy = -Math.abs(y1 - y0);
+    let dy = y1 > y0 ? y1 - y0 : y0 - y1;
     let sy = y0 < y1 ? 1 : -1;
 
-    let err = dx + dy;
+    let err = dx - dy;
+
+    // Colour and row base resolved once: pset() re-derived both on every pixel,
+    // which is the bulk of this loop's work at line-length spans. Same store,
+    // same bounds test, so the pixels are unchanged.
+    const c = palette[color & 15];
+    let base = y0 * VEX_W;
+    const ystep = sy * VEX_W;
 
     while (true)
     {
-        pset(x0, y0, color);
+        if (x0 >= 0 && x0 < VEX_W && y0 >= 0 && y0 < VEX_H)
+            pixels32[base + x0] = c;
 
         if (x0 === x1 && y0 === y1)
             break;
 
-        let e2 = err << 1;
+        const e2 = err * 2;
 
-        if (e2 >= dy)
+        if (e2 > -dy)
         {
-            err += dy;
+            err -= dy;
             x0 += sx;
         }
 
-        if (e2 <= dx)
+        if (e2 < dx)
         {
             err += dx;
             y0 += sy;
+            base += ystep;
         }
     }
 }
@@ -1169,6 +1187,18 @@ function line(x0, y0, x1, y1, color)
 // =========================================================================
 // rect()
 // =========================================================================
+
+// Row loop for a box that is already clipped to [x0,x1) x [y0,y1), with the
+// colour already resolved. The row base is carried forward instead of
+// recomputed, and the colour is not re-looked-up per row.
+function fillRows(x0, y0, x1, y1, c)
+{
+    const w = x1 - x0;
+    let start = y0 * VEX_W + x0;
+
+    for (let yy = y0; yy < y1; yy++, start += VEX_W)
+        pixels32.fill(c, start, start + w);
+}
 
 function rect(x, y, w, h, color)
 {
@@ -1181,25 +1211,50 @@ function rect(x, y, w, h, color)
     if (w > VEX_W) w = VEX_W;
     if (h > VEX_H) h = VEX_H;
 
-    let x0 = Math.max(0, x);
-    let y0 = Math.max(0, y);
+    // Branches rather than Math.max/Math.min: rect() is called tens of
+    // thousands of times per frame by fill-heavy carts.
+    const x0 = x < 0 ? 0 : x;
+    const y0 = y < 0 ? 0 : y;
+    const x1 = x + w > VEX_W ? VEX_W : x + w;
+    const y1 = y + h > VEX_H ? VEX_H : y + h;
 
-    let x1 = Math.min(VEX_W, x + w);
-    let y1 = Math.min(VEX_H, y + h);
+    if (x1 <= x0)
+        return;
 
-    const c = palette[color & 15];
-    const span = x1 - x0;
-    if (span <= 0) return;
-    for (let yy = y0; yy < y1; yy++)
-    {
-        const start = yy * VEX_W + x0;
-        pixels32.fill(c, start, start + span);
-    }
+    fillRows(x0, y0, x1, y1, palette[color & 15]);
 }
 
 // =========================================================================
 // rectb()
 // =========================================================================
+
+// A vertical run, clipped, one store per row -- the counterpart to span() for
+// rectb()'s side edges.
+function vspan(x, y0, y1, c)
+{
+    if (x < 0 || x >= VEX_W)
+        return;
+
+    if (y0 > y1)
+    {
+        let t = y0;
+        y0 = y1;
+        y1 = t;
+    }
+
+    if (y1 < 0 || y0 >= VEX_H)
+        return;
+
+    if (y0 < 0)
+        y0 = 0;
+    if (y1 >= VEX_H)
+        y1 = VEX_H - 1;
+
+    let i = y0 * VEX_W + x;
+
+    for (let yy = y0; yy <= y1; yy++, i += VEX_W)
+        pixels32[i] = c;
+}
 
 function rectb(x, y, w, h, color)
 {
@@ -1212,17 +1267,23 @@ function rectb(x, y, w, h, color)
     if (w > VEX_W) w = VEX_W;
     if (h > VEX_H) h = VEX_H;
 
-    rect(x, y, w, 1, color);
+    // Four clipped runs rather than four rect() calls: a box used to pay four
+    // full validations and clamps for the same pixels. The edges stay in
+    // unclipped coordinates, so an edge that falls off-screen is still dropped
+    // rather than snapped to the border.
+    const c = palette[color & 15];
+
+    span(x, x + w - 1, y, c);
 
     if (h > 1)
-        rect(x, y + h - 1, w, 1, color);
+        span(x, x + w - 1, y + h - 1, c);
 
     if (h > 2)
     {
-        rect(x, y + 1, 1, h - 2, color);
+        vspan(x, y + 1, y + h - 2, c);
 
         if (w > 1)
-            rect(x + w - 1, y + 1, 1, h - 2, color);
+            vspan(x + w - 1, y + 1, y + h - 2, c);
     }
 }
 
@@ -1248,6 +1309,8 @@ function circ(cx, cy, r, color)
     if (cx < -B || cx > B || cy < -B || cy > B)
         return;
 
+    const c = palette[color & 15];
+
     let x = r;
     let y = 0;
     let err = 0;
@@ -1255,10 +1318,10 @@ function circ(cx, cy, r, color)
     while (x >= y)
     {
         // horizontal spans for fill (faster + consistent)
-        hline(cx - x, cx + x, cy + y, color);
-        hline(cx - y, cx + y, cy + x, color);
-        hline(cx - x, cx + x, cy - y, color);
-        hline(cx - y, cx + y, cy - x, color);
+        span(cx - x, cx + x, cy + y, c);
+        span(cx - y, cx + y, cy + x, c);
+        span(cx - x, cx + x, cy - y, c);
+        span(cx - y, cx + y, cy - x, c);
 
         y++;
 
@@ -1274,8 +1337,11 @@ function circ(cx, cy, r, color)
     }
 }
 
-// helper: horizontal line span (used by circ)
-function hline(x0, x1, y, color)
+// A filled horizontal run of one already-resolved colour, clipped to the
+// framebuffer. Takes the colour rather than a palette index so the callers
+// that fill many runs in one colour (circ, tri, rectb) resolve the palette
+// entry once per call instead of once per run.
+function span(x0, x1, y, c)
 {
     if (y < 0 || y >= VEX_H)
         return;
@@ -1290,10 +1356,13 @@ function hline(x0, x1, y, color)
     if (x1 < 0 || x0 >= VEX_W)
         return;
 
-    x0 = Math.max(0, x0);
-    x1 = Math.min(VEX_W - 1, x1);
+    // Plain comparisons rather than Math.max/Math.min: this runs once per row
+    // of every circle and triangle, and the clamping is on the hot path.
+    if (x0 < 0)
+        x0 = 0;
+    if (x1 >= VEX_W)
+        x1 = VEX_W - 1;
 
-    const c = palette[color & 15];
     const start = y * VEX_W + x0;
     pixels32.fill(c, start, start + (x1 - x0 + 1));
 }
@@ -1317,20 +1386,24 @@ function circb(cx, cy, r, color)
     if (cx < -B || cx > B || cy < -B || cy > B)
         return;
 
+    // One palette lookup for the whole circle: pset() per point meant 8 lookups
+    // per iteration for 8 pixels of the same colour.
+    const c = palette[color & 15];
+
     let x = r;
     let y = 0;
     let err = 0;
 
     while (x >= y)
     {
-        pset(cx + x, cy + y, color);
-        pset(cx + y, cy + x, color);
-        pset(cx - y, cy + x, color);
-        pset(cx - x, cy + y, color);
-        pset(cx - x, cy - y, color);
-        pset(cx - y, cy - x, color);
-        pset(cx + y, cy - x, color);
-        pset(cx + x, cy - y, color);
+        putc(cx + x, cy + y, c);
+        putc(cx + y, cy + x, c);
+        putc(cx - y, cy + x, c);
+        putc(cx - x, cy + y, c);
+        putc(cx - x, cy - y, c);
+        putc(cx - y, cy - x, c);
+        putc(cx + y, cy - x, c);
+        putc(cx + x, cy - y, c);
 
         y++;
 
@@ -1525,10 +1598,15 @@ function tri(x1,y1,x2,y2,x3,y3,color)
     addTriEdge(x2, y2, x3, y3, ymin, triL, triR);
     addTriEdge(x3, y3, x1, y1, ymin, triL, triR);
 
+    // One colour for every row: the per-row helper used to re-resolve
+    // palette[color & 15] on each call, which for a tall triangle is most of
+    // the per-row cost.
+    const c = palette[color & 15];
+
     for (let i = 0; i < n; i++)
     {
         if (triL[i] <= triR[i])
-            hline(triL[i], triR[i], ymin + i, color);
+            span(triL[i], triR[i], ymin + i, c);
     }
 }
 
