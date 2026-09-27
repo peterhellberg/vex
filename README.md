@@ -223,6 +223,16 @@ Arrow keys, `Z`, and `X` map to `btn()` and `btnp()`, and the mouse maps to
 `mx()`/`my()`/`mbtn()`, just like the native host.
 
 > [!Tip]
+> **Physical gamepads work too**, with the same bindings as the C host: the
+> d-pad drives the arrows, `Z`/`X` are on the bottom and right face buttons
+> _(Xbox `A`/`B`, PS `Cross`/`Circle`)_ or the matching shoulders, and the
+> left stick snaps to a direction past 30% of travel. Pads are picked up via
+> the browser [Gamepad API](https://developer.mozilla.org/docs/Web/API/Gamepad_API),
+> so click or press a key once first — browsers keep gamepads hidden until the
+> page has been interacted with. Only pads reporting the `standard` mapping are
+> used, since other layouts have browser-specific button numbering.
+
+> [!Tip]
 > **Drag and drop** any `.wasm` onto the page to load it in place of the
 > default cart — handy for trying a build without restarting the server.
 
@@ -428,7 +438,7 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
 - **Display** — 320×180 framebuffer, scaled to the window with nearest-neighbour filtering.
 - **Palette** — 16 colors ([SWEETIE-16](https://lospec.com/palette-list/sweetie-16)), overridable at runtime via `pal()`.
 - **Frame rate** — 60 fps; carts export `update()` (per frame) and optionally `boot()` (once at start).
-- **Input** — 6 buttons (arrow keys + `Z`/`X`, or a gamepad's d-pad, left stick, and two face buttons) and the mouse (position + 3 buttons).
+- **Input** — 6 buttons (arrow keys + `Z`/`X`, or a gamepad's d-pad, left stick, and two face buttons) and the mouse (position + 3 buttons). Gamepads work in the C and web hosts; the web host also shows an on-screen pad in portrait.
 - **Cart** — any `wasm32` module that exports `update()` and imports the API from `env`.
 
 ### Drawing & input

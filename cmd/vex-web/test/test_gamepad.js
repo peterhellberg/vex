@@ -44,15 +44,22 @@ function approxEq(a, b, tol) {
 
 // ---- static file server for the bundle -----------------------------------
 
-// `serveDir(dir)` returns a tiny HTTP server bound to an ephemeral port,
+// `serveDir(dir, extra)` returns a tiny HTTP server bound to an ephemeral port,
 // plus the URL it ended up listening on. Used to serve the freshly
 // built bundle so the test never hits a stale copy from a previous run.
-function serveDir(dir) {
+//
+// `extra` maps URL paths to files outside the bundle, as {path: file}.
+// A bundle inlines vex.js into index.html rather than shipping it, so
+// '/vex.js' is served from the source tree to let a test import the module
+// and reach its exported helpers. It loads a second copy of the module into
+// the page, which is harmless here: the gamepad checks use their own page and
+// only read pure functions.
+function serveDir(dir, extra = {}) {
     return new Promise((resolve) => {
         const server = http.createServer((req, res) => {
             let urlPath = req.url.split('?')[0];
             if (urlPath === '/') urlPath = '/index.html';
-            const filePath = path.join(dir, urlPath);
+            const filePath = extra[urlPath] || path.join(dir, urlPath);
             fs.readFile(filePath, (err, data) => {
                 if (err) {
                     res.statusCode = 404;
@@ -94,6 +101,99 @@ function buildBundle(cart) {
     const m = out.match(/wrote bundle (\S+) and /);
     if (!m) throw new Error(`could not parse bundle output: ${out}`);
     return path.resolve(repoRoot, m[1]);
+}
+
+// ---- browser Gamepad API mapping ----------------------------------------
+
+// The real-pad path is pure: gamepadMaskOf(pad) -> cart button mask. Chromium
+// has no scriptable way to attach a physical pad, so the pad is stubbed and the
+// exported mapper is called directly. Button bits: 1 left, 2 right, 4 up,
+// 8 down, 16 Z, 32 X.
+async function runGamepadApiChecks(browser, url) {
+    console.log('\n=== Gamepad API mapping ===');
+    const ctx = await browser.newContext({ viewport: { width: 844, height: 390 } });
+    const page = await ctx.newPage();
+    const pageErrors = [];
+    page.on('pageerror', err => pageErrors.push(err.message));
+
+    // Count getGamepads() calls so we can prove the frame loop actually polls.
+    await page.addInitScript(() => {
+        window.__padPolls = 0;
+        const real = navigator.getGamepads.bind(navigator);
+        navigator.getGamepads = function () {
+            window.__padPolls++;
+            return real();
+        };
+    });
+
+    await page.goto(url);
+    await page.waitForTimeout(400);
+
+    const m = await page.evaluate(async () => {
+        const { gamepadMaskOf } = await import('./vex.js');
+        // A standard-mapping pad: pressed button indices plus a stick position.
+        const pad = (pressed, x = 0, y = 0) => ({
+            mapping: 'standard',
+            connected: true,
+            buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: pressed.includes(i) })),
+            axes: [x, y, 0, 0],
+        });
+        return {
+            idle: gamepadMaskOf(pad([])),
+            dpadUp: gamepadMaskOf(pad([12])),
+            dpadDown: gamepadMaskOf(pad([13])),
+            dpadLeft: gamepadMaskOf(pad([14])),
+            dpadRight: gamepadMaskOf(pad([15])),
+            faceA: gamepadMaskOf(pad([0])),
+            faceB: gamepadMaskOf(pad([1])),
+            shoulderL: gamepadMaskOf(pad([4])),
+            shoulderR: gamepadMaskOf(pad([5])),
+            unassigned: gamepadMaskOf(pad([3, 8, 11])),
+            stickUp: gamepadMaskOf(pad([], 0, -0.9)),
+            stickDown: gamepadMaskOf(pad([], 0, 0.9)),
+            stickLeft: gamepadMaskOf(pad([], -0.9, 0)),
+            stickRight: gamepadMaskOf(pad([], 0.9, 0)),
+            justPastDeadzone: gamepadMaskOf(pad([], -0.35, 0)),
+            drift: gamepadMaskOf(pad([], 0.1, -0.2)),
+            diagonal: gamepadMaskOf(pad([], -0.9, -0.9)),
+            dpadPlusStick: gamepadMaskOf(pad([13], 1, 0)),
+            noMapping: gamepadMaskOf({ ...pad([0, 12]), mapping: '' }),
+            disconnected: gamepadMaskOf({ ...pad([0, 12]), connected: false }),
+            nullPad: gamepadMaskOf(null),
+            shortButtons: gamepadMaskOf({ mapping: 'standard', connected: true, buttons: [], axes: [] }),
+            polls: window.__padPolls,
+        };
+    });
+
+    check('page errors while polling pads', pageErrors.length === 0, pageErrors.join('; '));
+    check('frame loop polls getGamepads', m.polls > 0, `${m.polls} calls`);
+
+    check('idle pad reads nothing', m.idle === 0, `mask=${m.idle}`);
+    check('d-pad up -> up', m.dpadUp === 4, `mask=${m.dpadUp}`);
+    check('d-pad down -> down', m.dpadDown === 8, `mask=${m.dpadDown}`);
+    check('d-pad left -> left', m.dpadLeft === 1, `mask=${m.dpadLeft}`);
+    check('d-pad right -> right', m.dpadRight === 2, `mask=${m.dpadRight}`);
+    check('face A -> Z', m.faceA === 16, `mask=${m.faceA}`);
+    check('face B -> X', m.faceB === 32, `mask=${m.faceB}`);
+    check('left shoulder -> Z', m.shoulderL === 16, `mask=${m.shoulderL}`);
+    check('right shoulder -> X', m.shoulderR === 32, `mask=${m.shoulderR}`);
+    check('unassigned buttons ignored', m.unassigned === 0, `mask=${m.unassigned}`);
+
+    check('stick up -> up', m.stickUp === 4, `mask=${m.stickUp}`);
+    check('stick down -> down', m.stickDown === 8, `mask=${m.stickDown}`);
+    check('stick left -> left', m.stickLeft === 1, `mask=${m.stickLeft}`);
+    check('stick right -> right', m.stickRight === 2, `mask=${m.stickRight}`);
+    check('stick just past deadzone registers', m.justPastDeadzone === 1, `mask=${m.justPastDeadzone}`);
+    check('resting stick drift ignored', m.drift === 0, `mask=${m.drift}`);
+    check('diagonal sets two arrows', m.diagonal === 5, `mask=${m.diagonal}`);
+    check('d-pad and stick combine', m.dpadPlusStick === 10, `mask=${m.dpadPlusStick}`);
+
+    check('non-standard pad ignored', m.noMapping === 0, `mask=${m.noMapping}`);
+    check('disconnected pad ignored', m.disconnected === 0, `mask=${m.disconnected}`);
+    check('null pad slot ignored', m.nullPad === 0, `mask=${m.nullPad}`);
+    check('pad with empty arrays ignored', m.shortButtons === 0, `mask=${m.shortButtons}`);
+
+    await ctx.close();
 }
 
 // ---- per-viewport test ----------------------------------------------------
@@ -238,12 +338,15 @@ async function runFor(browser, label, w, h, url) {
     const bundleDir = buildBundle(CART);
     console.log(`bundle ready: ${bundleDir}`);
 
-    const { server, url } = await serveDir(bundleDir);
+    const { server, url } = await serveDir(bundleDir, {
+        '/vex.js': path.join(__dirname, '..', 'assets', 'vex.js'),
+    });
 
     let exitCode = 0;
     try {
         const browser = await chromium.launch();
 
+        await runGamepadApiChecks(browser, url);
         await runFor(browser, 'iPhone_SE',     375, 667, url);
         await runFor(browser, 'iPhone_12',     390, 844, url);
         await runFor(browser, 'iPhone_ProMax', 430, 932, url);

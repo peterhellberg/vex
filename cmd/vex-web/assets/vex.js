@@ -81,6 +81,9 @@ for (let n = 0; n < 128; n++) MIDI_FREQ[n] = 440 * Math.pow(2, (n - 69) / 12);
 const keys = {};
 let prevButtons = 0;
 let pressedButtons = 0;
+// Current gamepad state as a cart-button mask, resampled once per animation
+// frame by pollGamepad(). Read by btn() below; see Part 3a.
+let padMask = 0;
 
 const KEY_BUTTONS = {
     ArrowLeft: 0,
@@ -130,6 +133,14 @@ window.addEventListener("keyup", e => {
 
 function btn(button)
 {
+    // Clamp before the shift: a cart is free to probe out-of-range buttons,
+    // and JS shifts are mod 32, so 1 << 32 would alias back onto button 0.
+    if (button < 0 || button >= 6)
+        return 0;
+
+    if (padMask & (1 << button))
+        return 1;
+
     switch(button)
     {
         case 0: return keys.ArrowLeft ? 1 : 0;
@@ -284,6 +295,87 @@ canvas.addEventListener("pointercancel", releasePointer);
 
 // Prevent the browser context menu so right-click reaches the cart.
 canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+//// Part 3a: Gamepads (browser Gamepad API)
+
+/*
+ * Physical pads, polled from the browser Gamepad API. The standard mapping's
+ * numbering happens to line up one-for-one with the raylib enums the C host
+ * uses -- GLFW normalises to the same Xbox layout -- so both hosts take the
+ * same bindings:
+ *
+ *   cart 0..3 (arrows)  d-pad, or the left stick past the deadzone
+ *   cart 4 (Z)          A / Cross (bottom), or the left shoulder (LB / L1)
+ *   cart 5 (X)          B / Circle (right), or the right shoulder (RB / R1)
+ *
+ * A pad is only visible to the page after the user has interacted with it --
+ * every browser gates gamepad state behind a gesture -- so this starts
+ * reporting after the first click or keypress, with nothing to set up.
+ */
+const PAD_A = 0, PAD_B = 1, PAD_LB = 4, PAD_RB = 5;
+const PAD_DPAD_UP = 12, PAD_DPAD_DOWN = 13;
+const PAD_DPAD_LEFT = 14, PAD_DPAD_RIGHT = 15;
+
+// Cart button -> the pad buttons that drive it.
+const PAD_BUTTONS = [
+    [PAD_DPAD_LEFT],
+    [PAD_DPAD_RIGHT],
+    [PAD_DPAD_UP],
+    [PAD_DPAD_DOWN],
+    [PAD_A, PAD_LB],
+    [PAD_B, PAD_RB],
+];
+
+// A real stick never rests at exactly zero, so the d-pad emulation needs a
+// deadzone or the cart walks on its own. 0.3 of full travel matches the C
+// host; change both together.
+const PAD_DEADZONE = 0.3;
+
+// The cart-button mask for one Gamepad, or 0 if it is unusable. A pad without
+// the standard mapping has implementation-defined button indices, so it is
+// skipped rather than guessed at.
+export function gamepadMaskOf(pad)
+{
+    if (!pad || !pad.connected || pad.mapping !== "standard")
+        return 0;
+
+    let mask = 0;
+
+    for (let i = 0; i < PAD_BUTTONS.length; i++)
+        for (const b of PAD_BUTTONS[i])
+            if (pad.buttons[b]?.pressed)
+                mask |= 1 << i;
+
+    // Up is negative Y, as in GLFW. A diagonal sets two arrows, which is what
+    // a 4-way d-pad with independent directions should do.
+    const x = pad.axes[0] ?? 0;
+    const y = pad.axes[1] ?? 0;
+    if (x < -PAD_DEADZONE) mask |= 1 << 0;
+    if (x >  PAD_DEADZONE) mask |= 1 << 1;
+    if (y < -PAD_DEADZONE) mask |= 1 << 2;
+    if (y >  PAD_DEADZONE) mask |= 1 << 3;
+
+    return mask;
+}
+
+// Resampled once per animation frame: getGamepads() allocates a fresh array on
+// every call and pad state is only guaranteed current at frame boundaries, so
+// btn() reads the cached mask rather than polling per call. The rising edges
+// latch into pressedButtons for the same reason the key events do -- a frame
+// often runs zero cart ticks, which would drop a press seen only in the loop.
+function pollGamepad()
+{
+    let mask = 0;
+
+    if (navigator.getGamepads)
+    {
+        for (const pad of navigator.getGamepads())
+            mask |= gamepadMaskOf(pad);
+    }
+
+    pressedButtons |= mask & ~padMask;
+    padMask = mask;
+}
 
 //// Part 3b: Virtual gamepad (portrait mode)
 
@@ -1858,6 +1950,8 @@ function frame(gen, now)
 
     // Slow frames must not trigger a catch-up burst of ticks.
     if (acc > 5 * TICK_MS) acc = 5 * TICK_MS;
+
+    pollGamepad();
 
     let ran = 0;
     while (acc >= TICK_MS) {
