@@ -1533,7 +1533,7 @@ const TRI_MAX_ROWS = 2 * (VEX_W * 16) + 1; // matches the hosts' coord bound
 let triL = new Int32Array(64);
 let triR = new Int32Array(64);
 
-// Per row, track the floor'd leftmost/rightmost x where any edge crosses it
+// Per row, track the truncated leftmost/rightmost x where any edge crosses it
 // -- byte-for-byte the tri() of the C and Go hosts, so all three fill
 // identical pixels regardless of vertex order or winding. (Module-level so
 // no closure is allocated per tri() call.)
@@ -1550,10 +1550,9 @@ function addTriEdge(ax, ay, bx, by, ymin, triL, triR)
     for (let y = yStart; y <= yEnd; y++)
     {
         const xf = ax + (y - ay) * slope;
-        // Math.trunc truncates toward zero, NOT floor; the xi-- is vestigial
-        // and never fires. See the C host's tri_add_edge().
-        let xi = Math.trunc(xf);
-        if (xf < 0 && xf - xi > 0) xi--;
+        // Math.trunc truncates toward zero, NOT floor; see the C host's
+        // tri_add_edge(), which is the reference.
+        const xi = Math.trunc(xf);
         const i = y - ymin;
 
         if (xi < triL[i]) triL[i] = xi;
