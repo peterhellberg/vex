@@ -1553,7 +1553,10 @@ static bool parse_long(const char *s, long *out) {
   return true;
 }
 static void usage(const char *p) {
-  fprintf(stderr, "usage: %s [-s scale] [-w] [-n frames] [-t] <cart.wasm>\n",
+  // Keep in step with the synopsis in README.md.
+  fprintf(stderr,
+          "usage: %s [-s scale] [-w] [-n frames] [-t] [--dump file] "
+          "<cart.wasm>\n",
           p);
 }
 
