@@ -497,9 +497,12 @@ static void tri_add_edge(int32_t ax, int32_t ay, int32_t bx, int32_t by,
   int32_t ye = ay < by ? by : ay;
   for (int32_t y = ys; y <= ye; y++) {
     double xf = (double)ax + (double)(y - ay) * slope;
-    int32_t xi = (int32_t)xf;
+    int32_t xi = (int32_t)xf; // truncates toward zero, NOT floor
+    // The xi-- is vestigial and never fires: truncation has already moved xf
+    // toward zero, so xf - xi is <= 0 for every xf < 0. Kept because the Go
+    // and JS hosts carry the same dead test and all three must agree exactly.
     if (xf < 0.0 && xf - (double)xi > 0.0)
-      xi--; // true floor
+      xi--;
     int32_t i = y - ymin;
     if (xi < l[i])
       l[i] = xi;

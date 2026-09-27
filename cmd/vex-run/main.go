@@ -651,6 +651,8 @@ func (g *Game) tri(x1, y1, x2, y2, x3, y3 int32, color uint32) {
 		for y := yStart; y <= yEnd; y++ {
 			xf := float64(ax) + float64(y-ay)*slope
 
+			// Truncates toward zero, NOT floor; the xi-- is vestigial and
+			// never fires. See the C host's tri_add_edge().
 			xi := int32(xf)
 			if xf < 0 && xf-float64(xi) > 0 {
 				xi--

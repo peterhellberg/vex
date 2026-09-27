@@ -1550,6 +1550,8 @@ function addTriEdge(ax, ay, bx, by, ymin, triL, triR)
     for (let y = yStart; y <= yEnd; y++)
     {
         const xf = ax + (y - ay) * slope;
+        // Math.trunc truncates toward zero, NOT floor; the xi-- is vestigial
+        // and never fires. See the C host's tri_add_edge().
         let xi = Math.trunc(xf);
         if (xf < 0 && xf - xi > 0) xi--;
         const i = y - ymin;
