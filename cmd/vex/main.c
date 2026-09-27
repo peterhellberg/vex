@@ -177,9 +177,77 @@ static float g_view_scale = 1.0f, g_view_ox = 0.0f, g_view_oy = 0.0f;
 // Button key mappings and previous-frame state for btnp() edge detection.
 static const int VEX_KEYS[6] = {KEY_LEFT, KEY_RIGHT, KEY_UP,
                                 KEY_DOWN, KEY_Z,     KEY_X};
+
+// The same six cart buttons, paired with VEX_KEYS, as gamepad buttons. GLFW
+// remaps every pad to the Xbox layout before raylib sees it, so the d-pad
+// faces map straight onto the arrows and Z/X land on the bottom and right
+// face buttons (A and B) -- the same bottom-is-primary, right-is-secondary
+// layout a NES pad has. Each cart button also lists the matching shoulder, so
+// Z is LB and X is RB, and either one works. Rows with a single binding pad it
+// with GAMEPAD_BUTTON_UNKNOWN, which no pad ever reports (there is no GLFW
+// button 0), so it reads as released for free.
+#define VEX_MAX_GAMEPADS 4 // raylib's own cap; MAX_GAMEPADS is not public.
+#define VEX_PAD_SLOTS 2
+static const int VEX_PAD_BUTTONS[6][VEX_PAD_SLOTS] = {
+    {GAMEPAD_BUTTON_LEFT_FACE_LEFT, GAMEPAD_BUTTON_UNKNOWN},
+    {GAMEPAD_BUTTON_LEFT_FACE_RIGHT, GAMEPAD_BUTTON_UNKNOWN},
+    {GAMEPAD_BUTTON_LEFT_FACE_UP, GAMEPAD_BUTTON_UNKNOWN},
+    {GAMEPAD_BUTTON_LEFT_FACE_DOWN, GAMEPAD_BUTTON_UNKNOWN},
+    {GAMEPAD_BUTTON_RIGHT_FACE_DOWN, GAMEPAD_BUTTON_LEFT_TRIGGER_1},
+    {GAMEPAD_BUTTON_RIGHT_FACE_RIGHT, GAMEPAD_BUTTON_RIGHT_TRIGGER_1}};
+
 static uint8_t g_prev_btns = 0;
 static uint8_t g_pressed_btns = 0;
 static bool g_reload_pressed = false;
+
+// A real stick never rests at exactly zero, so the d-pad emulation needs a
+// deadzone or the cart walks on its own. 0.3 of full travel is the usual
+// cardinal-snap point: loose enough that a deliberate flick always registers,
+// tight enough that resting drift and diagonal drift do not fire.
+#define VEX_STICK_DEADZONE 0.3f
+
+// The left stick pushed far enough in direction i (0 left, 1 right, 2 up,
+// 3 down) on any connected pad. Up is negative Y, as in GLFW.
+static bool stick_held(int i) {
+  for (int g = 0; g < VEX_MAX_GAMEPADS; g++) {
+    float x = GetGamepadAxisMovement(g, GAMEPAD_AXIS_LEFT_X);
+    float y = GetGamepadAxisMovement(g, GAMEPAD_AXIS_LEFT_Y);
+    if ((i == 0 && x < -VEX_STICK_DEADZONE) ||
+        (i == 1 && x > VEX_STICK_DEADZONE) ||
+        (i == 2 && y < -VEX_STICK_DEADZONE) ||
+        (i == 3 && y > VEX_STICK_DEADZONE))
+      return true;
+  }
+  return false;
+}
+
+// The single "is this cart button down" answer: keyboard, the left stick as a
+// d-pad, or any pad holding one of the buttons bound to it. raylib answers 0
+// for empty pad slots and for the UNKNOWN filler on its own, so no
+// IsGamepadAvailable() check is needed.
+static bool button_held(int i) {
+  if (IsKeyDown(VEX_KEYS[i]))
+    return true;
+  if (i < 4 && stick_held(i))
+    return true;
+  for (int g = 0; g < VEX_MAX_GAMEPADS; g++)
+    for (int b = 0; b < VEX_PAD_SLOTS; b++)
+      if (IsGamepadButtonDown(g, VEX_PAD_BUTTONS[i][b]))
+        return true;
+  return false;
+}
+
+// Same set of pad buttons, but for the release-to-press edge instead of the
+// held state. Latched per render frame for the same reason the keys are: a
+// 144 Hz frame often runs zero cart ticks, which would drop a press that was
+// polled only inside the tick loop.
+static bool button_pressed(int i) {
+  for (int g = 0; g < VEX_MAX_GAMEPADS; g++)
+    for (int b = 0; b < VEX_PAD_SLOTS; b++)
+      if (IsGamepadButtonPressed(g, VEX_PAD_BUTTONS[i][b]))
+        return true;
+  return false;
+}
 
 static void latch_key_presses(void) {
   int key;
@@ -192,6 +260,10 @@ static void latch_key_presses(void) {
         g_pressed_btns |= (uint8_t)(1u << i);
     }
   }
+  for (int i = 0; i < 6; i++) {
+    if (button_pressed(i))
+      g_pressed_btns |= (uint8_t)(1u << i);
+  }
 }
 
 static uint8_t current_button_mask(void) {
@@ -199,7 +271,7 @@ static uint8_t current_button_mask(void) {
   if (!g_window_open)
     return mask;
   for (int i = 0; i < 6; i++) {
-    if (IsKeyDown(VEX_KEYS[i]))
+    if (button_held(i))
       mask |= (uint8_t)(1u << i);
   }
   return mask;
@@ -591,12 +663,12 @@ m3ApiRawFunction(host_title) {
 }
 
 // btn(button) -> held? Buttons: 0 left, 1 right, 2 up, 3 down, 4 Z, 5 X.
-// Without a window (headless -n mode) every input reads as released, which
-// keeps runs deterministic and mirrors the Go host's uiReady gate.
+// Held by the keyboard or by a gamepad. Without a window (headless -n mode)
+// every input reads as released, which keeps runs deterministic and mirrors
+// the Go host's uiReady gate.
 m3ApiRawFunction(host_btn) {
   m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, button) int held =
-      g_window_open && button >= 0 && button < 6 ? IsKeyDown(VEX_KEYS[button])
-                                                 : 0;
+      g_window_open && button >= 0 && button < 6 ? button_held(button) : 0;
   m3ApiReturn(held);
 }
 
@@ -608,7 +680,7 @@ m3ApiRawFunction(host_btnp) {
       int prev = button >= 0 && button < 8 ? (g_prev_btns >> button) & 1 : 0;
   int valid = g_window_open && button >= 0 && button < 6;
   int latched = valid ? (g_pressed_btns >> button) & 1 : 0;
-  int held = valid ? IsKeyDown(VEX_KEYS[button]) : 0;
+  int held = valid ? button_held(button) : 0;
   m3ApiReturn(latched || (held && !prev));
 }
 

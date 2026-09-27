@@ -111,7 +111,13 @@ system X11/GL libraries (present on any desktop) are needed at runtime.
 `Super` is the Cmd key on macOS and the Super/Windows key on Linux. 
 
 Arrow keys, `Z`, and `X` are passed to the cart via `btn()` _(held)_ and
-`btnp()` _(just pressed this frame)_.
+`btnp()` _(just pressed this frame)_. A connected gamepad works too and needs
+no setup: the d-pad drives the arrows, and `Z`/`X` sit on the bottom and right
+face buttons _(Xbox `A`/`B`, PS `Cross`/`Circle`)_ as well as on the matching
+shoulders _(`Z` = `LB`/`L1`, `X` = `RB`/`R1`)_. The left stick also works as a
+d-pad, snapping to a direction past 30% of travel so a resting stick does not
+drift. Any pad GLFW recognises is mapped to that layout automatically, and
+pads can be plugged in or out while the host is running.
 
 > [!Note]
 > These shortcuts apply to the C host `vex`. The Go host `vex-run` only
@@ -422,7 +428,7 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
 - **Display** — 320×180 framebuffer, scaled to the window with nearest-neighbour filtering.
 - **Palette** — 16 colors ([SWEETIE-16](https://lospec.com/palette-list/sweetie-16)), overridable at runtime via `pal()`.
 - **Frame rate** — 60 fps; carts export `update()` (per frame) and optionally `boot()` (once at start).
-- **Input** — 6 buttons (arrow keys + `Z`/`X`) and the mouse (position + 3 buttons).
+- **Input** — 6 buttons (arrow keys + `Z`/`X`, or a gamepad's d-pad, left stick, and two face buttons) and the mouse (position + 3 buttons).
 - **Cart** — any `wasm32` module that exports `update()` and imports the API from `env`.
 
 ### Drawing & input
