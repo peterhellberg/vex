@@ -509,17 +509,25 @@ static void blit_rows(const uint8_t *data, int32_t x, int32_t y, int32_t w,
     }
   }
 }
+
+// Shrink a cart-supplied blit rect to what can actually be drawn (both sides
+// clamped to the framebuffer). Returns false when nothing would be drawn, in
+// which case w/h are left alone and the caller must not touch the memory.
+static bool blit_clamp(int32_t x, int32_t y, int32_t *w, int32_t *h) {
+  if (*w <= 0 || *h <= 0 || !COORDS_OK(x, y))
+    return false;
+  if (*w > VEX_W)
+    *w = VEX_W;
+  if (*h > VEX_H)
+    *h = VEX_H;
+  return true;
+}
+
 m3ApiRawFunction(host_blit) {
   m3ApiGetArgMem(const uint8_t *, data) m3ApiGetArg(int32_t, x)
       m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, w) m3ApiGetArg(int32_t, h)
-          m3ApiGetArg(int32_t, key) if (w <= 0 || h <= 0) m3ApiSuccess();
-  if (!COORDS_OK(x, y))
-    m3ApiSuccess();
-  if (w > VEX_W)
-    w = VEX_W;
-  if (h > VEX_H)
-    h = VEX_H;
-  if ((size_t)w > (size_t)-1 / (size_t)h)
+          m3ApiGetArg(int32_t, key);
+  if (!blit_clamp(x, y, &w, &h))
     m3ApiSuccess();
   m3ApiCheckMem(data, (size_t)w * (size_t)h);
   blit_rows(data, x, y, w, h, key, NULL);
@@ -528,16 +536,8 @@ m3ApiRawFunction(host_blit) {
 m3ApiRawFunction(host_blitm) {
   m3ApiGetArgMem(const uint8_t *, data) m3ApiGetArg(int32_t, x)
       m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, w) m3ApiGetArg(int32_t, h)
-          m3ApiGetArg(int32_t, key)
-              m3ApiGetArgMem(const uint8_t *, map) if (w <= 0 || h <= 0)
-                  m3ApiSuccess();
-  if (!COORDS_OK(x, y))
-    m3ApiSuccess();
-  if (w > VEX_W)
-    w = VEX_W;
-  if (h > VEX_H)
-    h = VEX_H;
-  if ((size_t)w > (size_t)-1 / (size_t)h)
+          m3ApiGetArg(int32_t, key) m3ApiGetArgMem(const uint8_t *, map);
+  if (!blit_clamp(x, y, &w, &h))
     m3ApiSuccess();
   m3ApiCheckMem(data, (size_t)w * (size_t)h);
   m3ApiCheckMem(map, 16);
@@ -925,6 +925,17 @@ static inline double poly_blep(double t, double dt) {
   return 0.0;
 }
 
+// Soft clip into the 16-bit range: linear below the knee, tanh compression
+// above it, so stacked voices distort musically instead of wrapping.
+static double soft_clip(double x) {
+  const double knee = 24000.0, top = 32767.0;
+  if (x > knee)
+    return knee + (top - knee) * tanh((x - knee) / (top - knee));
+  if (x < -knee)
+    return -knee + (top - knee) * tanh((x + knee) / (top - knee));
+  return x;
+}
+
 static void mix_callback(void *buffer, unsigned int frames) {
   float *out = buffer;
 
@@ -1026,20 +1037,8 @@ static void mix_callback(void *buffer, unsigned int frames) {
         v->ph -= floor(v->ph);
     }
 
-    // Soft clip each channel into the 16-bit range (linear below the
-    // knee) so stacked voices distort musically instead of wrapping.
-    const double knee = 24000.0, top = 32767.0;
-    if (l > knee)
-      l = knee + (top - knee) * tanh((l - knee) / (top - knee));
-    if (l < -knee)
-      l = -knee + (top - knee) * tanh((l + knee) / (top - knee));
-    if (r > knee)
-      r = knee + (top - knee) * tanh((r - knee) / (top - knee));
-    if (r < -knee)
-      r = -knee + (top - knee) * tanh((r + knee) / (top - knee));
-
-    out[pos * 2] = (float)(l / 32768.0);
-    out[pos * 2 + 1] = (float)(r / 32768.0);
+    out[pos * 2] = (float)(soft_clip(l) / 32768.0);
+    out[pos * 2 + 1] = (float)(soft_clip(r) / 32768.0);
   }
   pthread_mutex_unlock(&g_tone_lock);
 }
@@ -1231,19 +1230,30 @@ static uint8_t *read_file(const char *path, size_t *out_len) {
   return buf;
 }
 
-static uint64_t file_signature(const char *path) {
-  FILE *f = fopen(path, "rb");
-  if (!f) return 0;
+// FNV-1a 64-bit over the framebuffer -- cheap, deterministic, and identical
+// to what the Go host's golden tests compute over their pixel buffer, so a
+// headless C run can be diffed against them byte-for-byte. The same hash over
+// a file's bytes is the cart's on-disk signature (see file_signature).
+static uint64_t fnv1a64(const void *data, size_t n) {
+  const uint8_t *p = data;
   uint64_t h = 1469598103934665603ULL;
-  uint8_t buf[4096];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof(buf), f)) != 0) {
-    for (size_t i = 0; i < n; i++) {
-      h ^= buf[i];
-      h *= 1099511628211ULL;
-    }
+  while (n--) {
+    h ^= *p++;
+    h *= 1099511628211ULL;
   }
-  fclose(f);
+  return h;
+}
+
+// Hash of the file as it is on disk right now, so the watcher can tell a
+// finished write from a half-written one, and the loader can prove it booted
+// the bytes that are actually there. 0 means "unreadable".
+static uint64_t file_signature(const char *path) {
+  size_t n;
+  uint8_t *b = read_file(path, &n);
+  if (!b)
+    return 0;
+  uint64_t h = fnv1a64(b, n);
+  free(b);
   return h;
 }
 
@@ -1257,6 +1267,25 @@ typedef struct {
   uint8_t *wasm;
   size_t wasm_len;
 } Cart;
+
+// Report why a load step failed. A missing import gets its own message: it
+// means the cart was built against a host API this vex doesn't provide (an
+// API that was removed/renamed, or is newer than this build), not that the
+// file itself is broken -- so it must not be confused with a cart that merely
+// lacks the export we were looking for.
+static void report_load_error(IM3Runtime rt, const char *what, M3Result err) {
+  M3ErrorInfo info;
+  m3_GetErrorInfo(rt, &info);
+  const char *msg = info.message ? info.message : "";
+  if (err == m3Err_functionImportMissing)
+    fprintf(stderr,
+            "vex: cart needs a host function this vex doesn't provide%s%s\n",
+            *msg ? ": " : "", msg);
+  else if (*msg)
+    fprintf(stderr, "vex: %s: %s (%s)\n", what, (const char *)err, msg);
+  else
+    fprintf(stderr, "vex: %s: %s\n", what, (const char *)err);
+}
 
 // Load a cart from disk into a fresh runtime: parse, link the host API, and
 // resolve the entry points. Returns true on success (filling *out); on failure
@@ -1276,99 +1305,70 @@ static bool load_cart(IM3Environment env, const char *path, Cart *out) {
     free(wasm);
     return false;
   }
-  IM3Module mod;
-  M3Result err = m3_ParseModule(env, &mod, wasm, wasm_len);
-  if (err) {
-    fprintf(stderr, "vex: parse: %s\n", err);
-    m3_FreeRuntime(rt);
-    free(wasm);
-    return false;
+  // The runtime owns mod (and frees it) from m3_LoadModule on; until then it
+  // is ours to free.
+  IM3Module mod = NULL;
+  bool mod_owned = false;
+  IM3Function f_boot = NULL, f_update = NULL;
+  M3Result err;
+
+  if ((err = m3_ParseModule(env, &mod, wasm, wasm_len))) {
+    report_load_error(rt, "parse", err);
+    goto fail;
   }
-  err = m3_LoadModule(rt, mod);
-  if (err) {
-    fprintf(stderr, "vex: load: %s\n", err);
-    m3_FreeModule(mod);
-    m3_FreeRuntime(rt);
-    free(wasm);
-    return false;
+  if ((err = m3_LoadModule(rt, mod))) {
+    report_load_error(rt, "load", err);
+    goto fail;
   }
-  err = link_host(mod);
-  if (err) {
-    M3ErrorInfo info;
-    m3_GetErrorInfo(rt, &info);
-    fprintf(stderr, "vex: link: %s (%s)\n", err,
-            info.message ? info.message : "");
-    m3_FreeRuntime(rt);
-    free(wasm);
-    return false;
+  mod_owned = true;
+  if ((err = link_host(mod))) {
+    report_load_error(rt, "link", err);
+    goto fail;
   }
 
   // Resolving update() compiles it, which is where wasm3 first notices a
-  // missing import -- a cart calling a host function this vex doesn't link
-  // (e.g. an API that was removed/renamed, or is newer than this build).
-  // Distinguish that from a cart that genuinely lacks an update() export, so
-  // the message points at the real cause instead of blaming the export.
-  // boot() is optional: missing export is fine, but a missing-import-style
-  // error (which can happen for a malformed cart) is reported the same way as
-  // for update() -- silently zeroing f_boot there would mask real bugs.
-  IM3Function f_boot = NULL, f_update = NULL;
-  err = m3_FindFunction(&f_boot, rt, "boot");
-  if (err && err != m3Err_functionLookupFailed) {
-    if (err == m3Err_functionImportMissing) {
-      M3ErrorInfo info;
-      m3_GetErrorInfo(rt, &info);
-      fprintf(stderr,
-              "vex: cart needs a host function this vex doesn't provide%s%s\n",
-              (info.message && info.message[0]) ? ": " : "",
-              (info.message && info.message[0]) ? info.message : "");
-    } else {
-      fprintf(stderr, "vex: cannot load cart: %s\n", err);
-    }
-    m3_FreeRuntime(rt);
-    free(wasm);
-    return false;
+  // missing import. Distinguish that from a cart that genuinely lacks an
+  // update() export, so the message points at the real cause instead of
+  // blaming the export. boot() is optional: missing export is fine, but a
+  // missing-import-style error (which can happen for a malformed cart) is
+  // reported the same way as for update() -- silently zeroing f_boot there
+  // would mask real bugs.
+  if ((err = m3_FindFunction(&f_boot, rt, "boot")) &&
+      err != m3Err_functionLookupFailed) {
+    report_load_error(rt, "cannot load cart", err);
+    goto fail;
   }
-  err = m3_FindFunction(&f_update, rt, "update");
-  if (err == m3Err_functionImportMissing) {
-    M3ErrorInfo info;
-    m3_GetErrorInfo(rt, &info);
-    fprintf(stderr,
-            "vex: cart needs a host function this vex doesn't provide%s%s\n",
-            (info.message && info.message[0]) ? ": " : "",
-            (info.message && info.message[0]) ? info.message : "");
-    m3_FreeRuntime(rt);
-    free(wasm);
-    return false;
-  }
-  if (err && err != m3Err_functionLookupFailed) {
-    fprintf(stderr, "vex: cannot load cart: %s\n", err);
-    m3_FreeRuntime(rt);
-    free(wasm);
-    return false;
+  if ((err = m3_FindFunction(&f_update, rt, "update")) &&
+      err != m3Err_functionLookupFailed) {
+    report_load_error(rt, "cannot load cart", err);
+    goto fail;
   }
   if (!f_update) {
     fprintf(stderr, "vex: cart has no update() export\n");
-    m3_FreeRuntime(rt);
-    free(wasm);
-    return false;
+    goto fail;
   }
 
   *out = (Cart){.rt = rt, .mod = mod, .f_boot = f_boot,
                 .f_update = f_update, .wasm = wasm, .wasm_len = wasm_len};
   return true;
-}
 
-static uint64_t fnv1a64(const void *data, size_t n);
+fail:
+  if (!mod_owned)
+    m3_FreeModule(mod);
+  m3_FreeRuntime(rt);
+  free(wasm);
+  return false;
+}
 
 static bool load_cart_stable(IM3Environment env, const char *path, Cart *out,
                              uint64_t *loaded_signature) {
+  // Retry only when the file changed under us (an editor or cart build caught
+  // mid-write); a cart that genuinely fails to load fails on the first try.
   for (int attempt = 0; attempt < 3; attempt++) {
-    uint64_t before = file_signature(path);
     if (!load_cart(env, path, out))
       return false;
-    uint64_t after = file_signature(path);
     uint64_t loaded = fnv1a64(out->wasm, out->wasm_len);
-    if (before != 0 && after != 0 && before == after && loaded == before) {
+    if (loaded != 0 && loaded == file_signature(path)) {
       *loaded_signature = loaded;
       return true;
     }
@@ -1412,24 +1412,15 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart,
                         uint64_t *loaded_signature) {
   static HostCartState previous;
   snapshot_host_state(&previous);
-  bool was_audio_ready = g_audio_ready;
+  const bool was_audio_ready = g_audio_ready;
+  // A candidate cart's tone() calls stay silent until it is swapped in, so a
+  // rejected reload can't leave a half-started voice behind.
   g_audio_ready = false;
-  uint64_t before = file_signature(path);
+
   Cart fresh;
-  if (!load_cart(env, path, &fresh)) {
-    restore_host_state(&previous);
-    g_audio_ready = was_audio_ready;
-    return false;
-  }
-  uint64_t after = file_signature(path);
-  uint64_t loaded = fnv1a64(fresh.wasm, fresh.wasm_len);
-  if (before == 0 || after == 0 || before != after || loaded != before) {
-    restore_host_state(&previous);
-    g_audio_ready = was_audio_ready;
-    m3_FreeRuntime(fresh.rt);
-    free(fresh.wasm);
-    return false;
-  }
+  uint64_t loaded = 0;
+  if (!load_cart_stable(env, path, &fresh, &loaded))
+    goto reject;
 
   // Try boot() on the fresh cart BEFORE swapping it in: if it traps, restore
   // every shared host state touched by the candidate boot.
@@ -1444,35 +1435,35 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart,
   if (fresh.f_boot) {
     M3Result err = m3_CallV(fresh.f_boot);
     if (err) {
-      restore_host_state(&previous);
-      g_audio_ready = was_audio_ready;
       M3ErrorInfo info;
       m3_GetErrorInfo(fresh.rt, &info);
       fprintf(stderr, "vex: boot: %s (%s)\n", err,
               info.message ? info.message : "");
-      m3_FreeRuntime(fresh.rt);
-      free(fresh.wasm);
-      return false;
+      goto reject_fresh;
     }
   }
   g_prev_btns = current_button_mask();
   g_pressed_btns = 0;
-  uint64_t final_signature = file_signature(path);
-  if (final_signature == 0 || loaded != final_signature) {
-    restore_host_state(&previous);
-    g_audio_ready = was_audio_ready;
-    m3_FreeRuntime(fresh.rt);
-    free(fresh.wasm);
-    return false;
-  }
+  // The file must still hold the bytes we booted; a rewrite during boot()
+  // means the cart is stale before it was ever shown.
+  if (loaded != file_signature(path))
+    goto reject_fresh;
 
   clear_audio();
   g_audio_ready = was_audio_ready;
-  *loaded_signature = loaded;
   m3_FreeRuntime(cart->rt);
   free(cart->wasm);
   *cart = fresh;
+  *loaded_signature = loaded;
   return true;
+
+reject_fresh:
+  m3_FreeRuntime(fresh.rt);
+  free(fresh.wasm);
+reject:
+  restore_host_state(&previous);
+  g_audio_ready = was_audio_ready;
+  return false;
 }
 
 // Strict integer parse for -s/--scale: rejects trailing garbage and empty
@@ -1491,19 +1482,6 @@ static void usage(const char *p) {
           p);
 }
 
-// FNV-1a 64-bit over the framebuffer -- cheap, deterministic, and identical
-// to what the Go host's golden tests compute over their pixel buffer, so a
-// headless C run can be diffed against them byte-for-byte.
-static uint64_t fnv1a64(const void *data, size_t n) {
-  const uint8_t *p = data;
-  uint64_t h = 1469598103934665603ULL;
-  while (n--) {
-    h ^= *p++;
-    h *= 1099511628211ULL;
-  }
-  return h;
-}
-
 // Create the GPU-side copy of the framebuffer. A plain texture (not a render
 // texture): carts draw on the CPU now, so GL only needs to receive the
 // finished frame once per present.
@@ -1512,6 +1490,18 @@ static Texture2D make_screen_texture(void) {
   Texture2D t = LoadTextureFromImage(img);
   SetTextureFilter(t, TEXTURE_FILTER_POINT);
   UnloadImage(img);
+  return t;
+}
+
+// Swap in a fresh framebuffer texture. Anything that can recreate the GL
+// context underneath us (a macOS fullscreen Space, a Windows maximize) has to
+// go through here, or the window draws a dead texture.
+static Texture2D rebuild_screen(Texture2D old, IM3Runtime rt) {
+  UnloadTexture(old);
+  Texture2D t = make_screen_texture();
+  if (t.id == 0)
+    die(rt, "cannot re-create framebuffer texture after a fullscreen change",
+        NULL);
   return t;
 }
 
@@ -1676,7 +1666,6 @@ int main(int argc, char **argv) {
   const double tickDt = 1.0 / 60.0;
   double acc = 0.0;
   double prevTime = GetTime();
-  bool reload_key = false;
 
   while (!WindowShouldClose()) {
     latch_key_presses();
@@ -1695,8 +1684,7 @@ int main(int argc, char **argv) {
     // Latch the reload edge per-frame: IsKeyPressed is true for exactly one
     // frame, but a 144 Hz frame often runs 0 ticks, which would drop the
     // press if polled inside the tick loop. Consumed by the first tick below.
-    reload_key = reload_key || g_reload_pressed || (super && IsKeyPressed(KEY_R));
-    g_reload_pressed = false;
+    g_reload_pressed = g_reload_pressed || (super && IsKeyPressed(KEY_R));
 
     // Reload is tick-rate (60 TPS), not frame-rate, so -watch stays 0.5s
     // at 144 Hz. Fullscreen toggles stay per-frame (they affect rendering).
@@ -1705,8 +1693,7 @@ int main(int argc, char **argv) {
       // exactly and hides the menu bar, so the picture isn't pushed off
       // the bottom of a notched screen as borderless-windowed would.
       // Toggling fullscreen can recreate the GL context (macOS), so the
-      // framebuffer texture must be re-created afterwards.
-      UnloadTexture(screen);
+      // framebuffer texture is rebuilt afterwards.
       int mon = GetCurrentMonitor();
       if (!IsWindowFullscreen()) {
         SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
@@ -1716,11 +1703,7 @@ int main(int argc, char **argv) {
         ToggleFullscreen();
         SetWindowSize(VEX_W * scale, VEX_H * scale);
       }
-      screen = make_screen_texture();
-      if (screen.id == 0)
-        die(cart.rt,
-            "cannot re-create framebuffer texture after fullscreen toggle",
-            NULL);
+      screen = rebuild_screen(screen, cart.rt);
     }
     if (super && IsKeyPressed(KEY_I))
       integer_scale = !integer_scale;
@@ -1735,16 +1718,11 @@ int main(int argc, char **argv) {
       if (is_maximized != was_maximized) {
         was_maximized = is_maximized;
         if (is_maximized && !IsWindowFullscreen()) {
-          UnloadTexture(screen);
           int mon = GetCurrentMonitor();
           SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
           ToggleFullscreen();
           integer_scale = true;
-          screen = make_screen_texture();
-          if (screen.id == 0)
-            die(cart.rt,
-                "cannot re-create framebuffer texture after maximize",
-                NULL);
+          screen = rebuild_screen(screen, cart.rt);
         }
       }
     }
@@ -1802,28 +1780,23 @@ int main(int argc, char **argv) {
     bool ticked = false;
     while (acc >= tickDt) {
       // Reload checks are tick-rate, not frame-rate.
-      bool want_reload_tick = reload_key;
-      reload_key = false;
+      bool want_reload = g_reload_pressed;
+      g_reload_pressed = false;
       if (watch && ++poll >= VEX_WATCH_FRAMES) {
         poll = 0;
         uint64_t signature = file_signature(cart_path);
         if (signature != 0 && signature != last_signature)
-          want_reload_tick = true;
+          want_reload = true;
       }
-      if (want_reload_tick &&
-          reload_cart(env, cart_path, &cart, &last_signature)) {
-      }
+      if (want_reload)
+        reload_cart(env, cart_path, &cart, &last_signature);
 
       err = m3_CallV(cart.f_update);
       if (err)
         die(cart.rt, "update", err);
 
-      g_prev_btns = 0;
+      g_prev_btns = current_button_mask();
       g_pressed_btns = 0;
-      for (int i = 0; i < 6; i++) {
-        if (IsKeyDown(VEX_KEYS[i]))
-          g_prev_btns |= (1u << i);
-      }
 
       acc -= tickDt;
       ticked = true;
