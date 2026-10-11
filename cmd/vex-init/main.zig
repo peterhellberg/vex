@@ -172,7 +172,7 @@ const build_zig_tmpl =
     \\        .root_module = b.createModule(.{{
     \\            .root_source_file = b.path("src/cart.zig"),
     \\            .target = wasm_target,
-    \\            .optimize = .ReleaseSmall,
+    \\            .optimize = .small,
     \\            .imports = &.{{
     \\                .{{
     \\                    .name = "vex",
@@ -201,28 +201,28 @@ const build_zig_tmpl =
     \\    // `zig build --watch` in another terminal to rebuild on every edit; vex
     \\    // (started with -w) and vex-web both reload it automatically. Both
     \\    // tools must be on your PATH (e.g. via `make install` in the vex repo).
-    \\    const wasm = b.getInstallPath(.bin, cart.out_filename);
+    \\    const wasm = b.graph.path(.install_bin, cart.out_filename);
     \\
     \\    // `zig build run` builds + installs the cart and runs it in vex, the
     \\    // native C host (raylib/wasm3; requires its native build dependencies).
     \\    // -w makes a concurrent `zig build --watch` reload it automatically.
     \\    const run = b.addSystemCommand(&.{{ "vex", "-w" }});
-    \\    run.addArg(wasm);
+    \\    run.addFileArg(wasm);
     \\    run.step.dependOn(b.getInstallStep());
-    \\    if (b.args) |args| run.addArgs(args);
+    \\    run.addPassthruArgs();
     \\    b.step("run", "Build the cart and run it in vex").dependOn(&run.step);
     \\
     \\    // `zig build web` builds + installs the cart and serves it via vex-web.
     \\    const web = b.addSystemCommand(&.{{"vex-web"}});
-    \\    web.addArg(wasm);
+    \\    web.addFileArg(wasm);
     \\    web.step.dependOn(b.getInstallStep());
-    \\    if (b.args) |args| web.addArgs(args);
+    \\    web.addPassthruArgs();
     \\    b.step("web", "Build the cart and serve it with vex-web").dependOn(&web.step);
     \\
     \\    // `zig build bundle` builds + installs the cart and writes a static
     \\    // bundle (bundle/<name>/ and bundle/<name>.zip) ready to host anywhere.
     \\    const bundle = b.addSystemCommand(&.{{ "vex-web", "-bundle" }});
-    \\    bundle.addArg(wasm);
+    \\    bundle.addFileArg(wasm);
     \\    bundle.step.dependOn(b.getInstallStep());
     \\    b.step("bundle", "Build the cart and write a static bundle with vex-web").dependOn(&bundle.step);
     \\
