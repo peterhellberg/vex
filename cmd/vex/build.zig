@@ -19,9 +19,9 @@ pub const LinuxDisplayBackend = enum { X11, Wayland, Both, None };
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{
-        .preferred_optimize_mode = .ReleaseFast,
+        .preferred_optimize_mode = .fast,
     });
-    const strip = optimize != .Debug;
+    const strip = optimize != .debug;
 
     // raylib's Linux display backend. X11 (the default) also covers Wayland
     // via XWayland; tag names match raylib's own enum.
@@ -65,7 +65,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     if (target.result.os.tag == .windows) {
-        exe.subsystem = .Windows;
+        exe.subsystem = .windows;
     }
     exe.root_module.addCSourceFile(.{
         .file = b.path("main.c"),
@@ -115,12 +115,12 @@ pub fn build(b: *std.Build) void {
 
     const run_c = b.addRunArtifact(exe);
     run_c.addFileArg(cart_c);
-    if (b.args) |a| run_c.addArgs(a);
+    run_c.addPassthruArgs();
     b.step("run", "Run the C example cart").dependOn(&run_c.step);
 
     const run_z = b.addRunArtifact(exe);
     run_z.addFileArg(cart_z);
-    if (b.args) |a| run_z.addArgs(a);
+    run_z.addPassthruArgs();
     b.step("runz", "Run the Zig example cart").dependOn(&run_z.step);
 }
 
