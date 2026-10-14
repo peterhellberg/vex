@@ -5,17 +5,13 @@
     .minimum_zig_version = "0.17.0-dev.387+31f157d80",
     .dependencies = .{
         .raylib = .{
-            // Pinned to the official 6.0 release tag: vex uses only plain
-            // window/input/2D/audio functionality, and since build.zig
-            // compiles raylib's sources directly there is no reason to
-            // track master for Zig-build compatibility.
             .url = "https://github.com/raysan5/raylib/archive/795ec32880d21e4b5115cc346f15dd12ef93aeb4.tar.gz",
             .hash = "raylib-6.0.0-whq8uG0_OAUvcMn_4lgwH0iTNz4kGCGsh9pebrsVoiFG",
             .lazy = true,
         },
         .wasm3 = .{
-            .url = "https://github.com/wasm3/wasm3/archive/ea6ad909139a22d224c5d77796421d6ffa91b05f.tar.gz",
-            .hash = "N-V-__8AALwUrABBUXUIkk2nexJsBJ1nhV8dGilRPUrzOiPw",
+            .url = "https://github.com/peterhellberg/wasm3/archive/66860a9072e2bf7dd01fa3bc1eae490515772341.tar.gz",
+            .hash = "N-V-__8AAOgArQBJTeiWMm30--7kFTPBKxaqoijyi-2md7uA",
             .lazy = true,
         },
         .xcode_frameworks = .{
