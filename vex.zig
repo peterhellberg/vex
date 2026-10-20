@@ -1,4 +1,4 @@
-//! Cart SDK for writing vex carts in Zig (0.17-dev).
+//! Cart SDK for writing vex carts in Zig (0.17.0).
 //!
 //! Import it from your cart and call the drawing/input functions:
 //!
