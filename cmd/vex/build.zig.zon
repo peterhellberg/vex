@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .raylib = .{
-            .url = "https://github.com/raysan5/raylib/archive/795ec32880d21e4b5115cc346f15dd12ef93aeb4.tar.gz",
-            .hash = "raylib-6.0.0-whq8uG0_OAUvcMn_4lgwH0iTNz4kGCGsh9pebrsVoiFG",
+            .url = "https://github.com/raysan5/raylib/archive/refs/tags/6.2.tar.gz",
+            .hash = "raylib-6.0.0-whq8uDpYOAVcH_KyOZ0--nYF1dEsjdQ5r4e9R24UkQOi",
             .lazy = true,
         },
         .wasm3 = .{
