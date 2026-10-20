@@ -53,9 +53,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.work
-          # This repo has no root go.sum; it is a go.work workspace.
-          cache-dependency-path: go.work.sum
+          go-version-file: go.mod
 
       # gcc is never used; zig cc stands in as the C compiler throughout.
       - name: Use zig cc as the C compiler
