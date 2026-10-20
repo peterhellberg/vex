@@ -63,10 +63,17 @@ STAGING_DIR := $(RELEASE_DIR)/staging
 # with `--prefix ../..` so it lands in the same ./bin.
 all: all-zig all-go ## Build vex + vex-init + vex-web + carts into ./bin
 
+# Suppress verbose stdout (pkg-config, zig cc chatter) but show stderr (errors/warnings)
+define QUIET_ZIG_BUILD
+	@sh -c 'exec "$$@" </dev/null >/dev/null' _ $(1)
+endef
+
 all-zig: ## Build Zig-only binaries (vex, vex-init, carts) into ./bin
-	$(STEP) "Building Zig binaries"
-	@zig build --prefix . -Dexamples=true --release=fast
-	@cd cmd/vex && zig build --prefix ../.. --release=fast
+	$(STEP) "Building native binaries via Zig"
+	@$(STEP) "  vex-init + carts (root)"
+	$(call QUIET_ZIG_BUILD,zig build --prefix . -Dexamples=true --release=fast)
+	@$(STEP) "  vex host (cmd/vex)"
+	$(call QUIET_ZIG_BUILD,sh -c 'cd cmd/vex && zig build --prefix ../.. --release=fast')
 
 all-go: ## Build Go binaries (vex-web) into ./bin
 	$(STEP) "Building Go binaries"
