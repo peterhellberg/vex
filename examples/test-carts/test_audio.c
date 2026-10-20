@@ -1,5 +1,5 @@
 // Audio test cart: exercises tone() so the sound implementation can be
-// compared across hosts (C console, vex-run, vex-web). Each step triggers
+// compared across hosts (C console, vex-web). Each step triggers
 // up to three voices at once and holds for a few frames, walking through
 // melodies, polyphony, duty cycles, noise percussion, slides, note mode,
 // panning, rapid retriggers, and extreme frequencies.
