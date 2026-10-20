@@ -7,11 +7,10 @@ drawing/input API from the host. The host opens a window, runs the cart at
 **60 fps**, and blits the fixed **320×180**, **16-color** framebuffer to the
 screen.
 
-There are three interchangeable hosts:
+There are two interchangeable hosts:
 
  - [`vex`](cmd/vex/main.c) — the reference native host, in C _(raylib + wasm3)_
- - [`vex-run`](cmd/vex-run/main.go) — a native host in Go _(ebitengine + wazero)_
- - [`vex-web`](cmd/vex-web/main.go) — a browser host _(a `<canvas>` in a small Go server)_
+ - **browser host** — [`vex.js`](cmd/vex-web/assets/vex.js), a `<canvas>` implementation served by [`vex-web`](cmd/vex-web/main.go) (a small Go HTTP server)
 
 For the specs and internals, see [How vex works](#how-vex-works).
 
@@ -44,7 +43,7 @@ zig build run -- -s 5   # forward flags to vex (here: window scale 5)
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, `make web`,
 `make test-web`, and `make clean`, passing `--prefix .` for you so all
-binaries — including the Go `vex-web` and `vex-run` — land in `./bin`.
+binaries — including the Go `vex-web` — land in `./bin`.
 Plain `make` builds both the SDK package and the `cmd/vex` host package.
 
 The build is split across two Zig packages on purpose: only `cmd/vex/`
@@ -52,11 +51,10 @@ The build is split across two Zig packages on purpose: only `cmd/vex/`
 itself has no external dependencies, so a cart that just imports `vex`
 fetches nothing heavy.
 
-`make install` copies `vex`, `vex-init`, `vex-web`, and `vex-run` from there to
+`make install` copies `vex`, `vex-init`, and `vex-web` from there to
 `~/.local/bin` _(override with `make install PREFIX=/usr/local`)_.
 
-`vex` is invoked as `vex [-s scale] [-w] [-n frames] [-t] [--dump file] <cart.wasm>`. For a dependency-free
-alternative written in Go, see [Native Go version](#native-go-version). 
+`vex` is invoked as `vex [-s scale] [-w] [-n frames] [-t] [--dump file] <cart.wasm>`. 
 
 The window is the 320×180 framebuffer times `scale` 
 _(default 3, i.e. 960×540)_; `-s`/`--scale` overrides it. 
@@ -70,9 +68,7 @@ no window, no audio, inputs read as released — and prints a summary
 (frames, ms/frame, how many times the framebuffer changed, its FNV-1a64
 hash, and the final palette). `-t`/`--trace` additionally prints one line
 each time the framebuffer content changes during the run, and
-`--dump <file>` writes the raw RGBA framebuffer to disk. The hash matches
-what the Go host's golden tests compute, so `vex -n 30 cart.wasm` can be
-compared byte-for-byte against `cmd/vex-run/testdata/`.
+`--dump <file>` writes the raw RGBA framebuffer to disk.
 
 There are two example carts: 
 
@@ -120,64 +116,8 @@ drift. Any pad GLFW recognises is mapped to that layout automatically, and
 pads can be plugged in or out while the host is running.
 
 > [!Note]
-> These shortcuts apply to the C host `vex`. The Go host `vex-run` only
-> supports `Esc` (quit) and `Cmd`+`Enter` (fullscreen); the C host's
-> `Super`+`I`/`Super`+`R` reload and integer-scale toggles are not
-> implemented there. The web host has no global shortcuts — see the
+> The web host has no global shortcuts — see the
 > [Web version](#web-version) section.
-
-## Native Go version
-
-The same carts also run on a native host written entirely in Go —
-[`vex-run`](cmd/vex-run/main.go) uses [wazero](https://wazero.io/) to run the
-cart and [ebitengine](https://ebitengine.org/) to draw into a window, so it
-ships as a single self-contained binary with **fewer system dependencies**
-than the C host — no `libgl1-mesa-dev`, no Zig toolchain, and no `pkg-config`.
-
-The CLI matches the C host:
-
-```sh
-# straight from GitHub, no checkout needed:
-go run github.com/peterhellberg/vex/cmd/vex-run@latest mycart.wasm
-
-# or from a checkout of this repo:
-make                                            # builds bin/vex-run via `go build`
-go run ./cmd/vex-run -s 5 mycart.wasm           # -s/--scale and -w/--watch work too
-go run ./cmd/vex-run -w mycart.wasm             # auto-reload on cart changes
-```
-
-`-s`/`--scale` sets the window scale (default 3, i.e. **960×540**) and
-`-w`/`--watch` polls the cart file and reloads it whenever it changes —
-the same live-reload workflow as `vex` and `vex-web`.
-
-> [!Tip]
-> On Linux, `vex-run` still needs the X11 development headers at build time
-> (ebitengine's vendored GLFW links against them), but neither `libgl1-mesa-dev`
-> nor `pkg-config` are required. You also need **Go ≥ 1.26.4** — a tarball from
-> [go.dev](https://go.dev/dl/) works on any release; check your
-> distro's `golang-go` before relying on `apt install` alone.
-
-The cart is loaded by `wazero`, and the same console API _(framebuffer,
-SWEETIE-16 palette, drawing, input, **8×8 bitmap font**)_ is reimplemented in
-Go and linked into the cart's `env` imports — so the cart source is
-identical to what you'd write for `vex` or `vex-web`.
-
-`make install` puts `vex-run` on your `PATH` alongside `vex`, `vex-init`,
-and `vex-web`.
-
-> [!Note]
-> On Linux, ebitengine's X11 backend ([xgb](https://github.com/jezek/xgb))
-> normally prints two lines on startup if it can't read a valid `~/.Xauthority`
-> (common under Wayland/Xwayland or remote X):
->
-> ```
-> XGB: conn.go:69: Could not get authority info: EOF
-> XGB: conn.go:70: Trying connection without authority info...
-> ```
->
-> The fallback to an unauthenticated X11 connection works on any normal
-> desktop session, so `vex-run` filters out those two harmless lines. Any
-> other xgb diagnostics still reach stderr.
 
 ## Web version
 
@@ -460,36 +400,27 @@ the 320×180 framebuffer to the window with nearest-neighbour scaling.
 
 ### Components
 
-There are three interchangeable hosts — see the [Native Go
-version](#native-go-version) and [Web version](#web-version) sections for the
-Go and browser alternatives:
+There are two interchangeable hosts — see the [Web version](#web-version) section for the browser alternative:
 
 - **C host (`vex`)** — the reference implementation in [`cmd/vex/main.c`](cmd/vex/main.c).
   - **Runtime:** [wasm3](https://github.com/wasm3/wasm3) — the simplest
     embeddable WASM interpreter _(pure C, MIT)_; only its core files are
     compiled.
   - **Graphics/input:** [raylib](https://www.raylib.com/).
-- **Go host (`vex-run`)** — [`cmd/vex-run/main.go`](cmd/vex-run/main.go).
-  - **Runtime:** [wazero](https://wazero.io/) — a pure-Go WASM runtime
-    _(no cgo)_.
-  - **Graphics/input:** [ebitengine](https://ebitengine.org/) — a pure-Go
-    2D game engine; brings its own OpenGL/DirectX/Metal backends, so no
-    X11/GL system packages are needed at runtime.
-- **Web host (`vex-web`)** — a `<canvas>` reimplemented in
-  [`vex.js`](cmd/vex-web/assets/vex.js), served by a small Go HTTP server.
+- **Browser host** — [`vex.js`](cmd/vex-web/assets/vex.js), a `<canvas>` reimplemented in JavaScript, served by [`vex-web`](cmd/vex-web/main.go) (a small Go HTTP server).
 - **Build:** the Zig toolchain. The build is split across two packages:
   the root [`build.zig`](build.zig) builds the `vex-init` scaffolder and
   the example carts, while [`cmd/vex/build.zig`](cmd/vex/build.zig) builds
-  the `./vex` C host. `make` builds both plus `vex-run` and `vex-web` with
+  the `./vex` C host. `make` builds both plus `vex-web` with
   `go build`.
 
 The C host's dependencies are pulled in via
 [`cmd/vex/build.zig.zon`](cmd/vex/build.zig.zon) and built from source.
 They live in a separate package on purpose: a cart that depends only on
 the [`vex`](vex.zig) SDK fetches no external packages and needs no system
-packages on any platform. The Go hosts only need a recent Go toolchain.
+packages on any platform. The Go server (`vex-web`) only needs a recent Go toolchain.
 
 On macOS and Windows the only requirement is `zig`; on Linux the C host also
 links the system X11/OpenGL libraries _(see [Linux
-prerequisites](#linux-prerequisites))_. The Go hosts need nothing beyond
+prerequisites](#linux-prerequisites))_. The Go server needs nothing beyond
 Go itself on any platform.
