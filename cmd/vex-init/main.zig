@@ -246,7 +246,7 @@ const build_zon_tmpl =
     \\    .name = .{s},
     \\    .version = "0.1.0",
     \\    .fingerprint = 0x{x},
-    \\    .minimum_zig_version = "0.17.0-dev.387+31f157d80",
+    \\    .minimum_zig_version = "0.17.0",
     \\    .dependencies = .{{
     \\        // Populated by `zig fetch --save {s}`.
     \\    }},
