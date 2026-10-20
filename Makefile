@@ -100,7 +100,7 @@ web:
 #     only C compiler this repo uses)
 ##@ Test
 
-test-hosts: test-mus ## Run Go and C conformance tests
+test-hosts: test-mus ## Run conformance tests (Go + C + Zig)
 	$(STEP) "Running conformance tests"
 	@go test ./...
 	@awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
