@@ -2,7 +2,7 @@
     .name = .vex_cmd,
     .version = "0.5.0",
     .fingerprint = 0xc03cd5ae12343a2f, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.17.0-dev.387+31f157d80",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .raylib = .{
             .url = "https://github.com/raysan5/raylib/archive/795ec32880d21e4b5115cc346f15dd12ef93aeb4.tar.gz",

@@ -16,7 +16,7 @@ For the specs and internals, see [How vex works](#how-vex-works).
 
 ## Build & run
 
-Needs the pinned `zig` (`0.17.0-dev.387+31f157d80`, see [`build.zig.zon`](build.zig.zon)).
+Needs Zig `0.17.0` or later (see [`build.zig.zon`](build.zig.zon) for the exact pinned version).
 
 Dependencies are fetched on first build.
 
@@ -24,9 +24,9 @@ Dependencies are fetched on first build.
 > Use the pinned dev build, not `master`. `std.Build`'s API churns between
 > 0.17 nightlies, and a newer/older `zig` will fail to compile this project's
 > *and* raylib's `build.zig` (e.g. `no field named 'args' in struct 'Build'`).
-> Download the exact build from a
-> [community mirror](https://ziglang.org/download/community-mirrors.txt), e.g.
-> `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0-dev.387+31f157d80.tar.xz`
+> Download the exact build from
+> [ziglang.org/download](https://ziglang.org/download/0.17.0/), e.g.
+> `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0.tar.xz`
 > — or just run [`scripts/install-zig.sh`](scripts/install-zig.sh), which
 > parses the pinned version and installs it for you.
 
