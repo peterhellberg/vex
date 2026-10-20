@@ -16,7 +16,7 @@
 #   make test-web run Playwright tests against the browser build (override the cart with CART=...)
 #   make test-hosts run the Go engine/conformance tests plus the C mixer
 #                    harness (main.c's audio section compiled against stubs)
-#   make install  install the vex + vex-init + vex-web + vex-run binaries to ~/.local/bin
+#   make install  install the vex + vex-init + vex-web binaries to ~/.local/bin
 #   make release          cross-compile release archives for Linux, Windows and
 #                         macOS into ./release
 #   make release-linux    build & archive just the Linux build
@@ -66,7 +66,6 @@ all: ## Build vex + vex-init + vex-web + carts into ./bin
 	@zig build --prefix . -Dexamples=true --release=fast
 	@cd cmd/vex && zig build --prefix ../.. --release=fast
 	go build -o bin/vex-web ./cmd/vex-web
-	go build -o bin/vex-run ./cmd/vex-run
 
 run: all ## Build and run the C example cart
 	$(STEP) "Running C cart"
@@ -94,10 +93,8 @@ web:
 # --- test-hosts ------------------------------------------------------------
 #
 # Cross-host tone() conformance:
-#   - cmd/vex-run: Go engine unit tests (envelope corners, duty flip point,
-#     slide target, noise LFSR, note mode) and golden cart renders
 #   - root: shared-table conformance (duty cycles, pan gains, soft-clip knee
-#     pinned identically across all three hosts' sources)
+#     pinned identically across both hosts' sources)
 #   - cmd/vex: the real audio section extracted from main.c and driven
 #     through the same trigger path carts use, compiled with zig cc (the
 #     only C compiler this repo uses)
@@ -105,7 +102,6 @@ web:
 
 test-hosts: test-mus ## Run Go and C conformance tests
 	$(STEP) "Running conformance tests"
-	@cd cmd/vex-run && go test ./...
 	@go test ./...
 	@awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
 		cmd/vex/main.c > cmd/vex/test/audio_section.inc
@@ -159,11 +155,10 @@ install: all ## Install binaries to ~/.local/bin
 	install -m 0755 bin/vex $(BINDIR)/vex
 	install -m 0755 bin/vex-init $(BINDIR)/vex-init
 	install -m 0755 bin/vex-web $(BINDIR)/vex-web
-	install -m 0755 bin/vex-run $(BINDIR)/vex-run
 
 uninstall: ## Remove installed binaries
 	$(STEP) "Uninstalling"
-	@rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web $(BINDIR)/vex-run
+	@rm -f $(BINDIR)/vex $(BINDIR)/vex-init $(BINDIR)/vex-web
 
 ##@ Maintenance
 # Remove build artifacts. Fetched Zig packages (zig-pkg/) and the Playwright
@@ -260,11 +255,6 @@ endif
 #   3. builds vex-web with the matching GOOS/GOARCH
 #   4. stages the three binaries under release/staging/<os>-<arch>/vex-<ver>/
 #   5. packs an archive at release/vex-<ver>-<os>-<arch>.{tar.gz,zip}
-#
-# vex-run is intentionally NOT included: it depends on ebitengine (cgo, not
-# cross-compilable) and on syscall.Dup2 (Linux/macOS only), so shipping it
-# would either bloat the Windows/macOS archives with a non-functional binary
-# or force a "current host only" carve-out that complicates the matrix.
 #
 # Per-target -Dtarget values:
 #   linux:    -Dtarget=native         (system X11/GL, distro-agnostic; we
