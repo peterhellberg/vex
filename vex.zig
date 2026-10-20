@@ -227,7 +227,7 @@ pub const Note = struct {
     freq: i32,
     attack: i32 = 0,
     decay: i32 = 0,
-    sustain: i32 = 12,
+    sustain: i32 = 0,
     release: i32 = 4,
     volume: i32 = 100,
     peak: i32 = 0,
