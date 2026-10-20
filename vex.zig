@@ -80,7 +80,7 @@ pub const TONE_RELEASE: i32 = 1 << 10;
 /// Enable 8-bit pulse-width modulation using the packed start/end widths.
 pub const TONE_PWM: i32 = 1 << 11;
 /// Optional 2-op FM; payload in volume high 16 bits (ratio << 16 | index << 24).
-pub const TONE_FM: i32 = @intCast(1u32 << 30);
+pub const TONE_FM: i32 = @intCast(@as(u32, 1) << 30);
 
 /// Clear the whole screen to `color`.
 pub extern "env" fn cls(color: i32) void;
