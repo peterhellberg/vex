@@ -61,17 +61,22 @@ STAGING_DIR := $(RELEASE_DIR)/staging
 # Build every binary into ./bin. `--prefix .` makes Zig install into ./bin
 # (its exe dir under the prefix). The host package is built from cmd/vex/
 # with `--prefix ../..` so it lands in the same ./bin.
-all: ## Build vex + vex-init + vex-web + carts into ./bin
-	$(STEP) "Building vex"
+all: all-zig all-go ## Build vex + vex-init + vex-web + carts into ./bin
+
+all-zig: ## Build Zig-only binaries (vex, vex-init, carts) into ./bin
+	$(STEP) "Building Zig binaries"
 	@zig build --prefix . -Dexamples=true --release=fast
 	@cd cmd/vex && zig build --prefix ../.. --release=fast
+
+all-go: ## Build Go binaries (vex-web) into ./bin
+	$(STEP) "Building Go binaries"
 	go build -o bin/vex-web ./cmd/vex-web
 
-run: all ## Build and run the C example cart
+run: all-zig ## Build and run the C example cart
 	$(STEP) "Running C cart"
 	@cd cmd/vex && zig build run
 
-runz: all ## Build and run the Zig example cart
+runz: all-zig ## Build and run the Zig example cart
 	$(STEP) "Running Zig cart"
 	@cd cmd/vex && zig build runz
 
@@ -161,12 +166,18 @@ docs: ## Regenerate docs from vex.zig
 	@rm -rf .docs-tmp
 
 ##@ Install
-install: all ## Install binaries to ~/.local/bin
+install: all ## Install all binaries (vex, vex-init, vex-web) to ~/.local/bin
 	$(STEP) "Installing to $(BINDIR)"
 	@mkdir -p $(BINDIR)
 	install -m 0755 bin/vex $(BINDIR)/vex
 	install -m 0755 bin/vex-init $(BINDIR)/vex-init
 	install -m 0755 bin/vex-web $(BINDIR)/vex-web
+
+install-core: all-zig ## Install core binaries (vex, vex-init) to ~/.local/bin (no Go needed)
+	$(STEP) "Installing core binaries to $(BINDIR)"
+	@mkdir -p $(BINDIR)
+	install -m 0755 bin/vex $(BINDIR)/vex
+	install -m 0755 bin/vex-init $(BINDIR)/vex-init
 
 uninstall: ## Remove installed binaries
 	$(STEP) "Uninstalling"
