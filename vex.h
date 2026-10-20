@@ -112,6 +112,10 @@ VEX_IMPORT("tone") void tone(int freq, int duration, int volume, int flags);
 
 #define VEX_TONE_DUR_BYTE(v) ((v) < 0 ? 0 : (v) > 255 ? 255 : (v))
 
+// NOTE: parameter order is (attack, decay, sustain, release) but packs as
+// sustain | release<<8 | decay<<16 | attack<<24 (C ABI order).
+// Use named args or be careful: VEX_TONE_DURATION(0, 0, 12, 4) means
+// attack=0, decay=0, sustain=12, release=4.
 #define VEX_TONE_DURATION(attack, decay, sustain, release) \
   ((unsigned int)VEX_TONE_DUR_BYTE(sustain) | \
    ((unsigned int)VEX_TONE_DUR_BYTE(release) << 8) | \
