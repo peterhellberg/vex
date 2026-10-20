@@ -177,6 +177,11 @@ pub fn toneFmParams(ratio: i32, index: i32) i32 {
 }
 
 /// ADSR duration in frames (each segment clamps to 0..255).
+/// NOTE: field order is attack, decay, sustain, release but pack() packs
+/// as sustain | release<<8 | decay<<16 | attack<<24 (C ABI order).
+/// This matches the C macro VEX_TONE_DURATION(attack, decay, sustain, release).
+/// To avoid confusion, use the struct literal syntax:
+/// ToneDuration{ .sustain = 12, .release = 4, .decay = 0, .attack = 0 }
 pub const ToneDuration = struct {
     attack: i32 = 0,
     decay: i32 = 0,
