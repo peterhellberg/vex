@@ -8,7 +8,14 @@
 #ifndef VEX_H
 #define VEX_H
 
+// WASM import attributes only apply when targeting wasm32; native builds
+// (e.g. test harnesses) don't recognize them.
+#if defined(__wasm__) || defined(__wasm32__)
 #define VEX_IMPORT(name) __attribute__((import_module("env"), import_name(name)))
+#else
+#define VEX_IMPORT(name)
+#endif
+
 #define VEX_EXPORT(name) __attribute__((export_name(name)))
 
 // Screen is 320x180. Colors are SWEETIE-16 palette indices 0..15.
