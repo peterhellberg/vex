@@ -100,7 +100,7 @@ web:
 #     only C compiler this repo uses)
 ##@ Test
 
-test-hosts: test-mus ## Run conformance tests (Go + C + Zig)
+test-hosts: test-mus test-vex ## Run conformance tests (Go + C + Zig) + C host headless
 	$(STEP) "Running conformance tests"
 	@go test ./...
 	@awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
@@ -117,6 +117,18 @@ test-mus:
 		cmd/vex/test/mus_test.c
 	@cmd/vex/test/mus_test.bin
 	@rm -f cmd/vex/test/mus_test.bin
+
+# Headless C host test: run vex -n 30 on the C example cart and verify output
+# Expected: 30 frames, deterministic framebuffer hash (matches conformance golden)
+test-vex: all
+	$(STEP) "Running C host headless test"
+	@bin/vex -n 30 bin/carts/cart.wasm 2>&1 | tee /tmp/vex_host_test.log
+	@grep -q "frames=30" /tmp/vex_host_test.log
+	@grep -q "ms/frame=" /tmp/vex_host_test.log
+	@grep -q "fb-changes=" /tmp/vex_host_test.log
+	@grep -q "fnv1a64=" /tmp/vex_host_test.log
+	@rm -f /tmp/vex_host_test.log
+	$(STEP) "C host headless test passed"
 
 test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser tests
 	$(STEP) "Running browser tests"
