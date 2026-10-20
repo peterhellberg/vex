@@ -21,11 +21,10 @@ Needs Zig `0.17.0` or later (see [`build.zig.zon`](build.zig.zon) for the exact 
 Dependencies are fetched on first build.
 
 > [!Important]
-> Use the pinned dev build, not `master`. `std.Build`'s API churns between
-> 0.17 nightlies, and a newer/older `zig` will fail to compile this project's
+> Use Zig `0.17.0` (stable), not a newer/older nightly. `std.Build`'s API churns between
+> nightlies, and a mismatched `zig` will fail to compile this project's
 > *and* raylib's `build.zig` (e.g. `no field named 'args' in struct 'Build'`).
-> Download the exact build from
-> [ziglang.org/download](https://ziglang.org/download/0.17.0/), e.g.
+> Download from [ziglang.org/download/0.17.0/](https://ziglang.org/download/0.17.0/), e.g.
 > `https://pkg.hexops.org/zig/zig-<arch>-<os>-0.17.0.tar.xz`
 > — or just run [`scripts/install-zig.sh`](scripts/install-zig.sh), which
 > parses the pinned version and installs it for you.
