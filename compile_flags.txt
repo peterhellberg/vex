@@ -1,5 +1,5 @@
 -I.
--Icmd/vex/zig-pkg/raylib-6.0.0-whq8uCSwLgWWeF3ec3dbG6Rr36SLFL-s2WJ1Q_2E22Bb/src
--Icmd/vex/zig-pkg/N-V-__8AALwUrABBUXUIkk2nexJsBJ1nhV8dGilRPUrzOiPw/source
+-Icmd/vex/zig-pkg/raylib-6.0.0-whq8uDpYOAVcH_KyOZ0--nYF1dEsjdQ5r4e9R24UkQOi/src
+-Icmd/vex/zig-pkg/N-V-__8AAOgArQBJTeiWMm30--7kFTPBKxaqoijyi-2md7uA/source
 -std=c23
 -Wno-unknown-attributes
