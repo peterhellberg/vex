@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "raylib.h"
@@ -1301,6 +1302,46 @@ static uint64_t file_signature(const char *path) {
   return h;
 }
 
+// Cheap "might have changed" gate for the -w poll: size plus nanosecond
+// change time (any write or replacement bumps it, and unlike mtime it cannot
+// be backdated by cp -p), so an idle cart is not read and hashed twice a
+// second. Windows' C runtime only exposes second-resolution times, so it
+// keeps the old hash-every-poll path rather than miss a quick same-size
+// rewrite; a file that cannot be stat'd also reports changed.
+typedef struct {
+  long long size;
+  long long ctime_ns;
+} FileStamp;
+
+static bool file_stamp_changed(const char *path, FileStamp *last,
+                               bool *known) {
+#ifndef _WIN32
+  struct stat st;
+  if (stat(path, &st) != 0)
+    return true;
+  FileStamp now = {
+      .size = (long long)st.st_size,
+#ifdef __APPLE__
+      .ctime_ns = (long long)st.st_ctimespec.tv_sec * 1000000000LL +
+                  st.st_ctimespec.tv_nsec,
+#else
+      .ctime_ns = (long long)st.st_ctim.tv_sec * 1000000000LL +
+                  st.st_ctim.tv_nsec,
+#endif
+  };
+  if (*known && now.size == last->size && now.ctime_ns == last->ctime_ns)
+    return false;
+  *last = now;
+  *known = true;
+  return true;
+#else
+  (void)path;
+  (void)last;
+  (void)known;
+  return true;
+#endif
+}
+
 // A loaded cart: its runtime, the entry points, and the wasm bytes wasm3
 // references for the runtime's lifetime (so they must outlive it).
 typedef struct {
@@ -1611,6 +1652,8 @@ int main(int argc, char **argv) {
   IM3Environment env = m3_NewEnvironment();
   Cart cart;
   uint64_t last_signature;
+  FileStamp last_stamp = {0, 0};
+  bool have_stamp = false;
   if (!load_cart_stable(env, cart_path, &cart, &last_signature)) {
     m3_FreeEnvironment(env);
     return 1;
@@ -1813,9 +1856,11 @@ int main(int argc, char **argv) {
       g_reload_pressed = false;
       if (watch && ++poll >= VEX_WATCH_FRAMES) {
         poll = 0;
-        uint64_t signature = file_signature(cart_path);
-        if (signature != 0 && signature != last_signature)
-          want_reload = true;
+        if (file_stamp_changed(cart_path, &last_stamp, &have_stamp)) {
+          uint64_t signature = file_signature(cart_path);
+          if (signature != 0 && signature != last_signature)
+            want_reload = true;
+        }
       }
       if (want_reload)
         reload_cart(env, cart_path, &cart, &last_signature);
