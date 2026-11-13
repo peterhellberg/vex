@@ -110,6 +110,9 @@ web:
 #   - cmd/vex: the real audio section extracted from main.c and driven
 #     through the same trigger path carts use, compiled with zig cc (the
 #     only C compiler this repo uses)
+#   - cmd/vex: the real font table and drawing section extracted the same
+#     way, driven through the host_* imports (blit stride/clipping, memory
+#     bounds, glyphs)
 ##@ Test
 
 test-hosts: test-mus test-vex ## Run conformance tests (Go + C + Zig) + C host headless
@@ -121,6 +124,14 @@ test-hosts: test-mus test-vex ## Run conformance tests (Go + C + Zig) + C host h
 		cmd/vex/test/tone_test.c -lm -lpthread
 	@cmd/vex/test/tone_test.bin
 	@rm -f cmd/vex/test/audio_section.inc cmd/vex/test/tone_test.bin
+	@awk '/^#define VEX_FONT_FIRST/{on=1} on{print} on && /^};/{exit}' \
+		cmd/vex/main.c > cmd/vex/test/font_section.inc
+	@awk '/^\/\/ Copy a bounded, NUL-terminated string/{on=1} /^\/\/ title\(s\):/{on=0} on' \
+		cmd/vex/main.c > cmd/vex/test/gfx_section.inc
+	@zig cc -std=c2x -ffp-contract=off -Wno-gcc-install-dir-libstdcxx -I cmd/vex/test \
+		-o cmd/vex/test/gfx_test.bin cmd/vex/test/gfx_test.c
+	@cmd/vex/test/gfx_test.bin
+	@rm -f cmd/vex/test/font_section.inc cmd/vex/test/gfx_section.inc cmd/vex/test/gfx_test.bin
 	@zig build test
 
 test-mus:
