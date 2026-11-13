@@ -81,16 +81,16 @@ all-go: ## Build Go binaries (vex-web) into ./bin
 
 run: all-zig ## Build and run the C example cart
 	$(STEP) "Running C cart"
-	@cd cmd/vex && zig build run
+	@cd cmd/vex && zig build run --release=fast
 
 runz: all-zig ## Build and run the Zig example cart
 	$(STEP) "Running Zig cart"
-	@cd cmd/vex && zig build runz
+	@cd cmd/vex && zig build runz --release=fast
 
 web: ## Serve the browser build (CART=... to override)
 web:
 	$(STEP) "Serving browser build"
-	@zig build --prefix . -Dexamples=true
+	@zig build --prefix . -Dexamples=true --release=fast
 	@go run ./cmd/vex-web $(CART)
 
 # Build the bundled cart so the test always exercises the embedded assets
@@ -144,7 +144,7 @@ test-vex: all
 
 test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser tests
 	$(STEP) "Running browser tests"
-	@zig build --prefix . -Dexamples=true
+	@zig build --prefix . -Dexamples=true --release=fast
 	@cd $(TEST_DIR) && node test_gamepad.js $(CURDIR)/$(CART)
 	@rm -rf $(CURDIR)/bundle
 
