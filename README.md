@@ -30,15 +30,16 @@ Dependencies are fetched on first build.
 > parses the pinned version and installs it for you.
 
 ```sh
-zig build --prefix . -Dexamples=true    # build vex-init into ./bin + cart.wasm and zcart.wasm into ./bin/carts
-cd cmd/vex && zig build --prefix ../..   # build the ./vex host into ../bin
-zig build run           # build, then run the C example cart
-zig build runz          # build, then run the Zig example cart
-zig build run -- -s 5   # forward flags to vex (here: window scale 5)
+zig build --prefix . -Dexamples=true --release=fast    # build vex-init into ./bin + cart.wasm and zcart.wasm into ./bin/carts
+cd cmd/vex && zig build --prefix ../.. --release=fast   # build the ./vex host into ../bin
+zig build run --release=fast   # build, then run the C example cart
+zig build runz --release=fast  # build, then run the Zig example cart
+zig build run --release=fast -- -s 5   # forward flags to vex (here: window scale 5)
 ```
 
 `--prefix .` installs into `./bin`; a plain `zig build` uses Zig's default
-`zig-out/`.
+`zig-out/`. Always pass `--release=fast` when running carts: the default Debug
+build interprets them several times slower.
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, `make web`,
 `make test-web`, and `make clean`, passing `--prefix .` for you so all
@@ -154,7 +155,7 @@ the cart **live-reloads** it in the browser, no refresh or restart needed.
 > in another — every rebuild reloads the cart in the browser automatically.
 >
 > ```sh
-> zig build --watch --prefix . -Dexamples=true   # terminal 1: rebuild carts on every change
+> zig build --watch --prefix . -Dexamples=true --release=fast   # terminal 1: rebuild carts on every change
 > go run ./cmd/vex-web bin/carts/zcart.wasm        # terminal 2: serve + auto-reload
 > ```
 
