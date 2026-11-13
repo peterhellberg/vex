@@ -1640,19 +1640,23 @@ int main(int argc, char **argv) {
     struct timespec t0, t1;
     timespec_get(&t0, TIME_UTC);
 
-    uint64_t prev = fnv1a64(g_fb, sizeof g_fb);
+    // Compare frames with memcmp rather than hashing each one: the hash is
+    // byte-serial and costs more than running the cart, while the golden
+    // value at the end is the only hash the tests pin.
+    static uint8_t prev_fb[sizeof g_fb];
+    memcpy(prev_fb, g_fb, sizeof g_fb);
     long changes = 0;
     for (long i = 0; i < frames; i++) {
       err = m3_CallV(cart.f_update);
       if (err)
         die(cart.rt, "update", err);
 
-      uint64_t h = fnv1a64(g_fb, sizeof g_fb);
-      if (h != prev) {
+      if (memcmp(g_fb, prev_fb, sizeof g_fb) != 0) {
         changes++;
+        memcpy(prev_fb, g_fb, sizeof g_fb);
         if (trace)
-          printf("frame %ld fb=%016llx\n", i, (unsigned long long)h);
-        prev = h;
+          printf("frame %ld fb=%016llx\n", i,
+                 (unsigned long long)fnv1a64(g_fb, sizeof g_fb));
       }
     }
     timespec_get(&t1, TIME_UTC);
