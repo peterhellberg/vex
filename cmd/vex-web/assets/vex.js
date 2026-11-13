@@ -1995,42 +1995,44 @@ function tick()
     prevButtons = buttonMask();
 }
 
-// Fixed 60 TPS driven by the wall clock, not one tick per rAF: browsers
-// throttle rAF in hidden tabs and deliver a catch-up burst of callbacks when
-// the tab becomes visible again, which a naive per-rAF loop fast-forwards
-// through (and at display refresh on 60Hz+ monitors, where the C host and
-// the ebiten port both lock to 60fps). A fixed-timestep accumulator with a
-// hidden-gap clamp keeps the cart at 60 TPS regardless.
+// Fixed 60 TPS from absolute deadlines, checked once per rAF (the browser
+// equivalent of the C host's pacer_wait()). rAF follows the display, so on a
+// 120/144 Hz monitor most frames run no tick, and a hidden tab stops rAF and
+// later resumes it after a long gap.
+//
+// An accumulator fed by frame deltas lets timestamp jitter decide whether a
+// tick lands this frame or the next whenever a deadline coincides with a
+// frame (every frame at 60 Hz, every other at 120 Hz), producing 0- and
+// 2-tick frames that make motion hitch. Instead each tick has an absolute
+// deadline, and it runs on the first frame within TICK_SLACK_MS of it, so
+// jitter smaller than the slack never moves a tick to another frame.
 const TICK_MS = 1000 / 60;
-let lastFrame = null;
-let acc = 0;
+// Under half a 120 Hz frame (4.17 ms), so at most one frame per deadline can
+// fall inside the slack, yet well above rAF timestamp jitter.
+const TICK_SLACK_MS = 4;
+// Behind by more than this many ticks (hidden tab, debugger stop, slow
+// frame): resynchronize instead of bursting through the backlog.
+const MAX_CATCH_UP = 4;
+let nextTick = null; // absolute deadline of the next cart tick (rAF clock)
 
 function frame(gen, now)
 {
     if (cartLoading || pendingInstantiations > 0)
     {
-        lastFrame = now;
-        acc = 0;
+        nextTick = null;
         rafId = requestAnimationFrame(t => frame(gen, t));
         return;
     }
 
-    if (lastFrame !== null) {
-        let elapsed = now - lastFrame;
-        if (elapsed > 250) elapsed = 0; // hidden tab gap: don't fast-forward
-        acc += elapsed;
-    }
-    lastFrame = now;
-
-    // Slow frames must not trigger a catch-up burst of ticks.
-    if (acc > 5 * TICK_MS) acc = 5 * TICK_MS;
+    if (nextTick === null || now - nextTick > MAX_CATCH_UP * TICK_MS)
+        nextTick = now;
 
     pollGamepad();
 
     let ran = 0;
-    while (acc >= TICK_MS) {
+    while (now >= nextTick - TICK_SLACK_MS) {
         tick();
-        acc -= TICK_MS;
+        nextTick += TICK_MS;
         ran++;
     }
 
@@ -2057,8 +2059,7 @@ function run()
 
     // Palette + framebuffer were already reset before boot() in
     // instantiateCart(); resetting here would clobber boot()'s pal() overrides.
-    lastFrame = null;
-    acc = 0;
+    nextTick = null;
     rafId = requestAnimationFrame(t => frame(gen, t));
 }
 
