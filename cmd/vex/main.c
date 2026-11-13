@@ -1394,18 +1394,17 @@ fail:
 
 static bool load_cart_stable(IM3Environment env, const char *path, Cart *out,
                              uint64_t *loaded_signature) {
-  // Retry only when the file changed under us (an editor or cart build caught
-  // mid-write); a cart that genuinely fails to load fails on the first try.
-  for (int attempt = 0; attempt < 3; attempt++) {
-    if (!load_cart(env, path, out))
-      return false;
-    uint64_t loaded = fnv1a64(out->wasm, out->wasm_len);
-    if (loaded != 0 && loaded == file_signature(path)) {
-      *loaded_signature = loaded;
-      return true;
-    }
-    free_cart(out);
+  // Reject the load if the file changed while it was being read (an editor or
+  // cart build caught mid-write). A watched cart is retried on the next poll;
+  // a cart that genuinely fails to load fails on the first try either way.
+  if (!load_cart(env, path, out))
+    return false;
+  uint64_t loaded = fnv1a64(out->wasm, out->wasm_len);
+  if (loaded != 0 && loaded == file_signature(path)) {
+    *loaded_signature = loaded;
+    return true;
   }
+  free_cart(out);
   return false;
 }
 
