@@ -90,17 +90,22 @@ function serveDir(dir, extra = {}) {
 // prints "wrote bundle bundle/<name> and bundle/<name>.zip" relative
 // to wherever it was invoked from, so we resolve against that working
 // directory to get an absolute path back.
+// vex-web writes bundle/<name>/ relative to its working directory. Build it
+// in a private temp directory: a shared bundle/ in the repo root let
+// overlapping runs delete each other's files mid-test, so the page 404'd and
+// "cart booted without page errors" failed at random.
 function buildBundle(cart) {
     const repoRoot = path.resolve(__dirname, '..', '..', '..');
-    const out = execFileSync(
-        'go',
-        ['run', './cmd/vex-web', '-bundle', cart],
-        { cwd: repoRoot, encoding: 'utf8' }
-    );
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'vex-test-web-'));
+    const bin = path.join(work, process.platform === 'win32' ? 'vex-web.exe' : 'vex-web');
+    execFileSync('go', ['build', '-o', bin, './cmd/vex-web'],
+        { cwd: repoRoot, stdio: ['ignore', 'ignore', 'inherit'] });
+    const out = execFileSync(bin, ['-bundle', path.resolve(cart)],
+        { cwd: work, encoding: 'utf8' });
 
     const m = out.match(/wrote bundle (\S+) and /);
     if (!m) throw new Error(`could not parse bundle output: ${out}`);
-    return path.resolve(repoRoot, m[1]);
+    return path.resolve(work, m[1]);
 }
 
 // ---- browser Gamepad API mapping ----------------------------------------
@@ -356,12 +361,12 @@ async function runFor(browser, label, w, h, url) {
         await browser.close();
     } finally {
         server.close();
-        // `go run ./cmd/vex-web -bundle` writes `bundle/<name>/` and
-        // `bundle/<name>.zip` next to the repo root. Drop them in
-        // every code path — success, failure, or exception — so the
-        // test never leaves a scratch directory behind.
+        // buildBundle's temp directory holds the vex-web binary plus
+        // `bundle/<name>/` and `bundle/<name>.zip`. Drop it in every
+        // code path — success, failure, or exception — so the test
+        // never leaves a scratch directory behind.
         try {
-            fs.rmSync(path.resolve(bundleDir, '..'), { recursive: true, force: true });
+            fs.rmSync(path.resolve(bundleDir, '..', '..'), { recursive: true, force: true });
         } catch (_) {}
     }
 
