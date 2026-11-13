@@ -38,8 +38,8 @@ zig build run --release=fast -- -s 5   # forward flags to vex (here: window scal
 ```
 
 `--prefix .` installs into `./bin`; a plain `zig build` uses Zig's default
-`zig-out/`. Always pass `--release=fast` when running carts: the default Debug
-build interprets them several times slower.
+`zig-out/`. `cmd/vex` builds a release host by default; pass
+`-Doptimize=debug` there for a debug build.
 
 A `Makefile` wraps these as `make`, `make run`, `make runz`, `make web`,
 `make test-web`, and `make clean`, passing `--prefix .` for you so all
