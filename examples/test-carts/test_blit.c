@@ -25,6 +25,7 @@ static const char *CASE_NAMES[NUM_CASES] = {
 static int frame;
 static int phase;
 static unsigned char big_data[320 * 180];
+static unsigned char wide_data[400 * 200]; // wider and taller than the screen
 
 static void fill_data(unsigned char *d, int w, int h, int pat) {
   for (int y = 0; y < h; y++)
@@ -132,10 +133,13 @@ static void draw_case(int c) {
     blit(d, 130, 0, 2, 2, 2147483647);
   } break;
   case 10: {
-    fill_data(big_data, VEX_WIDTH, VEX_HEIGHT, 0);
-    blit(big_data, 0, 40, 9999, 9999, 16);
-    blit(big_data, 0, 50, 9999, 5, 16);
-    blit(big_data, 0, 60, 5, 9999, 16);
+    // Dimensions larger than the screen, from a bitmap that really is that
+    // big: the host must use the 400-byte source stride, not clamp it to
+    // VEX_WIDTH.
+    fill_data(wide_data, 400, 200, 0);
+    blit(wide_data, 0, 40, 400, 200, 16);
+    blit(wide_data, 0, 50, 400, 5, 16);
+    blit(wide_data, 0, 60, 5, 200, 16);
   } break;
   case 11: {
     unsigned char row[320];
