@@ -14,13 +14,25 @@ pub const LinuxDisplayBackend = enum { X11, Wayland, Both, None };
 //   zig build run     build and run the C example cart
 //   zig build runz    build and run the Zig example cart
 //
+// Builds are release (fast) by default, since the host is an end-user
+// binary. Pass -Doptimize=debug for a debug build, or --release=safe /
+// --release=small (or -Doptimize=safe / small) for the other release modes.
+//
 // The `run` / `runz` steps expect the example carts to already be installed
 // at ../bin/cart.wasm and ../bin/zcart.wasm (built by the top-level `make`).
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{
-        .preferred_optimize_mode = .fast,
-    });
+    // Not standardOptimizeOption: with a preferred mode it falls back to
+    // debug when --release is absent, and it ignores the requested mode.
+    const optimize: std.builtin.Optimize = b.option(
+        std.builtin.Optimize,
+        "optimize",
+        "Optimization mode (default: fast)",
+    ) orelse switch (b.graph.release_mode) {
+        .off, .any, .fast => .fast,
+        .safe => .safe,
+        .small => .small,
+    };
     const strip = optimize != .debug;
 
     // raylib's Linux display backend. X11 (the default) also covers Wayland
@@ -53,7 +65,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     }) orelse return; // raylib not yet fetched; exit cleanly so zig fetches it
-    const wasm3 = b.lazyDependency("wasm3", .{}) orelse return;
+    // Pass the mode down: wasm3's build.zig reads it with
+    // standardOptimizeOption(.{}), which aborts on a bare --release.
+    const wasm3 = b.lazyDependency("wasm3", .{
+        .target = target,
+        .optimize = optimize,
+    }) orelse return;
 
     const exe = b.addExecutable(.{
         .name = "vex",
