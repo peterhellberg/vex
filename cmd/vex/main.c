@@ -462,13 +462,13 @@ m3ApiRawFunction(host_line) {
 // Integer scanline triangle fill -- byte-for-byte the tri() of the Go host:
 // per row, track the truncated leftmost/rightmost edge crossing and draw one
 // hline span. Independent of vertex order or winding, so no normalization
-// step is needed.
-#define TRI_MAX_ROWS (2 * VEX_COORD_MAX + 1) // vertices are COORDS_OK-bounded
-static int32_t g_tri_l[TRI_MAX_ROWS];
-static int32_t g_tri_r[TRI_MAX_ROWS];
+// step is needed. Only visible rows are tracked; off-screen rows would be
+// clipped by fb_hline anyway.
+static int32_t g_tri_l[VEX_H];
+static int32_t g_tri_r[VEX_H];
 
 static void tri_add_edge(int32_t ax, int32_t ay, int32_t bx, int32_t by,
-                         int32_t ymin, int32_t *l, int32_t *r) {
+                         int32_t ymin, int32_t ymax, int32_t *l, int32_t *r) {
   if (ay == by)
     return; // horizontal edge: its endpoints are covered by the others
   // double math to match the Go and JS hosts bit-for-bit at half-pixel
@@ -476,6 +476,10 @@ static void tri_add_edge(int32_t ax, int32_t ay, int32_t bx, int32_t by,
   double slope = (double)(bx - ax) / (double)(by - ay);
   int32_t ys = ay < by ? ay : by;
   int32_t ye = ay < by ? by : ay;
+  if (ys < ymin)
+    ys = ymin;
+  if (ye > ymax)
+    ye = ymax;
   for (int32_t y = ys; y <= ye; y++) {
     double xf = (double)ax + (double)(y - ay) * slope;
     int32_t xi = (int32_t)xf; // truncates toward zero, NOT floor
@@ -495,19 +499,22 @@ m3ApiRawFunction(host_tri) {
                                           !COORDS_OK(x3, y3)) m3ApiSuccess();
   int32_t ymin = y1 < y2 ? (y1 < y3 ? y1 : y3) : (y2 < y3 ? y2 : y3);
   int32_t ymax = y1 > y2 ? (y1 > y3 ? y1 : y3) : (y2 > y3 ? y2 : y3);
-  int64_t n64 = (int64_t)ymax - ymin + 1;
-  if (n64 <= 0 || n64 > TRI_MAX_ROWS)
-    m3ApiSuccess(); // guard hostile spans
-  int n = (int)n64;
+  if (ymax < 0 || ymin >= VEX_H)
+    m3ApiSuccess(); // entirely off-screen
+  if (ymin < 0)
+    ymin = 0;
+  if (ymax >= VEX_H)
+    ymax = VEX_H - 1;
+  int n = (int)(ymax - ymin + 1);
 
   const int32_t INF32 = 1 << 30;
   for (int i = 0; i < n; i++) {
     g_tri_l[i] = INF32;
     g_tri_r[i] = -INF32;
   }
-  tri_add_edge(x1, y1, x2, y2, ymin, g_tri_l, g_tri_r);
-  tri_add_edge(x2, y2, x3, y3, ymin, g_tri_l, g_tri_r);
-  tri_add_edge(x3, y3, x1, y1, ymin, g_tri_l, g_tri_r);
+  tri_add_edge(x1, y1, x2, y2, ymin, ymax, g_tri_l, g_tri_r);
+  tri_add_edge(x2, y2, x3, y3, ymin, ymax, g_tri_l, g_tri_r);
+  tri_add_edge(x3, y3, x1, y1, ymin, ymax, g_tri_l, g_tri_r);
 
   uint32_t c = g_palette[(unsigned)(color) & 15];
   for (int i = 0; i < n; i++) {
