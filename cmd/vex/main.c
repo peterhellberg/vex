@@ -154,17 +154,6 @@ static const uint64_t FONT8[96] = {
     0x0000000000000000ULL  // 127 DEL
 };
 
-// Row-unpacked font: g_font_rows[g*8 + row] holds one row of glyph g (bit 7
-// = leftmost pixel), unpacked once at startup so text() can rasterize glyphs
-// into the framebuffer with plain byte math instead of textured quads.
-static uint8_t g_font_rows[96 * 8];
-
-static void init_font(void) {
-  for (int g = 0; g < 96; g++)
-    for (int row = 0; row < 8; row++)
-      g_font_rows[g * 8 + row] = (uint8_t)(FONT8[g] >> ((7 - row) * 8));
-}
-
 // Set after InitWindow() and cleared on teardown; also acts as the "UI is
 // live" gate: with -n (headless) there is no window, and input queries must
 // return zero deterministically -- mirroring the Go host's uiReady flag.
@@ -629,8 +618,9 @@ m3ApiRawFunction(host_text) {
     int idx = *p - VEX_FONT_FIRST;
     if (idx < 0 || idx >= 96)
       continue;
+    uint64_t glyph = FONT8[idx];
     for (int row = 0; row < 8; row++) {
-      unsigned bits = g_font_rows[idx * 8 + row];
+      unsigned bits = (unsigned)(glyph >> ((7 - row) * 8)) & 0xFFu;
       if (!bits)
         continue;
       int32_t py = y + row;
@@ -1639,7 +1629,6 @@ int main(int argc, char **argv) {
   }
   M3Result err;
 
-  init_font();
   reset_palette();
 
   if (cart.f_boot) {
