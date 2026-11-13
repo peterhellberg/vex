@@ -1260,36 +1260,6 @@ static void die(IM3Runtime rt, const char *what, M3Result err) {
   exit(1);
 }
 
-// Read a whole file into a freshly malloc'd buffer. Returns NULL on failure
-// (so a failed hot-reload can be reported without killing the program).
-static uint8_t *read_file(const char *path, size_t *out_len) {
-  FILE *f = fopen(path, "rb");
-  if (!f)
-    return NULL;
-  if (fseek(f, 0, SEEK_END) != 0) {
-    fclose(f);
-    return NULL;
-  }
-  long n = ftell(f);
-  if (n <= 0) {
-    fclose(f);
-    return NULL;
-  }
-  if (fseek(f, 0, SEEK_SET) != 0) {
-    fclose(f);
-    return NULL;
-  }
-  uint8_t *buf = malloc((size_t)n);
-  if (!buf || fread(buf, 1, n, f) != (size_t)n) {
-    free(buf);
-    fclose(f);
-    return NULL;
-  }
-  fclose(f);
-  *out_len = (size_t)n;
-  return buf;
-}
-
 // FNV-1a 64-bit over the framebuffer -- cheap, deterministic, and identical
 // to what the Go host's golden tests compute over their pixel buffer, so a
 // headless C run can be diffed against them byte-for-byte. The same hash over
@@ -1308,12 +1278,12 @@ static uint64_t fnv1a64(const void *data, size_t n) {
 // finished write from a half-written one, and the loader can prove it booted
 // the bytes that are actually there. 0 means "unreadable".
 static uint64_t file_signature(const char *path) {
-  size_t n;
-  uint8_t *b = read_file(path, &n);
+  int n;
+  uint8_t *b = LoadFileData(path, &n);
   if (!b)
     return 0;
-  uint64_t h = fnv1a64(b, n);
-  free(b);
+  uint64_t h = fnv1a64(b, (size_t)n);
+  UnloadFileData(b);
   return h;
 }
 
@@ -1352,17 +1322,18 @@ static void report_load_error(IM3Runtime rt, const char *what, M3Result err) {
 // prints why, frees anything it allocated, and leaves *out untouched -- so the
 // caller can keep running the previous cart.
 static bool load_cart(IM3Environment env, const char *path, Cart *out) {
-  size_t wasm_len;
-  uint8_t *wasm = read_file(path, &wasm_len);
+  int wasm_size;
+  uint8_t *wasm = LoadFileData(path, &wasm_size);
   if (!wasm) {
     fprintf(stderr, "vex: cannot read %s\n", path);
     return false;
   }
+  size_t wasm_len = (size_t)wasm_size;
 
   IM3Runtime rt = m3_NewRuntime(env, 64 * 1024 /* stack */, NULL);
   if (!rt) {
     fprintf(stderr, "vex: cannot create runtime\n");
-    free(wasm);
+    UnloadFileData(wasm);
     return false;
   }
   // The runtime owns mod (and frees it) from m3_LoadModule on; until then it
@@ -1416,7 +1387,7 @@ fail:
   if (!mod_owned)
     m3_FreeModule(mod);
   m3_FreeRuntime(rt);
-  free(wasm);
+  UnloadFileData(wasm);
   return false;
 }
 
@@ -1433,7 +1404,7 @@ static bool load_cart_stable(IM3Environment env, const char *path, Cart *out,
       return true;
     }
     m3_FreeRuntime(out->rt);
-    free(out->wasm);
+    UnloadFileData(out->wasm);
   }
   return false;
 }
@@ -1512,14 +1483,14 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart,
   clear_audio();
   g_audio_ready = was_audio_ready;
   m3_FreeRuntime(cart->rt);
-  free(cart->wasm);
+  UnloadFileData(cart->wasm);
   *cart = fresh;
   *loaded_signature = loaded;
   return true;
 
 reject_fresh:
   m3_FreeRuntime(fresh.rt);
-  free(fresh.wasm);
+  UnloadFileData(fresh.wasm);
 reject:
   restore_host_state(&previous);
   g_audio_ready = was_audio_ready;
@@ -1569,6 +1540,10 @@ static Texture2D rebuild_screen(Texture2D old, IM3Runtime rt) {
 }
 
 int main(int argc, char **argv) {
+  // Errors only: raylib's INFO chatter (GLFW hints, audio device notes,
+  // FILEIO logs) is noise during normal play.
+  SetTraceLogLevel(LOG_ERROR);
+
   int scale = VEX_SCALE;
   bool watch = false; // -w/--watch: auto-reload the cart when its file changes
   bool trace =
@@ -1681,26 +1656,18 @@ int main(int argc, char **argv) {
              (unsigned)((g_palette[i] >> 8) & 0xFF),
              (unsigned)((g_palette[i] >> 16) & 0xFF));
 
-    if (dump_path) {
-      FILE *f = fopen(dump_path, "wb");
-      if (!f) {
-        fprintf(stderr, "vex: cannot write %s\n", dump_path);
-        return 1;
-      }
-      fwrite(g_fb, sizeof g_fb, 1, f);
-      fclose(f);
+    if (dump_path && !SaveFileData(dump_path, g_fb, (int)sizeof g_fb)) {
+      fprintf(stderr, "vex: cannot write %s\n", dump_path);
+      return 1;
     }
 
     m3_FreeRuntime(cart.rt);
     m3_FreeEnvironment(env);
-    free(cart.wasm);
+    UnloadFileData(cart.wasm);
     return 0;
   }
 
   // ---- raylib window + audio --------------------------------------------
-  // Errors only, like 4b: raylib's INFO chatter (GLFW hints, audio device
-  // notes) is noise during normal play.
-  SetTraceLogLevel(LOG_ERROR);
 #ifdef _WIN32
   SetConfigFlags(FLAG_WINDOW_RESIZABLE); // enable maximize button on Windows
 #endif
@@ -1907,6 +1874,6 @@ int main(int argc, char **argv) {
   CloseWindow();
   m3_FreeRuntime(cart.rt);
   m3_FreeEnvironment(env);
-  free(cart.wasm);
+  UnloadFileData(cart.wasm);
   return 0;
 }
