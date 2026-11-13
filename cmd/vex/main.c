@@ -330,23 +330,15 @@ static void fb_hline(int32_t y, int32_t x0, int32_t x1, uint32_t c) {
 
 // Clipped filled rectangle: identical clipping to the Go host's rect().
 static void fb_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t c) {
-  if (w <= 0 || h <= 0)
-    return;
-  if (!coord_ok(x) || !coord_ok(y))
+  if (w <= 0 || h <= 0 || !COORDS_OK(x, y))
     return;
   if (w > VEX_W)
     w = VEX_W;
   if (h > VEX_H)
     h = VEX_H;
-  int32_t x0 = x < 0 ? 0 : x;
-  int32_t y0 = y < 0 ? 0 : y;
-  int32_t x1 = x + w < VEX_W ? x + w : VEX_W;
   int32_t y1 = y + h < VEX_H ? y + h : VEX_H;
-  for (int32_t yy = y0; yy < y1; yy++) {
-    uint32_t *row = &g_fb[(size_t)yy * VEX_W];
-    for (int32_t xx = x0; xx < x1; xx++)
-      row[xx] = c;
-  }
+  for (int32_t yy = y < 0 ? 0 : y; yy < y1; yy++)
+    fb_hline(yy, x, x + w - 1, c);
 }
 
 // ---- host API: functions the cart imports from module "env" --------------
