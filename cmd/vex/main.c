@@ -151,7 +151,7 @@ static const uint64_t FONT8[96] = {
     0x0E18183018180E00ULL, // 123 {
     0x1818180018181800ULL, // 124 |
     0x7018180C18187000ULL, // 125 }
-    0x0000000000000000ULL, // 126 ~
+    0x000000324C000000ULL, // 126 ~
     0x0000000000000000ULL  // 127 DEL
 };
 
@@ -537,54 +537,50 @@ m3ApiRawFunction(host_trib) {
   m3ApiSuccess();
 }
 
+// Stamp the on-screen part of a w x h bitmap (row stride w) at (x, y). Only
+// the visible source window is visited, so a huge or mostly-offscreen bitmap
+// costs nothing beyond what lands in the framebuffer. map, when set, remaps
+// each palette index through a 16-byte table first.
 static void blit_rows(const uint8_t *data, int32_t x, int32_t y, int32_t w,
                       int32_t h, int32_t key, const uint8_t *map) {
-  for (int32_t row = 0; row < h; row++) {
-    int32_t yy = y + row;
-    if (yy < 0 || yy >= VEX_H)
-      continue;
-    uint32_t *dst = &g_fb[(size_t)yy * VEX_W];
-    const uint8_t *src = data + (size_t)row * w;
-    int32_t col = 0;
-    while (col < w) {
-      while (col < w && (uint32_t)src[col] == (uint32_t)key)
+  // x, y are COORDS_OK-bounded; widen before adding the cart's w/h.
+  int32_t c0 = x < 0 ? -x : 0;
+  int32_t c1 = (int64_t)x + w > VEX_W ? VEX_W - x : w;
+  int32_t r0 = y < 0 ? -y : 0;
+  int32_t r1 = (int64_t)y + h > VEX_H ? VEX_H - y : h;
+  if (c0 >= c1 || r0 >= r1)
+    return;
+  for (int32_t row = r0; row < r1; row++) {
+    uint32_t *dst = &g_fb[(size_t)(y + row) * VEX_W];
+    const uint8_t *src = data + (size_t)row * (size_t)w;
+    int32_t col = c0;
+    while (col < c1) {
+      while (col < c1 && (uint32_t)src[col] == (uint32_t)key)
         col++;
-      if (col >= w)
+      if (col >= c1)
         break;
       int32_t start = col;
       uint8_t run = src[col];
-      while (col < w && src[col] == run)
+      while (col < c1 && src[col] == run)
         col++;
-      int32_t sx = x + start, ex = x + col;
-      if (sx < 0)
-        sx = 0;
-      if (ex > VEX_W)
-        ex = VEX_W;
       uint32_t v = map ? g_palette[map[run & 15] & 15] : g_palette[run & 15];
-      for (; sx < ex; sx++)
+      for (int32_t sx = x + start; sx < x + col; sx++)
         dst[sx] = v;
     }
   }
 }
 
-// Shrink a cart-supplied blit rect to what can actually be drawn (both sides
-// clamped to the framebuffer). Returns false when nothing would be drawn, in
-// which case w/h are left alone and the caller must not touch the memory.
-static bool blit_clamp(int32_t x, int32_t y, int32_t *w, int32_t *h) {
-  if (*w <= 0 || *h <= 0 || !COORDS_OK(x, y))
-    return false;
-  if (*w > VEX_W)
-    *w = VEX_W;
-  if (*h > VEX_H)
-    *h = VEX_H;
-  return true;
+// Whether a blit draws anything. When it does, the whole w*h bitmap must lie
+// in cart memory (checked by the caller), even if only part is on screen.
+static bool blit_ok(int32_t x, int32_t y, int32_t w, int32_t h) {
+  return w > 0 && h > 0 && COORDS_OK(x, y);
 }
 
 m3ApiRawFunction(host_blit) {
   m3ApiGetArgMem(const uint8_t *, data) m3ApiGetArg(int32_t, x)
       m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, w) m3ApiGetArg(int32_t, h)
           m3ApiGetArg(int32_t, key);
-  if (!blit_clamp(x, y, &w, &h))
+  if (!blit_ok(x, y, w, h))
     m3ApiSuccess();
   m3ApiCheckMem(data, (size_t)w * (size_t)h);
   blit_rows(data, x, y, w, h, key, NULL);
@@ -594,7 +590,7 @@ m3ApiRawFunction(host_blitm) {
   m3ApiGetArgMem(const uint8_t *, data) m3ApiGetArg(int32_t, x)
       m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, w) m3ApiGetArg(int32_t, h)
           m3ApiGetArg(int32_t, key) m3ApiGetArgMem(const uint8_t *, map);
-  if (!blit_clamp(x, y, &w, &h))
+  if (!blit_ok(x, y, w, h))
     m3ApiSuccess();
   m3ApiCheckMem(data, (size_t)w * (size_t)h);
   m3ApiCheckMem(map, 16);
