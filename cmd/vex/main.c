@@ -640,11 +640,15 @@ m3ApiRawFunction(host_text) {
 // title(s): set the window title from a cart string.
 m3ApiRawFunction(host_title) {
   m3ApiGetArgMem(const char *, s) m3ApiCheckMem(s, 1);
-  char buf[128];
+  char buf[sizeof(g_window_title)];
   cart_cstr(_mem, s, buf, sizeof(buf));
-  snprintf(g_window_title, sizeof(g_window_title), "%s", buf);
-  if (g_window_open)
-    SetWindowTitle(g_window_title);
+  // Carts tend to set the title every frame; an unchanged title is a no-op
+  // window-manager request.
+  if (strcmp(buf, g_window_title) != 0) {
+    snprintf(g_window_title, sizeof(g_window_title), "%s", buf);
+    if (g_window_open)
+      SetWindowTitle(g_window_title);
+  }
   m3ApiSuccess();
 }
 
