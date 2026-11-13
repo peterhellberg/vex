@@ -1275,16 +1275,18 @@ static void die(IM3Runtime rt, const char *what, M3Result err) {
   exit(1);
 }
 
-// FNV-1a 64-bit over the framebuffer -- cheap, deterministic, and identical
-// to what the Go host's golden tests compute over their pixel buffer, so a
-// headless C run can be diffed against them byte-for-byte. The same hash over
-// a file's bytes is the cart's on-disk signature (see file_signature).
+// Standard FNV-1a 64-bit over the framebuffer -- cheap and deterministic, so
+// headless runs can be compared across hosts and against any stock FNV-1a
+// tool. The same hash over a file's bytes is the cart's on-disk signature
+// (see file_signature).
 static uint64_t fnv1a64(const void *data, size_t n) {
   const uint8_t *p = data;
-  uint64_t h = 1469598103934665603ULL;
+  // Decimal on purpose: conformance_test.go reads every 16-digit hex literal
+  // in this file as a FONT8 glyph.
+  uint64_t h = 14695981039346656037ULL; // offset basis
   while (n--) {
     h ^= *p++;
-    h *= 1099511628211ULL;
+    h *= 1099511628211ULL; // prime
   }
   return h;
 }
