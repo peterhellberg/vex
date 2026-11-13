@@ -273,9 +273,7 @@ static void reset_palette(void) {
 }
 
 // Copy a bounded, NUL-terminated string out of a cart's linear memory.
-static void cart_cstr(IM3Runtime rt, const void *mem, const char *s, char *buf,
-                      int size) {
-  (void)rt;
+static void cart_cstr(const void *mem, const char *s, char *buf, int size) {
   uintptr_t end = (uintptr_t)mem + m3_GetMemorySizeAt(mem);
   int n = 0;
   while (n < size - 1 && (uintptr_t)(s + n) < end && s[n]) {
@@ -607,9 +605,9 @@ m3ApiRawFunction(host_text) {
   m3ApiGetArgMem(const char *, s) m3ApiGetArg(int32_t, x)
       m3ApiGetArg(int32_t, y) m3ApiGetArg(int32_t, color) m3ApiCheckMem(s, 1);
   char buf[128];
-  cart_cstr(runtime, _mem, s, buf, sizeof(buf));
+  cart_cstr(_mem, s, buf, sizeof(buf));
 
-  // Rasterize glyphs straight into the framebuffer from the unpacked font
+  // Rasterize glyphs straight into the framebuffer from the packed FONT8
   // rows. Unsupported characters advance a full 8px slot, matching the Go
   // and JS hosts.
   uint32_t c = g_palette[(unsigned)(color) & 15];
@@ -642,7 +640,7 @@ m3ApiRawFunction(host_text) {
 m3ApiRawFunction(host_title) {
   m3ApiGetArgMem(const char *, s) m3ApiCheckMem(s, 1);
   char buf[128];
-  cart_cstr(runtime, _mem, s, buf, sizeof(buf));
+  cart_cstr(_mem, s, buf, sizeof(buf));
   snprintf(g_window_title, sizeof(g_window_title), "%s", buf);
   if (g_window_open)
     SetWindowTitle(g_window_title);
@@ -664,7 +662,7 @@ m3ApiRawFunction(host_btnp) {
   m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, button)
       // Clamp before the shift: hostile carts probe out-of-range buttons and
       // a negative shift is undefined behavior (crashes under Zig's cc).
-      int prev = button >= 0 && button < 8 ? (g_prev_btns >> button) & 1 : 0;
+      int prev = button >= 0 && button < 6 ? (g_prev_btns >> button) & 1 : 0;
   int valid = g_window_open && button >= 0 && button < 6;
   int latched = valid ? (g_pressed_btns >> button) & 1 : 0;
   int held = valid ? button_held(button) : 0;
@@ -1238,16 +1236,33 @@ static M3Result link_host(IM3Module mod) {
   return first_err;
 }
 
-static void die(IM3Runtime rt, const char *what, M3Result err) {
+// Report why a load or call step failed. A missing import gets its own
+// message: it means the cart was built against a host API this vex doesn't
+// provide (an API that was removed/renamed, or is newer than this build), not
+// that the file itself is broken -- so it must not be confused with a cart
+// that merely lacks the export we were looking for.
+static void report_load_error(IM3Runtime rt, const char *what, M3Result err) {
+  const char *msg = "";
   if (rt && err) {
     M3ErrorInfo info;
     m3_GetErrorInfo(rt, &info);
-    fprintf(stderr, "vex: %s: %s (%s)\n", what, err,
-            info.message ? info.message : "");
-  } else {
-    fprintf(stderr, "vex: %s%s%s\n", what, err ? ": " : "",
-            err ? (const char *)err : "");
+    if (info.message)
+      msg = info.message;
   }
+  if (err == m3Err_functionImportMissing)
+    fprintf(stderr,
+            "vex: cart needs a host function this vex doesn't provide%s%s\n",
+            *msg ? ": " : "", msg);
+  else if (err && *msg)
+    fprintf(stderr, "vex: %s: %s (%s)\n", what, (const char *)err, msg);
+  else if (err)
+    fprintf(stderr, "vex: %s: %s\n", what, (const char *)err);
+  else
+    fprintf(stderr, "vex: %s\n", what);
+}
+
+static void die(IM3Runtime rt, const char *what, M3Result err) {
+  report_load_error(rt, what, err);
   // Close raylib's window before exit so its GL teardown doesn't print a
   // noisy "context still bound" warning. Guarded because die() may be called
   // before InitWindow() (e.g. from a wasm load error in main).
@@ -1297,23 +1312,10 @@ typedef struct {
   size_t wasm_len;
 } Cart;
 
-// Report why a load step failed. A missing import gets its own message: it
-// means the cart was built against a host API this vex doesn't provide (an
-// API that was removed/renamed, or is newer than this build), not that the
-// file itself is broken -- so it must not be confused with a cart that merely
-// lacks the export we were looking for.
-static void report_load_error(IM3Runtime rt, const char *what, M3Result err) {
-  M3ErrorInfo info;
-  m3_GetErrorInfo(rt, &info);
-  const char *msg = info.message ? info.message : "";
-  if (err == m3Err_functionImportMissing)
-    fprintf(stderr,
-            "vex: cart needs a host function this vex doesn't provide%s%s\n",
-            *msg ? ": " : "", msg);
-  else if (*msg)
-    fprintf(stderr, "vex: %s: %s (%s)\n", what, (const char *)err, msg);
-  else
-    fprintf(stderr, "vex: %s: %s\n", what, (const char *)err);
+// Free a cart's runtime and the wasm bytes it references.
+static void free_cart(Cart *cart) {
+  m3_FreeRuntime(cart->rt);
+  UnloadFileData(cart->wasm);
 }
 
 // Load a cart from disk into a fresh runtime: parse, link the host API, and
@@ -1402,8 +1404,7 @@ static bool load_cart_stable(IM3Environment env, const char *path, Cart *out,
       *loaded_signature = loaded;
       return true;
     }
-    m3_FreeRuntime(out->rt);
-    UnloadFileData(out->wasm);
+    free_cart(out);
   }
   return false;
 }
@@ -1481,15 +1482,13 @@ static bool reload_cart(IM3Environment env, const char *path, Cart *cart,
 
   clear_audio();
   g_audio_ready = was_audio_ready;
-  m3_FreeRuntime(cart->rt);
-  UnloadFileData(cart->wasm);
+  free_cart(cart);
   *cart = fresh;
   *loaded_signature = loaded;
   return true;
 
 reject_fresh:
-  m3_FreeRuntime(fresh.rt);
-  UnloadFileData(fresh.wasm);
+  free_cart(&fresh);
 reject:
   restore_host_state(&previous);
   g_audio_ready = was_audio_ready;
@@ -1536,6 +1535,22 @@ static Texture2D rebuild_screen(Texture2D old, IM3Runtime rt) {
     die(rt, "cannot re-create framebuffer texture after a fullscreen change",
         NULL);
   return t;
+}
+
+// Toggle true fullscreen and rebuild the framebuffer texture: toggling can
+// recreate the GL context (macOS), so the old texture must not be reused.
+static void toggle_fullscreen(Texture2D *screen, bool *integer_scale, int scale,
+                              IM3Runtime rt) {
+  if (!IsWindowFullscreen()) {
+    int mon = GetCurrentMonitor();
+    SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
+    ToggleFullscreen();
+    *integer_scale = true; // crisp by default in fullscreen
+  } else {
+    ToggleFullscreen();
+    SetWindowSize(VEX_W * scale, VEX_H * scale);
+  }
+  *screen = rebuild_screen(*screen, rt);
 }
 
 int main(int argc, char **argv) {
@@ -1619,7 +1634,7 @@ int main(int argc, char **argv) {
   fb_fill(g_palette[0]);
 
   // ---- headless run (-n frames): no window, no audio --------------------
-  // Inputs read as released, title() is ignored, beep() is silent -- which
+  // Inputs read as released, title() is ignored, tone() is silent -- which
   // makes runs fully deterministic and directly comparable against the Go
   // host's golden framebuffer hashes.
   if (frames >= 0) {
@@ -1660,9 +1675,8 @@ int main(int argc, char **argv) {
       return 1;
     }
 
-    m3_FreeRuntime(cart.rt);
+    free_cart(&cart);
     m3_FreeEnvironment(env);
-    UnloadFileData(cart.wasm);
     return 0;
   }
 
@@ -1678,8 +1692,8 @@ int main(int argc, char **argv) {
   if (screen.id == 0)
     die(cart.rt, "cannot create framebuffer texture", NULL);
 
-  // Audio for beep(). InitAudioDevice() is safe to call when no audio
-  // device exists (headless/CI) -- it just fails and beep() stays silent.
+  // Audio for tone(). InitAudioDevice() is safe to call when no audio
+  // device exists (headless/CI) -- it just fails and tone() stays silent.
   InitAudioDevice();
   g_audio_ready = IsAudioDeviceReady();
 
@@ -1720,18 +1734,7 @@ int main(int argc, char **argv) {
       // True fullscreen (a macOS fullscreen Space) fits the display
       // exactly and hides the menu bar, so the picture isn't pushed off
       // the bottom of a notched screen as borderless-windowed would.
-      // Toggling fullscreen can recreate the GL context (macOS), so the
-      // framebuffer texture is rebuilt afterwards.
-      int mon = GetCurrentMonitor();
-      if (!IsWindowFullscreen()) {
-        SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
-        ToggleFullscreen();
-        integer_scale = true; // crisp by default in fullscreen
-      } else {
-        ToggleFullscreen();
-        SetWindowSize(VEX_W * scale, VEX_H * scale);
-      }
-      screen = rebuild_screen(screen, cart.rt);
+      toggle_fullscreen(&screen, &integer_scale, scale, cart.rt);
     }
     if (super && IsKeyPressed(KEY_I))
       integer_scale = !integer_scale;
@@ -1745,13 +1748,8 @@ int main(int argc, char **argv) {
       bool is_maximized = IsWindowMaximized();
       if (is_maximized != was_maximized) {
         was_maximized = is_maximized;
-        if (is_maximized && !IsWindowFullscreen()) {
-          int mon = GetCurrentMonitor();
-          SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
-          ToggleFullscreen();
-          integer_scale = true;
-          screen = rebuild_screen(screen, cart.rt);
-        }
+        if (is_maximized && !IsWindowFullscreen())
+          toggle_fullscreen(&screen, &integer_scale, scale, cart.rt);
       }
     }
 #endif
@@ -1871,8 +1869,7 @@ int main(int argc, char **argv) {
   g_window_open = false;
   tone_cleanup();
   CloseWindow();
-  m3_FreeRuntime(cart.rt);
+  free_cart(&cart);
   m3_FreeEnvironment(env);
-  UnloadFileData(cart.wasm);
   return 0;
 }
