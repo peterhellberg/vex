@@ -228,9 +228,8 @@ static bool button_held(int i) {
 }
 
 // Same set of pad buttons, but for the release-to-press edge instead of the
-// held state. Latched per render frame for the same reason the keys are: a
-// 144 Hz frame often runs zero cart ticks, which would drop a press that was
-// polled only inside the tick loop.
+// held state. Latched per render frame like the keys, and consumed by the
+// first cart tick that follows.
 static bool button_pressed(int i) {
   for (int g = 0; g < VEX_MAX_GAMEPADS; g++)
     for (int b = 0; b < VEX_PAD_SLOTS; b++)
@@ -1559,6 +1558,49 @@ static void usage(const char *p) {
 // Create the GPU-side copy of the framebuffer. A plain texture (not a render
 // texture): carts draw on the CPU now, so GL only needs to receive the
 // finished frame once per present.
+// ---- frame pacing ------------------------------------------------------------
+// The window loop runs exactly 60 frames per second with one cart tick each.
+//
+// raylib's SetTargetFPS(60) is a relative limiter: it sleeps a frame's worth
+// after each frame, and its oversleep accumulates (frames averaged ~16.9 ms
+// on a 120 Hz Mac). A separate 60 Hz tick accumulator then had to make up the
+// drift with frames that ran 0 or 2 ticks -- about one a second -- so motion
+// visibly hitched, and a second tick could overwrite the first tick's
+// pending tone() on the same channel before the mixer saw it. Vsync can't
+// pace instead: macOS doesn't reliably honor it.
+//
+// The pacer keeps absolute deadlines, so oversleep never accumulates and a
+// late frame is absorbed by the next deadline instead of doubling up.
+#define VEX_TICK_DT (1.0 / 60.0)
+// Behind by more than this many ticks (hidden window, debugger stop):
+// resynchronize instead of bursting through the backlog.
+#define VEX_MAX_CATCH_UP 4
+
+typedef struct {
+  double next; // absolute deadline of the frame being presented
+} Pacer;
+
+static Pacer pacer_start(void) { return (Pacer){.next = GetTime() + VEX_TICK_DT}; }
+
+// Wait for the current deadline, then return how many cart ticks are due next
+// frame: 1 normally, more if the loop has fallen behind. WaitTime sleeps most
+// of the way and busy-waits the last 5%, landing within ~0.6 ms of the deadline
+// without spinning a core.
+static int pacer_wait(Pacer *p) {
+  WaitTime(p->next - GetTime());
+  p->next += VEX_TICK_DT;
+  double behind = GetTime() - p->next;
+  if (behind < 0)
+    return 1;
+  if (behind > VEX_MAX_CATCH_UP * VEX_TICK_DT) {
+    p->next = GetTime() + VEX_TICK_DT;
+    return 1;
+  }
+  int extra = (int)(behind / VEX_TICK_DT) + 1;
+  p->next += extra * VEX_TICK_DT;
+  return 1 + extra;
+}
+
 static Texture2D make_screen_texture(void) {
   Image img = GenImageColor(VEX_W, VEX_H, BLANK);
   Texture2D t = LoadTextureFromImage(img);
@@ -1734,7 +1776,7 @@ int main(int argc, char **argv) {
 #endif
   InitWindow(VEX_W * scale, VEX_H * scale, g_window_title);
   g_window_open = true;
-  SetTargetFPS(60);
+  SetTargetFPS(0); // paced by pacer_wait() instead; see "frame pacing"
 
   Texture2D screen = make_screen_texture();
   if (screen.id == 0)
@@ -1750,21 +1792,13 @@ int main(int argc, char **argv) {
 
   int poll = 0; // ticks since the last file-signature poll
 
-  // Fixed 60 TPS driven by wall clock, not one tick per frame: the C host
-  // previously ran one cart tick per render frame, so 144 Hz displays ran
-  // ~2.4× fast vs the Go host (ebiten TPS 60) and the JS host (accumulator).
-  const double tickDt = 1.0 / 60.0;
-  double acc = 0.0;
-  double prevTime = GetTime();
+  // 60 frames per second from absolute deadlines, independent of the
+  // display's refresh rate, so 120/144 Hz displays don't run carts fast.
+  Pacer pacer = pacer_start();
+  int due = 1; // cart ticks to run this frame
 
   while (!WindowShouldClose()) {
     latch_key_presses();
-    double now = GetTime();
-    double dt = now - prevTime;
-    prevTime = now;
-    if (dt > 0.25) dt = 0; // hidden/minimized gap: don't fast-forward
-    acc += dt;
-    if (acc > 5 * tickDt) acc = 5 * tickDt; // slow frames: no catch-up burst
     // Console controls (Super = Cmd on macOS, Super/Windows key on Linux):
     //   Super+Enter  toggle fullscreen
     //   Super+I      toggle integer scaling (crisp pixels vs. fill)
@@ -1772,12 +1806,11 @@ int main(int argc, char **argv) {
     // Escape (raylib's default) closes the window.
     bool super = IsKeyDown(KEY_LEFT_SUPER) || IsKeyDown(KEY_RIGHT_SUPER);
     // Latch the reload edge per-frame: IsKeyPressed is true for exactly one
-    // frame, but a 144 Hz frame often runs 0 ticks, which would drop the
-    // press if polled inside the tick loop. Consumed by the first tick below.
+    // frame. Consumed by the first tick below.
     g_reload_pressed = g_reload_pressed || (super && IsKeyPressed(KEY_R));
 
-    // Reload is tick-rate (60 TPS), not frame-rate, so -watch stays 0.5s
-    // at 144 Hz. Fullscreen toggles stay per-frame (they affect rendering).
+    // Reload is checked per tick, so -watch polls every 0.5 s. Fullscreen
+    // toggles stay per-frame (they affect rendering).
     if (super && IsKeyPressed(KEY_ENTER)) {
       // True fullscreen (a macOS fullscreen Space) fits the display
       // exactly and hides the menu bar, so the picture isn't pushed off
@@ -1850,9 +1883,8 @@ int main(int argc, char **argv) {
     g_view_ox = ox;
     g_view_oy = oy;
 
-    // Fixed 60 TPS cart ticks — may run 0, 1, or catch-up ticks per frame.
-    bool ticked = false;
-    while (acc >= tickDt) {
+    // One cart tick per frame, plus catch-up ticks if the loop fell behind.
+    for (int tick = 0; tick < due; tick++) {
       // Reload checks are tick-rate, not frame-rate.
       bool want_reload = g_reload_pressed;
       g_reload_pressed = false;
@@ -1873,13 +1905,8 @@ int main(int argc, char **argv) {
 
       g_prev_btns = current_button_mask();
       g_pressed_btns = 0;
-
-      acc -= tickDt;
-      ticked = true;
     }
-    if (ticked) {
-      UpdateTexture(screen, g_fb);
-    }
+    UpdateTexture(screen, g_fb);
 
     // Blit the framebuffer to the screen. The texture is top-down, so no
     // negative-height source flip is needed (render textures stored
@@ -1912,6 +1939,9 @@ int main(int argc, char **argv) {
       Rectangle dst = {ox, oy, dw, dh};
       DrawTexturePro(screen, src, dst, (Vector2){0, 0}, 0.0f, WHITE);
     }
+    // Wait between drawing and the swap, so the frame is shown on its
+    // deadline and EndDrawing's input poll lands just before the next tick.
+    due = pacer_wait(&pacer);
     EndDrawing();
   }
 
