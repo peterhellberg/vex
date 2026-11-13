@@ -1444,12 +1444,8 @@ function blit(ptr, x, y, w, h, key)
     if (x < -B || x > B || y < -B || y > B)
         return;
 
-    // Clamp to the framebuffer before validating against cart memory, so a
-    // mostly-offscreen blit doesn't demand bytes no other host reads
-    // (matches the C and Go hosts).
-    if (w > VEX_W) w = VEX_W;
-    if (h > VEX_H) h = VEX_H;
-
+    // The whole w*h bitmap must lie in cart memory, even if only part of it
+    // is on screen (matches the C host).
     if (ptr < 0 || ptr + w * h > mem8.length)
         return;
 
@@ -1472,9 +1468,6 @@ function blitm(ptr, x, y, w, h, key, mapptr)
     if (x < -B || x > B || y < -B || y > B)
         return;
 
-    if (w > VEX_W) w = VEX_W;
-    if (h > VEX_H) h = VEX_H;
-
     if (ptr < 0 || ptr + w * h > mem8.length)
         return;
 
@@ -1486,39 +1479,41 @@ function blitm(ptr, x, y, w, h, key, mapptr)
 
 // Shared stamp loop for blit (mapptr < 0: palette indices straight) and
 // blitm (through the 16-byte map) — the single line they ever differed on.
+// Only the on-screen source window is visited; the row stride stays w.
 function blitRows(ptr, w, h, x, y, key, mapptr)
 {
-    for (let row = 0; row < h; row++)
+    const c0 = Math.max(0, -x);
+    const c1 = Math.min(w, VEX_W - x);
+    const r0 = Math.max(0, -y);
+    const r1 = Math.min(h, VEX_H - y);
+
+    if (c0 >= c1)
+        return;
+
+    for (let row = r0; row < r1; row++)
     {
-        const yy = y + row;
-
-        if (yy < 0 || yy >= VEX_H)
-            continue;
-
-        const dst = yy * VEX_W;
+        const dst = (y + row) * VEX_W;
         const src = ptr + row * w;
 
-        let col = 0;
-        while (col < w)
+        let col = c0;
+        while (col < c1)
         {
-            while (col < w && mem8[src + col] === key)
+            while (col < c1 && mem8[src + col] === key)
                 col++;
 
-            if (col >= w)
+            if (col >= c1)
                 break;
 
             const start = col;
             const run = mem8[src + col];
 
-            while (col < w && mem8[src + col] === run)
+            while (col < c1 && mem8[src + col] === run)
                 col++;
 
-            let sx = Math.max(0, x + start);
-            const ex = Math.min(VEX_W, x + col);
             const idx = mapptr < 0 ? run & 15 : mem8[mapptr + (run & 15)] & 15;
             const v = palette[idx];
 
-            for (; sx < ex; sx++)
+            for (let sx = x + start; sx < x + col; sx++)
                 pixels32[dst + sx] = v;
         }
     }
@@ -1721,7 +1716,7 @@ const FONT8 = [
 0x0E18183018180E00n, // 123 {
 0x1818180018181800n, // 124 |
 0x7018180C18187000n, // 125 }
-0x0000000000000000n, // 126 ~
+0x000000324C000000n, // 126 ~
 0x0000000000000000n  // 127 DEL
 ];
 
