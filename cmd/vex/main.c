@@ -5,7 +5,7 @@
 // exported update() once per frame. Carts draw into a 320x180 framebuffer
 // that is scaled up to the window with nearest-neighbour filtering.
 //
-//   usage: ./vex [-s scale] [-w] [-n frames] [-t] <cart.wasm>
+//   usage: ./vex [-s scale] [-w] [-n frames] [-t] [-i tape] <cart.wasm>
 
 #include <errno.h>
 #include <math.h>
@@ -255,10 +255,203 @@ static void latch_key_presses(void) {
   }
 }
 
+// ---- simulated input for headless runs (-i/--input) ------------------------
+// A tape is a sparse list of frame -> full input states. Frame numbers are
+// 1-based: @N sets an absolute frame, +N advances N frames from the previous
+// event. The button field is a comma-separated list of held buttons ('-' for
+// none): L, R, U, D, Z, X, LMB, RMB, MMB. An optional trailing `X,Y` sets
+// the pointer. Fields omitted by an event keep their previous value. For
+// example:
+//
+//   @1   Z                     # start
+//   +1   -
+//   +1   L                     # hold left
+//   +20  -
+//   +17  Z   160,90
+//
+// Pass `-` as the path to read the tape from stdin.
+
+#define VEX_SIM_MAX_EVENTS 1024
+
+typedef struct {
+  long frame;
+  uint8_t btns, mbtns;
+  int32_t mx, my;
+} SimEvent;
+
+typedef struct {
+  SimEvent events[VEX_SIM_MAX_EVENTS];
+  int count;
+} InputTape;
+
+static InputTape g_tape;
+static uint8_t g_sim_btns, g_sim_mbtns;
+static int32_t g_sim_mx = VEX_W / 2, g_sim_my = VEX_H / 2;
+
+static const struct {
+  const char *name;
+  int index;
+  bool mouse;
+} SIM_BUTTONS[] = {
+    {"L", 0, false}, {"R", 1, false}, {"U", 2, false},
+    {"D", 3, false}, {"Z", 4, false}, {"X", 5, false},
+    {"LMB", 0, true}, {"RMB", 1, true}, {"MMB", 2, true},
+};
+
+static char *sim_skip_ws(char *s) {
+  while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')
+    s++;
+  return s;
+}
+
+// Split off one whitespace-delimited token, NUL-terminating it in place.
+static char *sim_token(char **p) {
+  char *s = sim_skip_ws(*p);
+  if (!*s) {
+    *p = s;
+    return NULL;
+  }
+  char *start = s;
+  while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n')
+    s++;
+  if (*s)
+    *s++ = '\0';
+  *p = s;
+  return start;
+}
+
+static bool sim_parse_buttons(char *list, uint8_t *btns, uint8_t *mbtns) {
+  if (strcmp(list, "-") == 0) {
+    *btns = *mbtns = 0;
+    return true;
+  }
+  *btns = *mbtns = 0;
+  for (char *name = list; name;) {
+    char *comma = strchr(name, ',');
+    if (comma)
+      *comma = '\0';
+    bool found = false;
+    for (size_t i = 0; i < sizeof SIM_BUTTONS / sizeof *SIM_BUTTONS; i++) {
+      if (strcmp(name, SIM_BUTTONS[i].name) != 0)
+        continue;
+      uint8_t *mask = SIM_BUTTONS[i].mouse ? mbtns : btns;
+      *mask |= (uint8_t)(1u << SIM_BUTTONS[i].index);
+      found = true;
+      break;
+    }
+    if (!found)
+      return false;
+    name = comma ? comma + 1 : NULL;
+  }
+  return true;
+}
+
+// Returns false with a diagnostic on malformed tapes, so a typo can't silently
+// turn into a headless run with the wrong inputs.
+static bool load_input_tape(const char *path, InputTape *tape) {
+  bool piped = strcmp(path, "-") == 0;
+  const char *label = piped ? "<stdin>" : path;
+  FILE *f = piped ? stdin : fopen(path, "r");
+  if (!f) {
+    fprintf(stderr, "vex: cannot open %s\n", path);
+    return false;
+  }
+  tape->count = 0;
+  uint8_t btns = 0, mbtns = 0;
+  int32_t mx = VEX_W / 2, my = VEX_H / 2;
+  long cursor = 0;
+  char line[512];
+  int lineno = 0;
+  bool ok = true;
+  while (fgets(line, sizeof line, f)) {
+    lineno++;
+    char *hash = strchr(line, '#');
+    if (hash)
+      *hash = '\0';
+    char *p = sim_skip_ws(line);
+    if (!*p)
+      continue;
+
+    long frame;
+    if (*p == '@' || *p == '+') {
+      char kind = *p++;
+      char *end;
+      errno = 0;
+      long v = strtol(p, &end, 10);
+      if (errno || end == p || (*end && *end != ' ' && *end != '\t') || v < 0) {
+        ok = false;
+        break;
+      }
+      frame = kind == '@' ? v : cursor + v;
+      p = end;
+    } else {
+      ok = false;
+      break;
+    }
+    if (frame < cursor) {
+      ok = false;
+      break;
+    }
+    cursor = frame;
+
+    char *btok = sim_token(&p);
+    if (!btok || !sim_parse_buttons(btok, &btns, &mbtns)) {
+      ok = false;
+      break;
+    }
+    char *mtok = sim_token(&p);
+    if (mtok) {
+      int x, y;
+      if (sscanf(mtok, " %d , %d", &x, &y) != 2) {
+        ok = false;
+        break;
+      }
+      mx = x < 0 ? 0 : x >= VEX_W ? VEX_W - 1 : x;
+      my = y < 0 ? 0 : y >= VEX_H ? VEX_H - 1 : y;
+    }
+
+    if (tape->count == VEX_SIM_MAX_EVENTS) {
+      fprintf(stderr, "vex: %s:%d: too many events (max %d)\n", label, lineno,
+              VEX_SIM_MAX_EVENTS);
+      ok = false;
+      break;
+    }
+    SimEvent *e = &tape->events[tape->count++];
+    e->frame = frame;
+    e->btns = btns;
+    e->mbtns = mbtns;
+    e->mx = mx;
+    e->my = my;
+  }
+  if (!piped)
+    fclose(f);
+  if (!ok)
+    fprintf(stderr, "vex: %s:%d: invalid input tape line\n", label, lineno);
+  return ok;
+}
+
+// Copy the last event whose frame has been reached; a tape that hasn't started
+// yet leaves the neutral defaults in place.
+static void apply_input_tape(const InputTape *tape, long frame) {
+  int last = -1;
+  for (int i = 0; i < tape->count; i++) {
+    if (tape->events[i].frame > frame)
+      break;
+    last = i;
+  }
+  if (last < 0)
+    return;
+  const SimEvent *e = &tape->events[last];
+  g_sim_btns = e->btns;
+  g_sim_mbtns = e->mbtns;
+  g_sim_mx = e->mx;
+  g_sim_my = e->my;
+}
+
 static uint8_t current_button_mask(void) {
   uint8_t mask = 0;
   if (!g_window_open)
-    return mask;
+    return g_sim_btns;
   for (int i = 0; i < 6; i++) {
     if (button_held(i))
       mask |= (uint8_t)(1u << i);
@@ -648,12 +841,11 @@ m3ApiRawFunction(host_title) {
 }
 
 // btn(button) -> held? Buttons: 0 left, 1 right, 2 up, 3 down, 4 Z, 5 X.
-// Held by the keyboard or by a gamepad. Without a window (headless -n mode)
-// every input reads as released, which keeps runs deterministic and mirrors
-// the Go host's uiReady gate.
+// Keyboard, gamepad, or (headless) the input tape, all through one mask so
+// btn() and btnp() always agree on what is down.
 m3ApiRawFunction(host_btn) {
   m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, button) int held =
-      g_window_open && button >= 0 && button < 6 ? button_held(button) : 0;
+      button >= 0 && button < 6 ? (current_button_mask() >> button) & 1 : 0;
   m3ApiReturn(held);
 }
 
@@ -662,19 +854,22 @@ m3ApiRawFunction(host_btnp) {
   m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, button)
       // Clamp before the shift: hostile carts probe out-of-range buttons and
       // a negative shift is undefined behavior (crashes under Zig's cc).
-      int prev = button >= 0 && button < 6 ? (g_prev_btns >> button) & 1 : 0;
-  int valid = g_window_open && button >= 0 && button < 6;
+      int valid = button >= 0 && button < 6;
+  int prev = valid ? (g_prev_btns >> button) & 1 : 0;
   int latched = valid ? (g_pressed_btns >> button) & 1 : 0;
-  int held = valid ? button_held(button) : 0;
+  int held = valid ? (current_button_mask() >> button) & 1 : 0;
   m3ApiReturn(latched || (held && !prev));
 }
 
 static int32_t mouse_axis(bool isX) {
-  if (!g_window_open)
-    return 0;
+  int32_t lim = isX ? VEX_W : VEX_H;
+  if (!g_window_open) {
+    int32_t v = isX ? g_sim_mx : g_sim_my;
+    return v < 0 ? 0 : v >= lim ? lim - 1 : v;
+  }
   float c = isX ? GetMouseX() : GetMouseY(), o = isX ? g_view_ox : g_view_oy,
         s = g_view_scale;
-  int32_t v = (int32_t)((c - o) / s), lim = isX ? VEX_W : VEX_H;
+  int32_t v = (int32_t)((c - o) / s);
   return v < 0 ? 0 : v >= lim ? lim - 1 : v;
 }
 m3ApiRawFunction(host_mx) {
@@ -685,13 +880,22 @@ m3ApiRawFunction(host_my) {
 }
 
 // mbtn(button) -> held? 0 left, 1 right, 2 middle (raylib button indices).
+static uint8_t mouse_button_mask(void) {
+  if (!g_window_open)
+    return g_sim_mbtns;
+  uint8_t mask = 0;
+  for (int i = 0; i < 3; i++)
+    if (IsMouseButtonDown(i))
+      mask |= (uint8_t)(1u << i);
+  return mask;
+}
 m3ApiRawFunction(host_mbtn) {
   m3ApiReturnType(int32_t) m3ApiGetArg(int32_t, button)
-      // raylib only defines mouse buttons 0..2; anything else reads past its
-      // internal bool[3] state array.
-      int held =
-          g_window_open && button >= 0 && button < 3 ? IsMouseButtonDown(button)
-                                                     : 0;
+      // raylib only defines mouse buttons 0..2; reading our own mask keeps an
+      // out-of-range index from indexing past its internal bool[3] array.
+      int held = button >= 0 && button < 3
+                     ? (mouse_button_mask() >> button) & 1
+                     : 0;
   m3ApiReturn(held);
 }
 
@@ -1551,7 +1755,7 @@ static void usage(const char *p) {
   // Keep in step with the synopsis in README.md.
   fprintf(stderr,
           "usage: %s [-s scale] [-w] [-n frames] [-t] [--dump file] "
-          "<cart.wasm>\n",
+          "[-i tape] <cart.wasm>\n",
           p);
 }
 
@@ -1648,6 +1852,7 @@ int main(int argc, char **argv) {
       false;        // -t/--trace: with -n, print a line per framebuffer change
   long frames = -1; // -n/--frames N: run N frames headlessly, then report
   const char *dump_path = NULL; // --dump <file>: write raw framebuffer bytes
+  const char *input_path = NULL; // -i/--input <file>: simulated tape (-n only)
   const char *cart_path = NULL;
   for (int i = 1; i < argc; i++) {
     const char *a = argv[i];
@@ -1673,6 +1878,12 @@ int main(int argc, char **argv) {
         return 1;
       }
       dump_path = argv[++i];
+    } else if (strcmp(a, "-i") == 0 || strcmp(a, "--input") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "vex: %s requires a file path\n", a);
+        return 1;
+      }
+      input_path = argv[++i];
     } else if (strcmp(a, "-w") == 0 || strcmp(a, "--watch") == 0) {
       watch = true;
     } else if (a[0] == '-') {
@@ -1691,6 +1902,11 @@ int main(int argc, char **argv) {
     scale = 1;
   if (scale > VEX_SCALE_MAX)
     scale = VEX_SCALE_MAX;
+  if (input_path && frames < 0) {
+    fprintf(stderr, "vex: -i/--input only applies to headless runs (-n)\n");
+    usage(argv[0]);
+    return 1;
+  }
 
   // ---- load the cart into a wasm3 interpreter --------------------------
   IM3Environment env = m3_NewEnvironment();
@@ -1720,10 +1936,15 @@ int main(int argc, char **argv) {
   fb_fill(g_palette[0]);
 
   // ---- headless run (-n frames): no window, no audio --------------------
-  // Inputs read as released, title() is ignored, tone() is silent -- which
-  // makes runs fully deterministic and directly comparable against the Go
-  // host's golden framebuffer hashes.
+  // Input reads from --input (or stays released), title() is ignored, tone()
+  // is silent -- which makes runs fully deterministic and directly comparable
+  // against the Go host's golden framebuffer hashes.
   if (frames >= 0) {
+    if (input_path && !load_input_tape(input_path, &g_tape)) {
+      free_cart(&cart);
+      m3_FreeEnvironment(env);
+      return 1;
+    }
     struct timespec t0, t1;
     timespec_get(&t0, TIME_UTC);
 
@@ -1734,9 +1955,14 @@ int main(int argc, char **argv) {
     memcpy(prev_fb, g_fb, sizeof g_fb);
     long changes = 0;
     for (long i = 0; i < frames; i++) {
+      // Frames in a tape are 1-based; mirror the window loop's latch/advance
+      // order so btnp() edges are identical in both modes.
+      apply_input_tape(&g_tape, i + 1);
       err = m3_CallV(cart.f_update);
       if (err)
         die(cart.rt, "update", err);
+      g_prev_btns = current_button_mask();
+      g_pressed_btns = 0;
 
       if (memcmp(g_fb, prev_fb, sizeof g_fb) != 0) {
         changes++;
