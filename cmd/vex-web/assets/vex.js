@@ -316,7 +316,8 @@ const PAD_A = 0, PAD_B = 1, PAD_LB = 4, PAD_RB = 5;
 const PAD_DPAD_UP = 12, PAD_DPAD_DOWN = 13;
 const PAD_DPAD_LEFT = 14, PAD_DPAD_RIGHT = 15;
 
-// Cart button -> the pad buttons that drive it.
+// Cart button -> the pad buttons that drive it. Index order is
+// [left, right, up, down, Z, X].
 const PAD_BUTTONS = [
     [PAD_DPAD_LEFT],
     [PAD_DPAD_RIGHT],
@@ -326,34 +327,118 @@ const PAD_BUTTONS = [
     [PAD_B, PAD_RB],
 ];
 
+// A layout is { buttons: cart-button -> [pad button indices], axes: [x,y] }.
+// The standard mapping uses the canonical indices above.
+const LAYOUT_STANDARD = { buttons: PAD_BUTTONS, axes: [0, 1] };
+
+// Unmapped pads use a trimmed generic layout: face buttons 0/1 and shoulders
+// 4/5 are the common convention, but d-pad buttons 12..15 are NOT safe to
+// assume (on many pads those are Home/stick-click or absent), so arrows come
+// from the left stick instead.
+const LAYOUT_GENERIC = {
+    buttons: [[], [], [], [], [PAD_A, PAD_LB], [PAD_B, PAD_RB]],
+    axes: [0, 1],
+};
+
+// Known layouts for specific unmapped pads, keyed by the "vvvv-pppp" prefix
+// of Gamepad.id. 8BitDo Ultimate 2C Wireless (Bluetooth) uses: A=0, B=1,
+// X=3, Y=4, L1=6, R1=7 (per SDL_GameControllerDB and RetroArch autoconfig).
+// Buttons 12..15 are Home/L3/R3 and must not drive directions. In the browser
+// its left stick is on axes 1 (X) and 2 (Y); axis 0 is the d-pad hat switch
+// with discrete values (and a bogus 3.29 while centred), so decoding it as a
+// stick causes both a constant rightward drift and inverted d-pad input.
+const HAT_UP = -1.0, HAT_RIGHT = -0.43, HAT_DOWN = 0.14, HAT_LEFT = 0.71;
+const PAD_LAYOUTS = {
+    "2dc8-301b": {
+        buttons: [[], [], [], [], [0, 6], [1, 7]],
+        axes: [1, 2],
+        hat: { axis: 0, up: HAT_UP, right: HAT_RIGHT, down: HAT_DOWN, left: HAT_LEFT },
+    },
+};
+
+function layoutFor(pad)
+{
+    if (pad.mapping === "standard") return LAYOUT_STANDARD;
+    if (pad.id) {
+        for (const prefix in PAD_LAYOUTS)
+            if (pad.id.startsWith(prefix)) return PAD_LAYOUTS[prefix];
+    }
+    return LAYOUT_GENERIC;
+}
+
 // A real stick never rests at exactly zero, so the d-pad emulation needs a
 // deadzone or the cart walks on its own. 0.3 of full travel matches the C
 // host; change both together.
 const PAD_DEADZONE = 0.3;
 
-// The cart-button mask for one Gamepad, or 0 if it is unusable. A pad without
-// the standard mapping has implementation-defined button indices, so it is
-// skipped rather than guessed at.
-export function gamepadMaskOf(pad)
+// Per-pad stick rest positions. An unmapped pad often reports a non-zero
+// resting value on axes[0] (frequently a trigger), which a fixed deadzone
+// cannot cancel — the cart would walk on its own. We capture the rest when a
+// pad is first seen and nudge it slowly while the pad is idle.
+const padRest = new Map();
+const REST_ADAPT = 0.02;
+
+function restFor(pad)
 {
-    if (!pad || !pad.connected || pad.mapping !== "standard")
+    let rest = padRest.get(pad.index);
+    if (!rest) {
+        rest = (pad.axes || []).map(v => v || 0);
+        padRest.set(pad.index, rest);
+    }
+    return rest;
+}
+
+// The cart-button mask for one Gamepad, or 0 if it is unusable.
+//
+// Standard-mapping pads use the canonical indices below. A pad without a
+// mapping (common for Bluetooth controllers in some browsers, which report an
+// empty `mapping`) has implementation-defined indices; rather than ignore it
+// outright we fall back to the conventional layout that nearly every pad uses
+// anyway: face buttons 0/1, shoulders 4/5, d-pad 12..15 and the left stick on
+// axes 0/1. `rest` is the per-pad resting axis value, subtracted before the
+// deadzone so a non-zero idle axis does not drift.
+export function gamepadMaskOf(pad, rest)
+{
+    if (!pad || !pad.connected)
+        return 0;
+
+    const buttons = pad.buttons;
+    const axes = pad.axes;
+    if ((!buttons || buttons.length === 0) && (!axes || axes.length === 0))
         return 0;
 
     let mask = 0;
 
-    for (let i = 0; i < PAD_BUTTONS.length; i++)
-        for (const b of PAD_BUTTONS[i])
-            if (pad.buttons[b]?.pressed)
+    const layout = layoutFor(pad);
+    for (let i = 0; i < layout.buttons.length; i++)
+        for (const b of layout.buttons[i])
+            if (buttons?.[b]?.pressed)
                 mask |= 1 << i;
 
     // Up is negative Y, as in GLFW. A diagonal sets two arrows, which is what
-    // a 4-way d-pad with independent directions should do.
-    const x = pad.axes[0] ?? 0;
-    const y = pad.axes[1] ?? 0;
+    // a 4-way d-pad with independent directions should do. Use the layout's
+    // stick axes and subtract each pad's resting value before the deadzone.
+    const ax = layout.axes[0], ay = layout.axes[1];
+    const x = (axes?.[ax] ?? 0) - (rest?.[ax] ?? 0);
+    const y = (axes?.[ay] ?? 0) - (rest?.[ay] ?? 0);
     if (x < -PAD_DEADZONE) mask |= 1 << 0;
     if (x >  PAD_DEADZONE) mask |= 1 << 1;
     if (y < -PAD_DEADZONE) mask |= 1 << 2;
     if (y >  PAD_DEADZONE) mask |= 1 << 3;
+
+    // Some pads expose the d-pad as a hat switch on a single axis with
+    // discrete values. Snap to the nearest direction within a tolerance;
+    // ignore the centred/invalid values (e.g. 3.29) entirely.
+    if (layout.hat)
+    {
+        const h = layout.hat;
+        const v = axes?.[h.axis] ?? 0;
+        const near = (target, tol) => Math.abs(v - target) <= tol;
+        if (near(h.up, 0.35)) mask |= 1 << 2;
+        else if (near(h.right, 0.18)) mask |= 1 << 1;
+        else if (near(h.down, 0.08)) mask |= 1 << 3;
+        else if (near(h.left, 0.18)) mask |= 1 << 0;
+    }
 
     return mask;
 }
@@ -363,6 +448,8 @@ export function gamepadMaskOf(pad)
 // btn() reads the cached mask rather than polling per call. The rising edges
 // latch into pressedButtons for the same reason the key events do -- a frame
 // often runs zero cart ticks, which would drop a press seen only in the loop.
+const loggedPads = new Set();
+
 function pollGamepad()
 {
     let mask = 0;
@@ -370,7 +457,38 @@ function pollGamepad()
     if (navigator.getGamepads)
     {
         for (const pad of navigator.getGamepads())
-            mask |= gamepadMaskOf(pad);
+        {
+            if (!pad || !pad.connected)
+                continue;
+
+            // One-time diagnostic: unmapped pads have implementation-defined
+            // indices, so log what this browser reports to help pick bindings.
+            if (pad.mapping !== "standard" && !loggedPads.has(pad.id))
+            {
+                loggedPads.add(pad.id);
+                console.info("[vex] gamepad without standard mapping:", pad.id,
+                    "axes:", JSON.stringify(pad.axes),
+                    "buttons:", JSON.stringify((pad.buttons || []).map(b => b?.pressed ? 1 : 0)));
+            }
+
+            const rest = restFor(pad);
+
+            // While no button is held and an axis is already close to its rest,
+            // let the rest follow it slowly. This tracks a drifting stick
+            // without following a stick the player is deliberately holding.
+            const buttons = pad.buttons || [];
+            const active = buttons.some(b => b?.pressed || (b?.value ?? 0) > 0.5);
+            if (!active && pad.axes)
+            {
+                for (let i = 0; i < pad.axes.length; i++)
+                {
+                    const d = pad.axes[i] - rest[i];
+                    if (Math.abs(d) < 0.1) rest[i] += d * REST_ADAPT;
+                }
+            }
+
+            mask |= gamepadMaskOf(pad, rest);
+        }
     }
 
     pressedButtons |= mask & ~padMask;

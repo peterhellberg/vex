@@ -163,9 +163,23 @@ async function runGamepadApiChecks(browser, url) {
             diagonal: gamepadMaskOf(pad([], -0.9, -0.9)),
             dpadPlusStick: gamepadMaskOf(pad([13], 1, 0)),
             noMapping: gamepadMaskOf({ ...pad([0, 12]), mapping: '' }),
+            noMappingStick: gamepadMaskOf({ ...pad([], -0.9, -0.9), mapping: '' }),
+            ultimate2cA: gamepadMaskOf({ ...pad([0]), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless' }),
+            ultimate2cL1: gamepadMaskOf({ ...pad([6]), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless' }),
+            ultimate2cB: gamepadMaskOf({ ...pad([1]), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless' }),
+            ultimate2cR1: gamepadMaskOf({ ...pad([7]), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless' }),
+            ultimate2cBogus: gamepadMaskOf({ ...pad([12]), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless' }),
+            // Real captured values: axis 0 is the d-pad hat, axis 1 the left stick X.
+            u2cIdle: gamepadMaskOf({ ...pad([], 0, 0), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless', axes: [3.29, 0, 0, 0, 0, 0, 0] }),
+            u2cStickRight: gamepadMaskOf({ ...pad([], 0, 0), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless', axes: [3.29, 1, 0.09, 0, 0, 0, 0] }),
+            u2cHatRight: gamepadMaskOf({ ...pad([], 0, 0), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless', axes: [-0.43, 0, 0, 0, 0, 0, 0] }),
+            u2cHatLeft: gamepadMaskOf({ ...pad([], 0, 0), mapping: '', id: '2dc8-301b-8BitDo Ultimate 2C Wireless', axes: [0.71, 0, 0, 0, 0, 0, 0] }),
             disconnected: gamepadMaskOf({ ...pad([0, 12]), connected: false }),
             nullPad: gamepadMaskOf(null),
             shortButtons: gamepadMaskOf({ mapping: 'standard', connected: true, buttons: [], axes: [] }),
+            driftIdle: gamepadMaskOf({ ...pad([], 0.9, 0) }, [0.9, 0]),
+            driftPushRight: gamepadMaskOf({ ...pad([], 1.5, 0) }, [0.9, 0]),
+            driftPushLeft: gamepadMaskOf({ ...pad([], 0.3, 0) }, [0.9, 0]),
             polls: window.__padPolls,
         };
     });
@@ -193,10 +207,25 @@ async function runGamepadApiChecks(browser, url) {
     check('diagonal sets two arrows', m.diagonal === 5, `mask=${m.diagonal}`);
     check('d-pad and stick combine', m.dpadPlusStick === 10, `mask=${m.dpadPlusStick}`);
 
-    check('non-standard pad ignored', m.noMapping === 0, `mask=${m.noMapping}`);
+    check('unmapped pad still reads face buttons', m.noMapping === 16, `mask=${m.noMapping}`);
+    check('unmapped pad ignores assumed d-pad indices', m.noMapping === 16, `mask=${m.noMapping}`);
+    check('unmapped pad still reads stick', m.noMappingStick === 5, `mask=${m.noMappingStick}`);
+    check('8BitDo Ultimate 2C A -> Z', m.ultimate2cA === 16, `mask=${m.ultimate2cA}`);
+    check('8BitDo Ultimate 2C L1 -> Z', m.ultimate2cL1 === 16, `mask=${m.ultimate2cL1}`);
+    check('8BitDo Ultimate 2C B -> X', m.ultimate2cB === 32, `mask=${m.ultimate2cB}`);
+    check('8BitDo Ultimate 2C R1 -> X', m.ultimate2cR1 === 32, `mask=${m.ultimate2cR1}`);
+    check('8BitDo Ultimate 2C ignores Home/stick-click', m.ultimate2cBogus === 0, `mask=${m.ultimate2cBogus}`);
+    check('8BitDo idle 3.29 does not drift', m.u2cIdle === 0, `mask=${m.u2cIdle}`);
+    check('8BitDo left stick (axis 1) moves right', m.u2cStickRight === 2, `mask=${m.u2cStickRight}`);
+    check('8BitDo hat right is right, not left', m.u2cHatRight === 2, `mask=${m.u2cHatRight}`);
+    check('8BitDo hat left is left, not right', m.u2cHatLeft === 1, `mask=${m.u2cHatLeft}`);
     check('disconnected pad ignored', m.disconnected === 0, `mask=${m.disconnected}`);
     check('null pad slot ignored', m.nullPad === 0, `mask=${m.nullPad}`);
     check('pad with empty arrays ignored', m.shortButtons === 0, `mask=${m.shortButtons}`);
+
+    check('drifting stick at rest reads nothing', m.driftIdle === 0, `mask=${m.driftIdle}`);
+    check('drifting stick still reads a real push right', m.driftPushRight === 2, `mask=${m.driftPushRight}`);
+    check('drifting stick still reads a real push left', m.driftPushLeft === 1, `mask=${m.driftPushLeft}`);
 
     await ctx.close();
 }
