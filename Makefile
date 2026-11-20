@@ -115,7 +115,7 @@ web:
 #     bounds, glyphs)
 ##@ Test
 
-test-hosts: test-mus test-vex ## Run conformance tests (Go + C + Zig) + C host headless
+test-hosts: test-mus test-vex test-vex-input ## Run conformance tests (Go + C + Zig) + C host headless
 	$(STEP) "Running conformance tests"
 	@go test ./...
 	@awk '/^\/\/ ---- audio \(tone\)/{on=1} /^static M3Result link_host/{on=0} on' \
@@ -152,6 +152,36 @@ test-vex: all
 	@grep -q "fnv1a64=" /tmp/vex_host_test.log
 	@rm -f /tmp/vex_host_test.log
 	$(STEP) "C host headless test passed"
+
+# Headless C host input-tape test: a tape changes the framebuffer hash, btnp()
+# edges produce an extra change, and malformed tapes exit non-zero.
+test-vex-input: all
+	$(STEP) "Running C host input tape test"
+	@printf '@1 Z\n' > /tmp/vex_tape.txt
+	@printf '@1 L\n' > /tmp/vex_tape_l.txt
+	@printf '@1 -\n+3 Z\n' > /tmp/vex_tape_edge.txt
+	@printf '@1 BOGUS\n' > /tmp/vex_tape_bad.txt
+	@bin/vex -n 4 bin/carts/test_input.wasm > /tmp/vex_tape_none.log 2>&1
+	@bin/vex -n 4 -i /tmp/vex_tape.txt bin/carts/test_input.wasm > /tmp/vex_tape_z.log 2>&1
+	@bin/vex -n 4 -i /tmp/vex_tape_l.txt bin/carts/test_input.wasm > /tmp/vex_tape_l.log 2>&1
+	@bin/vex -n 4 -i /tmp/vex_tape_edge.txt bin/carts/test_input.wasm > /tmp/vex_tape_edge.log 2>&1
+	@h_none=$$(grep -o 'fnv1a64=[0-9a-f]*' /tmp/vex_tape_none.log); \
+	 h_z=$$(grep -o 'fnv1a64=[0-9a-f]*' /tmp/vex_tape_z.log); \
+	 h_l=$$(grep -o 'fnv1a64=[0-9a-f]*' /tmp/vex_tape_l.log); \
+	 h_edge=$$(grep -o 'fnv1a64=[0-9a-f]*' /tmp/vex_tape_edge.log); \
+	 test "$$h_none" != "$$h_z" && test "$$h_z" != "$$h_l" && test "$$h_none" != "$$h_l" && \
+	 test "$$h_edge" = "$$h_z" && \
+	 grep -q 'fb-changes=2' /tmp/vex_tape_edge.log && grep -q 'fb-changes=1' /tmp/vex_tape_z.log
+	@if bin/vex -n 4 -i /tmp/vex_tape_bad.txt bin/carts/test_input.wasm >/dev/null 2>&1; then \
+		echo "malformed tape unexpectedly succeeded"; exit 1; \
+	fi
+	@printf '@1 Z\n' | bin/vex -n 4 -i - bin/carts/test_input.wasm > /tmp/vex_tape_stdin.log 2>&1
+	@grep -q 'fnv1a64=' /tmp/vex_tape_stdin.log
+	@if bin/vex -i /tmp/vex_tape.txt bin/carts/test_input.wasm >/dev/null 2>&1; then \
+		echo "-i without -n unexpectedly succeeded"; exit 1; \
+	fi
+	@rm -f /tmp/vex_tape*.txt /tmp/vex_tape*.log
+	$(STEP) "C host input tape test passed"
 
 test-web: $(TEST_DIR)/node_modules/.package-lock.json ## Run Playwright browser tests
 	$(STEP) "Running browser tests"

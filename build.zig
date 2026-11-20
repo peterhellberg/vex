@@ -83,6 +83,7 @@ pub fn build(b: *std.Build) void {
         const test_carts = [_][]const u8{
             "test_audio", "test_coords", "test_blit", "test_arith",   "test_palette",
             "test_api",   "test_bench",  "test_font", "test_hostile", "test_music",
+            "test_input",
         };
         inline for (test_carts) |name| {
             const t = b.addExecutable(.{
