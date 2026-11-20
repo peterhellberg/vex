@@ -186,6 +186,17 @@ static const int VEX_PAD_BUTTONS[6][VEX_PAD_SLOTS] = {
     {GAMEPAD_BUTTON_RIGHT_FACE_DOWN, GAMEPAD_BUTTON_LEFT_TRIGGER_1},
     {GAMEPAD_BUTTON_RIGHT_FACE_RIGHT, GAMEPAD_BUTTON_RIGHT_TRIGGER_1}};
 
+// raylib 6.2's bundled GLFW mapping database has no entry for the 8BitDo
+// Ultimate 2C Wireless (VID 2dc8 / PID 301b), so it connects but reports no
+// buttons or stick movement. Load the known-good SDL mapping at startup;
+// SetGamepadMappings() is additive, so other pads keep their built-in mappings.
+static const char *EXTRA_GAMEPAD_MAPPINGS =
+    "03000000c82d00001b30000001000000,8BitDo Ultimate 2C,"
+    "a:b0,b:b1,back:b10,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,"
+    "guide:b12,leftshoulder:b6,leftstick:b13,lefttrigger:a5,leftx:a0,lefty:a1,"
+    "paddle1:b5,paddle2:b2,rightshoulder:b7,rightstick:b14,righttrigger:a4,"
+    "rightx:a2,righty:a3,start:b11,x:b3,y:b4,platform:Mac OS X,";
+
 static uint8_t g_prev_btns = 0;
 static uint8_t g_pressed_btns = 0;
 static bool g_reload_pressed = false;
@@ -2002,6 +2013,7 @@ int main(int argc, char **argv) {
 #endif
   InitWindow(VEX_W * scale, VEX_H * scale, g_window_title);
   g_window_open = true;
+  SetGamepadMappings(EXTRA_GAMEPAD_MAPPINGS);
   SetTargetFPS(0); // paced by pacer_wait() instead; see "frame pacing"
 
   Texture2D screen = make_screen_texture();
